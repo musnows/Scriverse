@@ -394,6 +394,22 @@ describe("作品、导入和章节版本 API", () => {
       versionNo: 1
     });
 
+    const comment = await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/annotations`).send({
+      kind: "note",
+      startLine: 1,
+      endLine: 2,
+      note: "补充人物动机"
+    }).expect(201);
+    const counts = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotation-counts`).expect(200);
+    expect(counts.body.data).toEqual([
+      { line: 1, count: 1 },
+      { line: 2, count: 2 },
+      { line: 3, count: 1 }
+    ]);
+    expect(JSON.stringify(counts.body.data)).not.toContain("补充人物动机");
+    const secondLine = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotations?line=2`).expect(200);
+    expect(secondLine.body.data.map((item: { id: string }) => item.id)).toEqual([comment.body.data.id, created.body.data.id]);
+
     const resolved = await request(runtime.app).patch(`/api/chapter-annotations/${created.body.data.id}`).send({
       status: "resolved",
       expectedVersionNo: 1
@@ -407,6 +423,7 @@ describe("作品、导入和章节版本 API", () => {
     expect(conflict.body.error.code).toBe("VERSION_CONFLICT");
 
     await request(runtime.app).delete(`/api/chapter-annotations/${created.body.data.id}`).send({ expectedVersionNo: 2 }).expect(204);
+    await request(runtime.app).delete(`/api/chapter-annotations/${comment.body.data.id}`).send({ expectedVersionNo: 1 }).expect(204);
     const annotations = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotations`).expect(200);
     expect(annotations.body.data).toEqual([]);
     expect(runtime.database.all("SELECT version_no, source FROM chapter_annotation_versions WHERE annotation_id = ? ORDER BY version_no", created.body.data.id)).toEqual([

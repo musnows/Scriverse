@@ -35,9 +35,12 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("function chapterAnnotationCard(");
     expect(application.text).toContain("function bindChapterAnnotationCards(");
     expect(application.text).toContain("function renderChapterAnnotations(");
+    expect(application.text).toContain("/annotation-counts");
+    expect(application.text).toContain("lineAnnotationCount");
+    expect(application.text).toContain("?line=${encodeURIComponent(line)}");
     expect(application.text).toContain("async function renderWorkChapterComments(");
     expect(application.text).toContain('/chapter-annotations`');
-    expect(application.text).toContain('renderModulePagination(pageResult, "comments", "正文评论列表")');
+    expect(application.text).toContain('renderModulePagination(pageResult, "comments", "正文评论与待办列表")');
     expect(application.text).toContain('$("#chapter-content").addEventListener("contextmenu"');
     expect(application.text).toContain("value: annotation.note");
     expect(application.text).toContain('"解决评论"');
@@ -147,6 +150,6 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('grid-row: 2 / -1;');
     expect(styles.text).not.toContain('bottom: calc(76px + env(safe-area-inset-bottom));');
     expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }');
-    expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; height: 30px; }');
+    expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; min-width: 30px; min-height: 30px; height: 30px; }');
   });
 });

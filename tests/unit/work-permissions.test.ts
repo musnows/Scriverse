@@ -64,6 +64,7 @@ describe("作品模块权限", () => {
   it("前端按当前模块分别判断读取与写入", () => {
     const permissions = emptyModulePermissions();
     permissions.prose = "read";
+    permissions["comments"] = "read";
     permissions.drafts = "write";
     permissions.settings = "write";
     const work = { accessRole: "custom", modulePermissions: permissions };
@@ -71,6 +72,7 @@ describe("作品模块权限", () => {
     expect(canWriteUiModule(work, "editor")).toBe(false);
     expect(canReadUiModule(work, "comments")).toBe(true);
     expect(canWriteUiModule(work, "comments")).toBe(false);
+    expect(canReadPermissionModule(work, "todos")).toBe(false);
     expect(canReadUiModule(work, "settings")).toBe(true);
     expect(canWriteUiModule(work, "settings")).toBe(true);
     expect(canReadUiModule(work, "drafts")).toBe(true);
@@ -79,6 +81,19 @@ describe("作品模块权限", () => {
     expect(firstReadableUiModule(work)).toBe("editor");
     expect(permissionSummary(permissions)).toContain("可编辑：想法、设定库");
     expect(permissionSummary(permissions)).toContain("只读：正文");
+  });
+
+  it("允许评论与待办分别脱离正文编辑权限配置", () => {
+    const permissions = emptyModulePermissions();
+    permissions["comments"] = "write";
+    permissions["todos"] = "read";
+    const work = { accessRole: "custom", modulePermissions: permissions };
+    expect(canWritePermissionModule(work, "prose")).toBe(false);
+    expect(canWritePermissionModule(work, "comments")).toBe(true);
+    expect(canWritePermissionModule(work, "todos")).toBe(false);
+    expect(canReadUiModule(work, "comments")).toBe(true);
+    expect(canWriteUiModule(work, "comments")).toBe(true);
+    expect(permissionSummary(permissions)).toContain("可添加：正文评论");
   });
 
   it("将旧版 ai 权限迁移为独立的对话与分析权限", () => {
@@ -96,6 +111,8 @@ describe("作品模块权限", () => {
       "ai-settings": "none"
     };
     const migrated = migrateLegacyModulePermissions(legacy);
+    expect(migrated.comments).toBe("read");
+    expect(migrated.todos).toBe("read");
     expect(migrated["ai-chat"]).toBe("write");
     expect(migrated["ai-analysis"]).toBe("write");
     const stored = storedWorkModulePermissions("editor", JSON.stringify({ modules: legacy }));

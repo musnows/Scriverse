@@ -77,6 +77,8 @@ if (restrictedActor) {
   runtime.auth.addMember(fixture.workId, restrictedActor.session.user.userId, {
     permissions: {
       prose: "none",
+      comments: "none",
+      todos: "none",
       drafts: "none",
       settings: "read",
       characters: "none",

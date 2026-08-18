@@ -1095,6 +1095,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     const permissions = {
       prose: "read",
+      comments: "read",
+      todos: "read",
       drafts: "read",
       settings: "write",
       characters: "none",
@@ -1380,6 +1382,135 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({ permissions: updatedPermissions })
       .expect(403);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("正文评论与待办分别受独立模块权限控制且读取结果按模块过滤", async () => {
+    const owner = await register(runtime, "annotation_permission_owner");
+    const collaborator = await register(runtime, "annotation_permission_collaborator");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "正文批注权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "正文" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "第一章", content: "第一行正文。\n第二行正文。" })
+      .expect(201);
+    const chapterId = String(chapter.body.data.id);
+    const ownerNote = await owner.agent.post(`/api/chapters/${chapterId}/annotations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ kind: "note", startLine: 1, endLine: 1, note: "作者评论" })
+      .expect(201);
+    const ownerTodo = await owner.agent.post(`/api/chapters/${chapterId}/annotations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ kind: "todo", startLine: 2, endLine: 2, note: "作者待办" })
+      .expect(201);
+    const commentOnly = {
+      prose: "read",
+      comments: "write",
+      todos: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    } as const;
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions: commentOnly })
+      .expect(201);
+
+    const visibleAnnotations = await collaborator.agent.get(`/api/chapters/${chapterId}/annotations`).expect(200);
+    expect(visibleAnnotations.body.data).toEqual([
+      expect.objectContaining({ id: ownerNote.body.data.id, kind: "note" })
+    ]);
+    const visibleCounts = await collaborator.agent.get(`/api/chapters/${chapterId}/annotation-counts`).expect(200);
+    expect(visibleCounts.body.data).toEqual([{ line: 1, count: 1 }]);
+    const visibleWorkAnnotations = await collaborator.agent.get(`/api/works/${workId}/chapter-annotations?page=1&limit=30`).expect(200);
+    expect(visibleWorkAnnotations.body.data.items).toEqual([
+      expect.objectContaining({ id: ownerNote.body.data.id, kind: "note" })
+    ]);
+    const collaboratorNote = await collaborator.agent.post(`/api/chapters/${chapterId}/annotations`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ kind: "note", startLine: 1, endLine: 1, note: "协作者评论" })
+      .expect(201);
+    const todoCreateDenied = await collaborator.agent.post(`/api/chapters/${chapterId}/annotations`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ kind: "todo", startLine: 1, endLine: 1, note: "不应创建的待办" })
+      .expect(403);
+    expect(todoCreateDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const commentUpdateDenied = await collaborator.agent.patch(`/api/chapter-annotations/${ownerNote.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ status: "resolved", expectedVersionNo: ownerNote.body.data.versionNo })
+      .expect(403);
+    expect(commentUpdateDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const ownCommentDeleteDenied = await collaborator.agent.delete(`/api/chapter-annotations/${collaboratorNote.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: collaboratorNote.body.data.versionNo })
+      .expect(403);
+    expect(ownCommentDeleteDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+
+    const addOnly = { ...commentOnly, todos: "write" };
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: addOnly })
+      .expect(200);
+    const visibleAllAnnotations = await collaborator.agent.get(`/api/chapters/${chapterId}/annotations`).expect(200);
+    expect(visibleAllAnnotations.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: ownerNote.body.data.id, kind: "note" }),
+      expect.objectContaining({ id: ownerTodo.body.data.id, kind: "todo" })
+    ]));
+    const collaboratorTodo = await collaborator.agent.post(`/api/chapters/${chapterId}/annotations`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ kind: "todo", startLine: 2, endLine: 2, note: "协作者待办" })
+      .expect(201);
+    const visibleTodosAcrossCreators = await collaborator.agent.get(`/api/chapters/${chapterId}/annotations`).expect(200);
+    expect(visibleTodosAcrossCreators.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: ownerTodo.body.data.id, kind: "todo" }),
+      expect.objectContaining({ id: collaboratorTodo.body.data.id, kind: "todo" })
+    ]));
+    const todoUpdateDenied = await collaborator.agent.patch(`/api/chapter-annotations/${ownerTodo.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ status: "resolved", expectedVersionNo: ownerTodo.body.data.versionNo })
+      .expect(403);
+    expect(todoUpdateDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const todoDeleteDenied = await collaborator.agent.delete(`/api/chapter-annotations/${ownerTodo.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: ownerTodo.body.data.versionNo })
+      .expect(403);
+    expect(todoDeleteDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    await collaborator.agent.patch(`/api/chapter-annotations/${collaboratorTodo.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ status: "resolved", expectedVersionNo: collaboratorTodo.body.data.versionNo })
+      .expect(200);
+    await collaborator.agent.delete(`/api/chapter-annotations/${collaboratorTodo.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: collaboratorTodo.body.data.versionNo + 1 })
+      .expect(204);
+
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: { ...addOnly, prose: "write" } })
+      .expect(200);
+    await owner.agent.patch(`/api/chapter-annotations/${ownerTodo.body.data.id}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ status: "resolved", expectedVersionNo: ownerTodo.body.data.versionNo })
+      .expect(200);
+    await collaborator.agent.delete(`/api/chapter-annotations/${ownerNote.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: ownerNote.body.data.versionNo })
+      .expect(204);
   });
 
   it("章节伏笔提醒同时校验正文与大纲权限、CSRF 和对象归属", async () => {
@@ -2668,12 +2799,16 @@ describe("用户、作品权限与操作者追踪 API", () => {
       content: "可读取的对话正文",
       metadata: {
         mentionCharacterIds: [String(character.body.data.id)],
+        mentionRaceIds: ["secret-race-id"],
+        mentionOrganizationIds: ["secret-organization-id"],
         modelDisplayName: "保留的模型信息"
       }
     });
 
     const ownerView = await owner.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(ownerView.body.data.messages[0].metadata.mentionCharacterIds).toEqual([character.body.data.id]);
+    expect(ownerView.body.data.messages[0].metadata.mentionRaceIds).toEqual(["secret-race-id"]);
+    expect(ownerView.body.data.messages[0].metadata.mentionOrganizationIds).toEqual(["secret-organization-id"]);
 
     const collaboratorView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(collaboratorView.body.data.messages[0]).toMatchObject({
@@ -2681,6 +2816,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       metadata: { modelDisplayName: "保留的模型信息" }
     });
     expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionCharacterIds");
+    expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionRaceIds");
+    expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionOrganizationIds");
 
     const pagedView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}?page=1&limit=20`).expect(200);
     expect(pagedView.body.data.messagesPage.items[0].metadata).toEqual({ modelDisplayName: "保留的模型信息" });

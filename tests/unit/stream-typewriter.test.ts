@@ -83,6 +83,22 @@ describe("流式打字机", () => {
     expect(renders).toEqual(["部分回复"]);
   });
 
+  it("可以把尚未归类的正文替换为最终正文", () => {
+    const frames = manualFrames();
+    const renders: string[] = [];
+    const typewriter = createStreamTypewriter({
+      onRender: (text) => renders.push(text),
+      scheduleFrame: frames.schedule,
+      cancelFrame: frames.cancel,
+      reducedMotion: false
+    });
+
+    typewriter.append("工具前的中间输出");
+    expect(typewriter.replace("最终回答")).toBe("最终回答");
+    expect(frames.runAll()).toBe(0);
+    expect(renders).toEqual(["最终回答"]);
+  });
+
   it("限制生成和收尾阶段每帧显示的字符数", () => {
     expect(streamTypewriterBatchSize(0)).toBe(0);
     expect(streamTypewriterBatchSize(4)).toBe(1);

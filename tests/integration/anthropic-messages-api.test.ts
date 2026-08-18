@@ -280,7 +280,8 @@ describe("Anthropic Messages 供应商", () => {
     clearTimeout(safetyRelease);
 
     const generated = await generatedPromise;
-    expect(generated.content).toBe("我先读取目录。已读取目录。");
+    expect(deltas).toEqual(["我先读取目录。", "已读取", "目录。"]);
+    expect(generated.content).toBe("已读取目录。");
     expect(generated.toolCalls).toEqual([
       expect.objectContaining({ id: "toolu_stream", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed" })
     ]);

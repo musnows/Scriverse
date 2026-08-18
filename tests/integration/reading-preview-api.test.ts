@@ -63,6 +63,8 @@ describe("阅读预览章节接口", () => {
       });
       const noAccess = {
         prose: "none",
+        comments: "none",
+        todos: "none",
         drafts: "none",
         settings: "none",
         characters: "none",

@@ -2070,10 +2070,12 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
-  it("流式用户消息持久化手动与自动角色引用且角色扮演不自动识别", async () => {
+  it("流式用户消息持久化角色、种族与组织引用且角色扮演不自动识别", async () => {
     const manualCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾潮", gender: "male" }).expect(201);
     const automaticCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", gender: "female" }).expect(201);
     const roleplayCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "宋遥", gender: "none" }).expect(201);
+    const automaticRace = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "火焰翼龙族" }).expect(201);
+    const automaticOrganization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "星火议会" }).expect(201);
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
@@ -2093,24 +2095,34 @@ describe("AI 供应商、模型与建议 API", () => {
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = String(conversation.body.data.id);
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
-      instruction: "请让顾潮与林舟一起出场。",
+      instruction: "请让顾潮与林舟、火焰翼龙族和星火议会一起出场。",
       scope: { type: "none", characterIds: [manualCharacter.body.data.id] },
       modelId,
       conversationId
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
     const userMessagePayload = JSON.parse(streamed.text.match(/event: user_message\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
-      message?: { metadata?: { mentionCharacterIds?: string[] } };
+      message?: { metadata?: { mentionCharacterIds?: string[]; mentionRaceIds?: string[]; mentionOrganizationIds?: string[] } };
     };
     expect(userMessagePayload.message?.metadata?.mentionCharacterIds).toEqual([
       manualCharacter.body.data.id,
       automaticCharacter.body.data.id
     ]);
+    expect(userMessagePayload.message?.metadata?.mentionRaceIds).toEqual([automaticRace.body.data.id]);
+    expect(userMessagePayload.message?.metadata?.mentionOrganizationIds).toEqual([automaticOrganization.body.data.id]);
     expect(sentContexts[0]).toContain("<selected_characters>");
     expect(sentContexts[0]).toContain("<mentioned_characters>");
+    expect(sentContexts[0]).toContain("<mentioned_races>");
+    expect(sentContexts[0]).toContain("<mentioned_organizations>");
     expect(sentContexts[0]).toContain("gender=male");
     expect(sentContexts[0]).toContain("gender=female");
     expect(runtime.store.getAiConversationInjectedEntities(conversationId, workId).characters).toEqual([
       automaticCharacter.body.data.id
+    ]);
+    expect(runtime.store.getAiConversationInjectedEntities(conversationId, workId).races).toEqual([
+      automaticRace.body.data.id
+    ]);
+    expect(runtime.store.getAiConversationInjectedEntities(conversationId, workId).organizations).toEqual([
+      automaticOrganization.body.data.id
     ]);
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
@@ -2118,6 +2130,8 @@ describe("AI 供应商、模型与建议 API", () => {
       manualCharacter.body.data.id,
       automaticCharacter.body.data.id
     ]);
+    expect(reloaded.body.data.messages[0].metadata.mentionRaceIds).toEqual([automaticRace.body.data.id]);
+    expect(reloaded.body.data.messages[0].metadata.mentionOrganizationIds).toEqual([automaticOrganization.body.data.id]);
 
     const plainStream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
       instruction: "请概括当前问题。",
@@ -2748,7 +2762,7 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
-  it("OpenAI 工具参数收齐前只转发正文，结束标记后才执行工具并继续流式回答", async () => {
+  it("OpenAI 工具参数收齐前暂存正文，结束标记后才执行工具并继续流式回答", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     let releaseFirstRound = (): void => undefined;
@@ -2805,7 +2819,7 @@ describe("AI 供应商、模型与建议 API", () => {
       onToolCall: (toolCall) => toolEvents.push({ arguments: toolCall.arguments })
     }, (delta) => deltas.push(delta));
     const safetyRelease = setTimeout(releaseFirstRound, 1_000);
-    for (let index = 0; index < 100 && deltas.length === 0; index += 1) {
+    for (let index = 0; index < 100 && firstRoundFinished === false; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
     expect(deltas).toEqual(["我先读取目录。"]);
@@ -2815,7 +2829,8 @@ describe("AI 供应商、模型与建议 API", () => {
     clearTimeout(safetyRelease);
 
     const generated = await generatedPromise;
-    expect(generated.content).toBe("我先读取目录。已读取目录。");
+    expect(deltas).toEqual(["我先读取目录。", "已读取", "目录。"]);
+    expect(generated.content).toBe("已读取目录。");
     expect(generated.toolCalls).toEqual([
       expect.objectContaining({ id: "stream-tool", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed" })
     ]);
@@ -2872,7 +2887,10 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain('"type":"thinking","round":2,"content":"目录结果足以回答。"');
     expect(streamed.text.indexOf('"type":"thinking","round":1')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"我先读取作品目录。"}');
-    expect(streamed.text.indexOf('"delta":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
+    expect(streamed.text).toContain('event: process_step\ndata: {"id":"process_');
+    expect(streamed.text).toContain('"type":"intermediate","round":1,"content":"我先读取作品目录。"');
+    expect(streamed.text.indexOf('"delta":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf('"type":"intermediate","round":1,"content":"我先读取作品目录。"'));
+    expect(streamed.text.indexOf('"type":"intermediate","round":1,"content":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
     expect(streamed.text).toContain('"name":"story_index"');
     expect(streamed.text).toContain('"arguments":{"offset":0,"limit":1}');
     expect(streamed.text).toMatch(/"calledAt":"\d{4}-\d{2}-\d{2}T/u);
@@ -2889,7 +2907,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const streamedConversation = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
     expect(streamedConversation.body.data.messages.at(-1).metadata.processDurationMs).toBe(completePayload.processDurationMs);
     const generatedSuggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
-    expect(generatedSuggestions.body.data[0].content).toBe("我先读取作品目录。已读取目录。");
+    expect(generatedSuggestions.body.data[0].content).toBe("已读取目录。");
 
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];

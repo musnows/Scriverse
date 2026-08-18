@@ -92,7 +92,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; }");
     expect(styles.text).toContain("@container editor-workspace (max-width: 720px)");
     expect(styles.text).toContain(".chapter-stats { display: none; }");
-    expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
+    expect(styles.text).toContain(".editor-body { display: flex; grid-row: 3; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
     expect(application.text).toContain("function renderChapterLineNumbers({ targetLineIndex = null } = {})");
     expect(application.text).toContain("syncChapterLineNumberScroll");
@@ -126,6 +126,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('addEventListener("pointermove"');
     expect(styles.text).toContain(".chapter-line-number.is-line-selected");
     expect(styles.text).toContain(".chapter-line-number.is-line-selected::after");
+    expect(styles.text).toContain(".app-shell:not(.shelf-mode):not(.ai-workspace-mode) { grid-template-columns: minmax(0, 1fr); }");
     expect(styles.text).toContain(".chapter-space-marker::after");
     expect(styles.text).toContain(".chapter-space-marker.tab::after");
     expect(styles.text).toContain("width: 100vw; height: 100%");
@@ -639,7 +640,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-permission-preset="read"');
     expect(application.text).toContain('data-member-permission=');
     expect(application.text).toContain('body: existing ? { permissions } : { userId, permissions }');
-    expect(application.text).toContain('/work-permissions.js?v=20260731-drafts-to-ideas-v1');
+    expect(application.text).toContain('/work-permissions.js?v=20260818-annotation-permissions-v1');
     expect(workPermissions.text).toContain('label: "AI 对话"');
     expect(workPermissions.text).toContain('label: "AI 分析"');
     expect(workPermissions.text).toContain('id: "ai-chat"');
@@ -754,11 +755,12 @@ describe("作者完整创作流程", () => {
     expect(workPermissions.text).toContain('label: "大纲/伏笔"');
     expect(page.text).toContain('<button class="ai-analysis-entry" type="button" data-module="tasks">');
     expect(page.text).toContain('</svg>AI 分析</button>');
-    expect(page.text).toContain('id="ai-assistant-entry" class="ai-assistant-entry" type="button" aria-controls="ai-panel" aria-expanded="false"');
+    expect(page.text).toContain('id="ai-assistant-entry" class="module-nav-secondary hidden ai-assistant-entry" type="button" aria-controls="ai-panel" aria-expanded="false"');
+    expect(page.text).toMatch(/id="module-more-button"[\s\S]*id="ai-assistant-entry" class="module-nav-secondary hidden ai-assistant-entry"/u);
     expect(page.text).toContain('</svg>创作助手</button>');
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text).toContain('<span class="nav-label">更多</span>');
-    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(6);
+    expect(page.text.match(/class="module-nav-secondary hidden/gu)).toHaveLength(7);
     expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(17);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');
@@ -767,12 +769,16 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("openWorkSettingsDialog(work)");
     expect(application.text).toContain('$("#ai-assistant-entry").addEventListener("click"');
     expect(application.text).toContain('aiConversationWorkspaceOpen = Boolean(visible)');
+    expect(application.text).toContain('panelLayout.aiCollapsed = aiConversationWorkspaceOpen ? false : mobileWorkspace;');
+    expect(application.text).toContain('$("#ai-panel-toggle").textContent = aiConversationWorkspaceOpen ? "×" : (panelLayout.aiCollapsed ? "‹" : "›");');
+    expect(application.text).toContain('if (isMobileViewport()) {');
     expect(application.text).toContain('tasks: ["AI 深度分析", "AI 分析中心"');
     expect(application.text).toContain('openDialog("开始 AI 分析"');
     expect(application.text).toContain('selector: "[data-module=\\"tasks\\"]"');
     expect(styles.text).toContain(".module-nav .ai-analysis-entry");
     expect(styles.text).toContain(".module-nav .ai-assistant-entry");
-    expect(styles.text).toContain(".app-shell:not(.shelf-mode):not(.ai-workspace-mode) .ai-panel { display: none; }");
+    expect(styles.text).not.toContain(".app-shell:not(.shelf-mode):not(.ai-workspace-mode) .ai-panel { display: none; }");
+    expect(styles.text).toContain(".app-shell.ai-workspace-mode > :is(.topbar, .left-panel, .main-panel) { visibility: hidden; pointer-events: none; }");
     expect(styles.text).toContain("height: 100dvh; max-height: 100dvh;");
     expect(styles.text).toContain(".module-nav .ai-analysis-entry,\n.module-nav .ai-analysis-entry:hover,\n.module-nav .ai-analysis-entry.active { background: transparent;");
     expect(styles.text).toContain("#module-more-button { grid-column: 2;");
@@ -829,6 +835,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".mobile-panel-backdrop { position: fixed; z-index: 36;");
     expect(styles.text).toContain(".shelf-view { height: 100%; min-height: 0; padding: 28px var(--mobile-gutter) 42px; }");
     expect(styles.text).toMatch(/\.left-panel \{[\s\S]*?z-index: 37;/);
+    expect(styles.text).toContain("width: 100%;\n    grid-column: auto;");
     expect(styles.text).toContain(".ai-panel {\n    position: fixed;\n    z-index: 35;");
     expect(application.text).toContain("function isMobileViewport()");
     expect(styles.text).toContain(".presence-button #presence-count { display: none; }");
