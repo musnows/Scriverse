@@ -92,7 +92,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; }");
     expect(styles.text).toContain("@container editor-workspace (max-width: 720px)");
     expect(styles.text).toContain(".chapter-stats { display: none; }");
-    expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
+    expect(styles.text).toContain(".editor-body { display: flex; grid-row: 3; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
     expect(application.text).toContain("function renderChapterLineNumbers({ targetLineIndex = null } = {})");
     expect(application.text).toContain("syncChapterLineNumberScroll");

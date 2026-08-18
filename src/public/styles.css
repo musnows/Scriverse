@@ -1365,7 +1365,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
 .hidden { display: none !important; }
 .editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; }
-.editor-toolbar { position: relative; display: grid; grid-template-areas: "path path" "title actions"; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-end; column-gap: 20px; row-gap: 6px; padding: 25px 7% 18px; border-bottom: 1px solid var(--line); }
+.editor-toolbar { position: relative; display: grid; grid-row: 1; grid-template-areas: "path path" "title actions"; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-end; column-gap: 20px; row-gap: 6px; padding: 25px 7% 18px; border-bottom: 1px solid var(--line); }
 #chapter-path { grid-area: path; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-title { grid-area: title; display: block; width: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; font-size: 27px; padding: 0; }
 .chapter-title:focus { box-shadow: none; border-bottom: 1px solid var(--accent); }
@@ -1385,7 +1385,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-search-actions > span { flex: 1 1 120px; min-width: 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
 .chapter-search-actions button { min-height: 32px; padding: 6px 9px; font-size: 10px; }
 .chapter-search-actions button:disabled { cursor: not-allowed; opacity: .45; }
-.chapter-foreshadow-reminder { --reminder-color: #80713d; display: grid; grid-template-areas: "summary actions" "details details"; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px 18px; padding: 10px 7%; border-bottom: 1px solid color-mix(in srgb, var(--reminder-color) 32%, var(--line)); background: color-mix(in srgb, var(--reminder-color) 7%, var(--surface)); }
+.chapter-foreshadow-reminder { --reminder-color: #80713d; display: grid; grid-row: 2; grid-template-areas: "summary actions" "details details"; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px 18px; padding: 10px 7%; border-bottom: 1px solid color-mix(in srgb, var(--reminder-color) 32%, var(--line)); background: color-mix(in srgb, var(--reminder-color) 7%, var(--surface)); }
 .chapter-foreshadow-reminder[data-role="payoff"] { --reminder-color: #49745c; }
 .chapter-foreshadow-reminder-summary { grid-area: summary; display: flex; min-width: 0; align-items: center; gap: 10px; }
 .chapter-foreshadow-reminder-summary > div { display: grid; min-width: 0; gap: 2px; }
@@ -1408,7 +1408,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .chapter-foreshadow-reminder-actions { justify-content: flex-start; flex-wrap: wrap; }
   .chapter-foreshadow-reminder-details { grid-template-columns: minmax(0, 1fr); }
 }
-.editor-body { display: flex; min-height: 0; flex-direction: column; }
+.editor-body { display: flex; grid-row: 3; min-height: 0; flex-direction: column; }
 .chapter-editor-frame { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); flex: 1 1 auto; width: 100%; min-height: 0; margin: 0; overflow: hidden; }
 .chapter-line-numbers { position: relative; z-index: 2; grid-column: 1; grid-row: 1; min-height: 0; overflow: visible; border-right: 1px solid var(--line); background: linear-gradient(to right, transparent, rgba(143,132,116,.04)); color: var(--muted); font-family: var(--font-latin), monospace; font-size: clamp(11px, calc(var(--editor-font-size) * .72), 14px); line-height: 1.2; user-select: none; }
 #chapter-line-numbers-inner { position: absolute; top: 32px; left: 0; right: 0; will-change: transform; }
