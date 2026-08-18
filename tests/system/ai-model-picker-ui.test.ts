@@ -1,0 +1,42 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+describe("AI 模型选择收纳界面", () => {
+  it("将模型选择收纳为 Context 右侧的脑图标按钮，并保留可访问的弹出选择器", async () => {
+    const publicPath = join(process.cwd(), "src", "public");
+    const [application, page, styles] = await Promise.all([
+      readFile(join(publicPath, "app.js"), "utf8"),
+      readFile(join(publicPath, "index.html"), "utf8"),
+      readFile(join(publicPath, "styles.css"), "utf8")
+    ]);
+
+    expect(page).not.toContain('class="field-label prompt-model-field"');
+    expect(page).toContain('id="ai-model-picker" class="ai-model-picker" type="button"');
+    expect(page).toContain('aria-controls="ai-model-popover"');
+    expect(page).toContain('class="ai-model-picker-icon"');
+    expect(page).toContain('id="ai-model-popover" class="ai-model-popover hidden" role="dialog"');
+    expect(page).toContain('<label id="ai-model-popover-title" for="ai-model">实际使用模型</label>');
+    expect(page).toContain('<select id="ai-model" aria-label="实际使用模型">');
+    expect(page).toContain("feature=ai-model-picker-v1");
+
+    expect(application).toContain("function selectedAiModelLabel()");
+    expect(application).toContain("function syncAiModelPicker()");
+    expect(application).toContain('button.setAttribute("aria-label", label);');
+    expect(application).toContain('button.disabled = interactionBusy;');
+    expect(application).toContain("function setAiModelPickerVisible(visible)");
+    expect(application).toContain('popover.classList.toggle("hidden", !visible);');
+    expect(application).toContain('$("#ai-model-picker").addEventListener("click", async (event) => {');
+    expect(application).toContain("setAiContextDistributionVisible(false);");
+    expect(application).toContain("setAiModelPickerVisible(willOpen);");
+    expect(application).toContain('!event.target.closest("#ai-model-picker") && !event.target.closest("#ai-model-popover")');
+    expect(application).toContain('if (!$("#ai-model-popover").classList.contains("hidden")) {');
+    expect(application).toContain("syncAiModelPicker();");
+
+    expect(styles).toContain(".ai-model-picker { display: grid; flex: 0 0 32px;");
+    expect(styles).toContain(".ai-model-picker-icon { width: 18px; height: 18px;");
+    expect(styles).toContain(".ai-model-popover { position: absolute; right: 0;");
+    expect(styles).toContain(".ai-model-popover::after { position: absolute; right: 49px;");
+    expect(styles).toContain(".ai-model-popover.hidden { display: none; }");
+  });
+});

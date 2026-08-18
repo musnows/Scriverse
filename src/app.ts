@@ -1102,7 +1102,9 @@ function redactAiConversationMessage(item: unknown, permissions: WorkModulePermi
 
 /** 无正文读取权限时隐藏对话预览与消息正文，避免历史对话泄露章节原文。 */
 function redactAiConversation(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
-  const readableRecord = permissions.characters === "none" ? { ...record, roleplayCharacter: null } : record;
+  const readableRecord = permissions.characters === "none"
+    ? { ...record, roleplayCharacter: null, roleplayUserCharacter: null }
+    : record;
   const scopedRecord = redactAiCallContext(readableRecord, permissions);
   const result: Record<string, unknown> = {
     ...scopedRecord
@@ -2688,7 +2690,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }).strict(), request.body);
     const sourceConversation = store.getAiConversationSummary(request.params.conversationId);
     const permissions = requestPermissions(request, String(sourceConversation.workId));
-    if (sourceConversation.roleplayCharacter && !canReadWorkModule(permissions, "characters")) {
+    if ((sourceConversation.roleplayCharacter || sourceConversation.roleplayUserCharacter) && !canReadWorkModule(permissions, "characters")) {
       throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取“角色”模块的权限");
     }
     const forked = store.forkAiConversation(request.params.conversationId, input.messageId, input.title, input.requestId);
@@ -2707,8 +2709,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, redactAiConversation(updated, permissions));
   });
   app.patch("/api/ai-conversations/:conversationId/roleplay", (request, response) => {
-    const input = parse(z.object({ characterId: identifier.nullable() }).strict(), request.body);
-    const updated = store.setAiConversationRoleplayCharacter(request.params.conversationId, input.characterId);
+    const input = parse(z.object({
+      characterId: identifier.nullable(),
+      userCharacterId: identifier.nullable().optional()
+    }).strict(), request.body);
+    const updated = store.setAiConversationRoleplayCharacter(request.params.conversationId, input.characterId, input.userCharacterId);
     const permissions = requestPermissions(request, String(updated.workId));
     data(response, redactAiConversation(updated, permissions));
   });
