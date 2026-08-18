@@ -27,7 +27,7 @@ describe("人物关系图搜索界面", () => {
     expect(page.text).toContain('feature=galaxy-compact-controls-v2');
     expect(page.text).toContain('feature=galaxy-motion-mode-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
-    expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3');
+    expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1');
     expect(application.text).toContain('class="relationship-table-wrapper"');
     expect(application.text).toContain('GALAXY_MOTION_MODE_STORAGE_KEY');
     expect(application.text).toContain('motionMode: storedGalaxyMotionMode()');
