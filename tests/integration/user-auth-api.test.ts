@@ -1475,6 +1475,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ kind: "todo", startLine: 2, endLine: 2, note: "协作者待办" })
       .expect(201);
+    const visibleTodosAcrossCreators = await collaborator.agent.get(`/api/chapters/${chapterId}/annotations`).expect(200);
+    expect(visibleTodosAcrossCreators.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: ownerTodo.body.data.id, kind: "todo" }),
+      expect.objectContaining({ id: collaboratorTodo.body.data.id, kind: "todo" })
+    ]));
     const todoUpdateDenied = await collaborator.agent.patch(`/api/chapter-annotations/${ownerTodo.body.data.id}`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ status: "resolved", expectedVersionNo: ownerTodo.body.data.versionNo })
