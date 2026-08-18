@@ -28,7 +28,8 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("会话选项在会话开始后不支持修改，若需要修改，请新建会话");
     expect(application).toContain('$("#ai-task").disabled = interactionBusy;');
     expect(application).toContain('$("#ai-scope").disabled = interactionBusy || roleplaySelected;');
-    expect(application).toContain('$("#ai-model").disabled = interactionBusy;');
+    expect(application).toContain("function syncAiModelPicker()");
+    expect(application).toContain('select.disabled = interactionBusy;');
     expect(application).toContain("select.addEventListener(\"pointerdown\", blockLockedAiConversationOptionInteraction);");
     expect(application).toContain("select.addEventListener(\"keydown\", blockLockedAiConversationOptionKeydown);");
     expect(application).toContain("if (state.aiPromptSent) {");

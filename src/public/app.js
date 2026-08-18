@@ -2105,6 +2105,7 @@ function applyAiChatTabState(tab) {
   applyAiRoleplayCharacter(tab.roleplayCharacter, tab.roleplayUserCharacter);
   const selectedModelId = tab.modelId ?? tab.selectedModelId;
   if (selectedModelId && state.models.some((model) => model.id === selectedModelId)) $("#ai-model").value = selectedModelId;
+  syncAiModelPicker();
   setAiPromptText(tab.composer.text);
   renderAiCitations();
   renderAiReferences();
@@ -3250,6 +3251,26 @@ function renderAiRoleplayUserCharacterSelect() {
 
 const aiConversationOptionLockedMessage = "会话选项在会话开始后不支持修改，若需要修改，请新建会话";
 
+function selectedAiModelLabel() {
+  return $("#ai-model").selectedOptions[0]?.textContent?.trim() || "尚未选择模型";
+}
+
+function syncAiModelPicker() {
+  const select = $("#ai-model");
+  const button = $("#ai-model-picker");
+  const interactionBusy = aiInteractionBusy();
+  const selectedLabel = selectedAiModelLabel();
+  const label = state.aiPromptSent
+    ? `当前模型：${selectedLabel}。${aiConversationOptionLockedMessage}`
+    : `选择实际使用模型：${selectedLabel}`;
+  select.disabled = interactionBusy;
+  select.title = state.aiPromptSent ? aiConversationOptionLockedMessage : "";
+  button.disabled = interactionBusy;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  if (interactionBusy) setAiModelPickerVisible(false);
+}
+
 function notifyAiConversationOptionLocked(select) {
   if (!state.aiPromptSent) return false;
   const now = Date.now();
@@ -3287,8 +3308,7 @@ function syncAiTaskOptions() {
   $("#ai-scope").title = state.aiPromptSent
     ? aiConversationOptionLockedMessage
     : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
-  $("#ai-model").disabled = interactionBusy;
-  $("#ai-model").title = state.aiPromptSent ? aiConversationOptionLockedMessage : "";
+  syncAiModelPicker();
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -6616,6 +6636,8 @@ function resetWorkScopedUiCaches() {
   state.aiConversations = [];
   resetAiChatTabs();
   $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
+  syncAiModelPicker();
+  setAiModelPickerVisible(false);
   renderAiConversationHistory();
 }
 
@@ -11457,12 +11479,16 @@ async function ensureAiModelsLoaded() {
   if (aiModelsLoadPromise && aiModelsLoadWorkId === workId) return aiModelsLoadPromise;
   const select = $("#ai-model");
   select.innerHTML = '<option value="">正在加载模型……</option>';
+  syncAiModelPicker();
   aiModelsLoadWorkId = workId;
   aiModelsLoadPromise = loadModels();
   try {
     await aiModelsLoadPromise;
   } catch (error) {
-    if (state.work?.id === workId) select.innerHTML = '<option value="">模型加载失败，点击重试</option>';
+    if (state.work?.id === workId) {
+      select.innerHTML = '<option value="">模型加载失败，点击重试</option>';
+      syncAiModelPicker();
+    }
     throw error;
   } finally {
     if (aiModelsLoadWorkId === workId) {
@@ -11595,6 +11621,14 @@ function setAiContextDistributionVisible(visible) {
   popover.classList.toggle("hidden", !visible);
   meter.setAttribute("aria-expanded", String(visible));
   if (!visible && document.activeElement === $("#ai-context-popover-close")) meter.focus();
+}
+
+function setAiModelPickerVisible(visible) {
+  const button = $("#ai-model-picker");
+  const popover = $("#ai-model-popover");
+  popover.classList.toggle("hidden", !visible);
+  button.setAttribute("aria-expanded", String(visible));
+  if (!visible && document.activeElement === $("#ai-model")) button.focus();
 }
 
 function showAiContextWarning(usage = null) {
@@ -16938,9 +16972,26 @@ $("#ai-model").addEventListener("focus", () => {
 $("#ai-model").addEventListener("change", (event) => {
   if (state.aiPromptSent) {
     event.currentTarget.value = state.aiConversationModelId ?? event.currentTarget.value;
+    syncAiModelPicker();
     return toast(aiConversationOptionLockedMessage);
   }
   setAiContextMeter(null);
+  syncAiModelPicker();
+  setAiModelPickerVisible(false);
+});
+$("#ai-model-picker").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  if (notifyAiConversationOptionLocked(button)) return;
+  const willOpen = $("#ai-model-popover").classList.contains("hidden");
+  setAiContextDistributionVisible(false);
+  setAiModelPickerVisible(willOpen);
+  if (!willOpen) return;
+  try {
+    await ensureAiModelsLoaded();
+  } catch (error) {
+    toast(`模型加载失败：${error.message}`, "error");
+  }
+  if (!$("#ai-model-popover").classList.contains("hidden") && !$("#ai-model").disabled) $("#ai-model").focus();
 });
 $("#ai-roleplay-character").addEventListener("focus", async () => {
   try {
@@ -17186,6 +17237,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#ai-conversation-switcher-menu") && !event.target.closest("#ai-conversation-switcher")) setAiConversationSwitcherVisible(false);
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
+  if (!event.target.closest("#ai-model-picker") && !event.target.closest("#ai-model-popover")) setAiModelPickerVisible(false);
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
     $("#account-menu").classList.add("hidden");
     $("#account-button").setAttribute("aria-expanded", "false");
@@ -17203,6 +17255,10 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    if (!$("#ai-model-popover").classList.contains("hidden")) {
+      setAiModelPickerVisible(false);
+      return;
+    }
     if (!$("#chapter-search-panel").classList.contains("hidden")) {
       closeChapterSearchPanel();
       return;
@@ -17238,6 +17294,7 @@ document.addEventListener("keydown", (event) => {
   openSearchDialog().catch((error) => toast(error.message, "error"));
 }, { capture: true });
 $("#ai-context-meter").addEventListener("click", () => {
+  setAiModelPickerVisible(false);
   setAiContextDistributionVisible($("#ai-context-popover").classList.contains("hidden"));
 });
 $("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
