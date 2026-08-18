@@ -4411,17 +4411,21 @@ export class AiManager {
     const conversationBefore: AiConversationTitleContext | null = input.conversationId
       ? this.store.getAiConversationTitleContext(input.conversationId, input.workId)
       : null;
-    const firstUserMessage = conversationBefore?.messages.length === 1 && conversationBefore.messages[0]?.role === "user"
-      ? conversationBefore.messages[0]
-      : null;
+    const userMessages = conversationBefore?.messages.filter((message) => message.role === "user") ?? [];
+    const assistantMessages = conversationBefore?.messages.filter((message) => message.role === "assistant") ?? [];
+    const firstUserMessage = userMessages[0] ?? null;
     const firstUserContent = firstUserMessage?.content ?? "";
     const titleSettings = this.store.getWorkAiSettings(input.workId);
     const titleModelId = typeof titleSettings.titleGenerationModelId === "string" ? titleSettings.titleGenerationModelId : "";
     const defaultTitle = firstUserContent ? defaultAiConversationTitle(firstUserContent) : "";
+    const isCompletingSecondAssistantTurn = conversationBefore?.messages.at(-1)?.role === "user"
+      && userMessages.length === 2
+      && assistantMessages.length === 1;
     const shouldGenerateTitle = Boolean(
       input.conversationId
       && firstUserContent
       && titleModelId
+      && isCompletingSecondAssistantTurn
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
     const processStartedAt = process.hrtime.bigint();
@@ -4495,8 +4499,10 @@ export class AiManager {
         input.workId,
         input.conversationId,
         titleModelId,
-        firstUserContent,
-        generated.content,
+        [
+          ...(conversationBefore?.messages ?? []),
+          { role: "assistant" as const, content: generated.content }
+        ],
         defaultTitle
       ).catch((error) => {
         logger.warn("ai.conversation_title.failed", { workId: input.workId, conversationId: input.conversationId, error: aiErrorForLog(error) });
@@ -4518,20 +4524,22 @@ export class AiManager {
     workId: string,
     conversationId: string,
     modelId: string,
-    prompt: string,
-    response: string,
+    messages: AiConversationTitleContext["messages"],
     fallbackTitle: string
   ): Promise<string | null> {
     try {
+      const conversation = messages.map((message) => {
+        const speaker = message.role === "user" ? "用户" : "助手";
+        return `<${speaker}>\n${Array.from(message.content).slice(0, 3_000).join("")}\n</${speaker}>`;
+      }).join("\n\n");
       const generated = await this.generate({
         workId,
         taskType: "chat",
         instruction: [
-          "请根据下面这次对话的第一轮用户提问和助手回答，生成一个简洁、准确的会话标题。",
+          "请根据下面前两轮用户与助手的对话，生成一个简洁、准确的会话标题。",
           "标题应概括用户真正想解决的主题，不要复述完整句子。",
           "只输出标题本身，不要引号、编号、Markdown、解释或句末标点；标题不超过 15 个汉字或 30 个字符。",
-          `<用户提问>\n${Array.from(prompt).slice(0, 6_000).join("")}\n</用户提问>`,
-          `<助手回答>\n${Array.from(response).slice(0, 6_000).join("")}\n</助手回答>`
+          `<对话记录>\n${conversation}\n</对话记录>`
         ].join("\n\n"),
         scope: { type: "none" },
         modelId,
