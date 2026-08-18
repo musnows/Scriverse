@@ -6888,7 +6888,10 @@ export class AiManager {
             }
           } catch (error) {
             lastFailure = error;
-            if (isInteractiveStreamError(error)) retryable = false;
+            if (error instanceof AppError && error.code === "AI_STREAM_NETWORK_ERROR") {
+              retryLimit = aiHttpRetryCount(error.status, this.retryPolicy);
+              retryDelayMs = aiHttpRetryDelayMs(error.status, attempt);
+            } else if (isInteractiveStreamError(error)) retryable = false;
             if (traceAttempt.status === "running") {
               traceAttempt.completedAt = now();
               traceAttempt.status = "failed";
