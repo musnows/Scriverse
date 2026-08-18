@@ -12,6 +12,7 @@ describe("AI 对话发送与终止按钮", () => {
     ]);
 
     expect(page).toContain('id="ai-send" class="ai-send-button" type="button" data-state="send" aria-label="发送消息" title="发送消息"');
+    expect(page).toContain("&feature=mobile-ai-entry-hidden-v1");
     expect(page).toContain('class="ai-send-button-icon"');
     expect(application).toContain("function aiSendButtonIconMarkup(stateName)");
     expect(application).toContain('const stateName = sending ? "stop" : switching ? "switching" : "send";');
@@ -22,6 +23,7 @@ describe("AI 对话发送与终止按钮", () => {
     expect(styles).toContain(".ai-context-meter { --context-usage: 0; --context-meter-color: var(--green); position: relative; display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-height: 32px; height: 32px;");
     expect(styles).toContain(".ai-send-button { display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-width: 32px; min-height: 32px; height: 32px;");
     expect(styles).toContain(".ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; min-width: 30px; min-height: 30px; height: 30px; }");
+    expect(styles).toContain(".app-shell.ai-panel-collapsed:not(.ai-workspace-mode) .ai-panel { display: none; }");
     expect(styles).toContain(".ai-send-button.is-stop .ai-send-button-icon");
     expect(styles).not.toContain(".ai-send-button.is-stop { background");
     expect(styles).not.toContain(".ai-send-button.is-stop:hover");

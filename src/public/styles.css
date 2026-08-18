@@ -3801,6 +3801,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .app-shell.shelf-mode .ai-panel { display: none; }
   .ai-panel > .panel-resize-handle { display: none; }
   .app-shell.ai-panel-collapsed .ai-panel { top: auto; height: 58px; padding-block: 8px; transform: translateY(0); }
+  .app-shell.ai-panel-collapsed:not(.ai-workspace-mode) .ai-panel { display: none; }
   .app-shell.ai-panel-collapsed .ai-panel > :not(.ai-heading) { display: none; }
   .app-shell.ai-panel-collapsed .ai-heading { display: flex; justify-content: space-between; padding: 0; }
   .app-shell.ai-workspace-mode.ai-panel-collapsed .ai-panel.is-conversation-workspace .ai-heading > :not(.panel-collapse-button) { display: flex; }
