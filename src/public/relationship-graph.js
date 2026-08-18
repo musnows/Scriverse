@@ -327,10 +327,18 @@ export function normalizeGalaxyMotionMode(value) {
   return GALAXY_MOTION_MODES.includes(value) ? value : "auto";
 }
 
+export function isGalaxyPerformanceThresholdExceeded(nodeCount, edgeCount) {
+  return Math.max(0, Number(nodeCount) || 0) > GALAXY_REDUCED_MOTION_NODE_THRESHOLD
+    || Math.max(0, Number(edgeCount) || 0) > GALAXY_REDUCED_MOTION_EDGE_THRESHOLD;
+}
+
+export function shouldRenderGalaxyEdgeLabel(nodeCount, edgeCount, edgeSelected, highlighted) {
+  return Boolean(edgeSelected) || (Boolean(highlighted) && !isGalaxyPerformanceThresholdExceeded(nodeCount, edgeCount));
+}
+
 export function getGalaxyMotionProfile(mode, nodeCount, edgeCount, prefersReducedMotion = false) {
   const requestedMode = normalizeGalaxyMotionMode(mode);
-  const thresholdExceeded = Math.max(0, Number(nodeCount) || 0) > GALAXY_REDUCED_MOTION_NODE_THRESHOLD
-    || Math.max(0, Number(edgeCount) || 0) > GALAXY_REDUCED_MOTION_EDGE_THRESHOLD;
+  const thresholdExceeded = isGalaxyPerformanceThresholdExceeded(nodeCount, edgeCount);
   const reducedBySystem = requestedMode === "auto" && Boolean(prefersReducedMotion);
   const reducedByThreshold = requestedMode === "auto" && thresholdExceeded;
   const effectiveMode = requestedMode === "off"
@@ -2528,7 +2536,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         context.lineTo(to.x - Math.cos(angle + 0.45) * arrowSize, to.y - Math.sin(angle + 0.45) * arrowSize);
         context.fill();
       }
-      if (highlighted) {
+      if (shouldRenderGalaxyEdgeLabel(graph.stats.nodeCount, graph.stats.edgeCount, edgeSelected, highlighted)) {
         const fullLabel = formatRelationshipLabel(edge);
         if (!highlightedKeywordSet.has(fullLabel)) {
           highlightedKeywordSet.add(fullLabel);
