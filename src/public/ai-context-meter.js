@@ -48,7 +48,8 @@ export function formatAiContextUsagePercent(occupiedTokens, contextWindow) {
   const occupied = tokenCount(occupiedTokens);
   const window = tokenCount(contextWindow);
   const percent = window > 0 ? Math.min(100, occupied / window * 100) : 0;
-  return `${percent.toFixed(1)}%`;
+  const roundedDecimal = Number(percent.toFixed(1));
+  return roundedDecimal < 10 ? `${roundedDecimal.toFixed(1)}%` : `${Math.round(percent)}%`;
 }
 
 export function normalizeAiContextTokenDistribution(usage) {

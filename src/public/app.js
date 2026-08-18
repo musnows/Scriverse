@@ -24,7 +24,7 @@ import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260812-context-usage-remaining-v2";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260819-context-percent-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
@@ -3808,8 +3808,7 @@ function renderChapterAnnotations() {
     },
     locate: (annotation) => {
       $("#chapter-annotations-dialog").close();
-      paintChapterLineSelection(annotation.startLine - 1, annotation.endLine - 1);
-      selectChapterLines(annotation.startLine - 1, annotation.endLine - 1);
+      revealChapterLines(annotation.startLine, annotation.endLine);
     },
     overlayDialog: $("#chapter-annotations-dialog")
   });
@@ -6385,7 +6384,7 @@ async function runWorkSearch() {
   renderSearchResults(results, query);
 }
 
-function revealChapterSearchLines(startLine, endLine) {
+function revealChapterLines(startLine, endLine) {
   const start = Math.max(0, Number(startLine) - 1);
   const end = Math.max(start, Number(endLine ?? startLine) - 1);
   const input = $("#chapter-content");
@@ -6440,7 +6439,7 @@ async function openSearchResult(result) {
   if (target.kind === "chapter") {
     await selectChapter(target.id);
     if (state.chapter?.id === target.id && target.startLine) {
-      revealChapterSearchLines(target.startLine, target.endLine);
+      revealChapterLines(target.startLine, target.endLine);
       toast(target.startLine === target.endLine ? `已定位到第 ${target.startLine} 行` : `已定位到第 ${target.startLine}-${target.endLine} 行`);
     }
     return;
@@ -9441,10 +9440,10 @@ async function renderWorkChapterComments(page = moduleListPages.comments) {
   bindChapterAnnotationCards($("#module-content"), result.items, {
     refresh: () => renderWorkChapterComments(pageResult.page),
     locate: async (annotation) => {
-      await selectChapter(annotation.chapterId);
+      const selected = await selectChapter(annotation.chapterId);
+      if (!selected || String(state.chapter?.id ?? "") !== String(annotation.chapterId)) return;
       await new Promise((resolve) => window.requestAnimationFrame(resolve));
-      paintChapterLineSelection(annotation.startLine - 1, annotation.endLine - 1);
-      selectChapterLines(annotation.startLine - 1, annotation.endLine - 1);
+      revealChapterLines(annotation.startLine, annotation.endLine);
     }
   });
 }
@@ -12909,8 +12908,17 @@ function updateVditorWordCount(editor, markdown) {
     counter.title = "当前 Markdown 正文的字数，不计空白字符";
     toolbar.append(counter);
   }
+  let value = counter.querySelector("[data-markdown-word-count-value]");
+  if (!value) {
+    value = document.createElement("span");
+    value.className = "markdown-word-count-value";
+    value.dataset.markdownWordCountValue = "true";
+    const unit = document.createElement("span");
+    unit.textContent = " 字";
+    counter.replaceChildren(value, unit);
+  }
   const count = Array.from(String(markdown ?? "").replace(/\s/gu, "")).length;
-  counter.textContent = `${count.toLocaleString("zh-CN")} 字`;
+  value.textContent = count.toLocaleString("zh-CN");
 }
 
 function transformVditorPreview(html) {
@@ -15013,6 +15021,22 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
   }
 }
 
+function createAiStreamCharacterCount(value) {
+  const count = document.createElement("span");
+  count.className = "ai-stream-character-count";
+  count.textContent = Math.max(0, Number(value) || 0).toLocaleString("zh-CN");
+  return count;
+}
+
+function renderAiStreamingCharacterProgress(meta, visibleCharacters, receivedCharacters) {
+  const visible = Math.max(0, Number(visibleCharacters) || 0);
+  const received = Math.max(visible, Number(receivedCharacters) || 0);
+  const children = ["正在生成 · ", createAiStreamCharacterCount(visible)];
+  if (received > visible) children.push(" / ", createAiStreamCharacterCount(received));
+  children.push(" 字");
+  meta.replaceChildren(...children);
+}
+
 async function streamChat(requestHolder, body, idempotencyKey) {
   const tab = aiChatTabForRequest(requestHolder.snapshot);
   if (!tab) throw createAiRequestAbortError("Agent 对话页签已关闭");
@@ -15040,9 +15064,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
       if (!aiRequestTargetsCurrentState(requestHolder.snapshot) || !mountAssistantMessage()) return;
       content.innerHTML = renderMarkdown(text);
       const receivedCharacters = progress.visibleCharacters + progress.pendingCharacters;
-      meta.textContent = progress.pendingCharacters > 0
-        ? `正在生成 · ${progress.visibleCharacters} / ${receivedCharacters} 字`
-        : `正在生成 · ${progress.visibleCharacters} 字`;
+      renderAiStreamingCharacterProgress(meta, progress.visibleCharacters, receivedCharacters);
       scrollAiFeedToBottom(feed);
     }
   });

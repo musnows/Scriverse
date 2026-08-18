@@ -1415,7 +1415,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-line-number { position: absolute; left: 0; box-sizing: border-box; display: flex; width: 100%; align-items: flex-start; justify-content: center; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-variant-numeric: tabular-nums; text-align: center; }
 .chapter-line-number-select { position: relative; display: flex; width: 100%; height: 100%; align-items: flex-start; justify-content: center; padding-inline: 3px; border: 0; background: transparent; color: inherit; font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; }
 .chapter-line-number-select:focus-visible { z-index: 1; outline: 1px solid var(--accent); outline-offset: -1px; }
-.chapter-line-annotation-count { position: absolute; top: -2px; right: 0; z-index: 2; display: grid; min-width: 14px; height: 14px; place-items: center; padding: 0 3px; border: 1px solid var(--panel); border-radius: 999px; background: var(--accent); color: var(--paper); font-family: var(--font-latin), monospace; font-size: 9px; font-weight: 700; line-height: 1; cursor: pointer; box-shadow: 0 1px 3px rgba(49,42,32,.16); }
+.chapter-line-annotation-count { position: absolute; top: -4px; right: -10px; z-index: 2; display: grid; min-width: 14px; height: 14px; place-items: center; padding: 0 3px; border: 1px solid var(--panel); border-radius: 999px; background: var(--accent); color: var(--paper); font-family: var(--font-latin), monospace; font-size: 9px; font-weight: 700; line-height: 1; cursor: pointer; box-shadow: 0 1px 3px rgba(49,42,32,.16); }
 .chapter-line-annotation-count:hover, .chapter-line-annotation-count:focus-visible { background: var(--accent-dark); }
 .chapter-line-annotation-count:focus-visible { outline: 1px solid var(--accent-dark); outline-offset: 1px; }
 .chapter-line-number:hover { background: rgba(139,61,44,.08); color: var(--accent-dark); }
@@ -2655,6 +2655,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body .markdown-image img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
 .message-body .markdown-image small { color: var(--muted); font-size: 9px; line-height: 1.45; text-align: center; }
 .message-meta { margin-top: 8px; color: var(--muted); font-size: 9px; }
+.message-meta .ai-stream-character-count { display: inline-block; min-width: 6ch; font-variant-numeric: tabular-nums; text-align: right; }
 .ai-process-details { margin: 0 0 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--surface-soft) 82%, transparent); }
 .ai-process-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 8px 10px; color: var(--muted); cursor: pointer; font-size: 10px; list-style: none; }
 .ai-process-details > summary::-webkit-details-marker { display: none; }
@@ -3321,6 +3322,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .vditor-editor-host.vditor--dark { --border-color: var(--line); --panel-background-color: var(--surface); --toolbar-background-color: var(--surface-soft); --toolbar-icon-color: var(--muted); --toolbar-icon-hover-color: var(--accent); --textarea-background-color: var(--surface); --textarea-text-color: var(--ink); --heading-border-color: var(--line); --blockquote-color: var(--muted); }
 .vditor-editor-host .vditor-toolbar { display: flex; align-items: center; flex: 0 0 auto; }
 .vditor-editor-host .markdown-word-count { display: inline-flex; align-items: center; align-self: center; min-height: 28px; margin-left: 24px; padding: 0 10px; color: var(--muted); font: 10px/1 var(--font-latin), var(--font-cjk), sans-serif; white-space: nowrap; }
+.vditor-editor-host .markdown-word-count-value { display: inline-block; min-width: 6ch; font-variant-numeric: tabular-nums; text-align: right; }
 .vditor-editor-host .vditor-content { position: relative; }
 .vditor-editor-host .vditor-line-numbers { display: none; position: absolute; z-index: 1; inset: 0 auto 0 0; width: 42px; padding: 0; overflow: hidden; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 88%, transparent); color: var(--muted); font: 12px/1.75 var(--font-latin), monospace; text-align: center; user-select: none; pointer-events: none; will-change: transform; }
 .vditor-editor-host.vditor.show-line-numbers .vditor-line-numbers { display: block; }
