@@ -2711,6 +2711,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .prompt-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
 .prompt-options select { padding: 6px; color: var(--muted); font-size: 10px; }
 .prompt-options .ai-roleplay-character { min-width: 0; }
+.prompt-options .ai-roleplay-user-character { grid-column: 1 / -1; }
 .ai-panel.is-roleplaying .ai-roleplay-character { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-dark); }
 .prompt-model-field { margin: 0 0 7px; }
 .prompt-model-field select { padding: 6px; color: var(--muted); font-size: 10px; }

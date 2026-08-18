@@ -614,6 +614,7 @@ export function defaultAiConversationTitle(prompt: string): string {
 export type AiConversationContext = {
   workId: string;
   roleplayCharacterId: string | null;
+  roleplayUserCharacterId: string | null;
   summary: string;
   compactedMessageCount: number;
   totalMessageCount: number;
@@ -7933,6 +7934,7 @@ export class Store {
     return {
       workId,
       roleplayCharacterId: optionalString(conversation, "roleplay_character_id"),
+      roleplayUserCharacterId: optionalString(conversation, "roleplay_user_character_id"),
       summary: requiredString(conversation, "compacted_summary"),
       compactedMessageCount,
       totalMessageCount,
@@ -8098,12 +8100,30 @@ export class Store {
     });
   }
 
-  setAiConversationRoleplayCharacter(conversationId: string, characterId: string | null): Record<string, unknown> {
+  setAiConversationRoleplayCharacter(
+    conversationId: string,
+    characterId: string | null,
+    userCharacterId?: string | null
+  ): Record<string, unknown> {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     const workId = requiredString(conversation, "work_id");
     const previousCharacterId = optionalString(conversation, "roleplay_character_id");
-    if (previousCharacterId === characterId) return this.getAiConversationSummary(conversationId);
+    const previousUserCharacterId = optionalString(conversation, "roleplay_user_character_id");
+    if (!characterId && userCharacterId) {
+      throw new AppError(400, "ROLEPLAY_USER_CHARACTER_REQUIRES_AI", "请先选择 AI 扮演的角色");
+    }
+    const nextUserCharacterId = !characterId
+      ? null
+      : userCharacterId === undefined
+        ? previousCharacterId === characterId ? previousUserCharacterId : null
+        : userCharacterId;
+    if (characterId && characterId === nextUserCharacterId) {
+      throw new AppError(400, "ROLEPLAY_CHARACTER_SAME_AS_USER", "AI 扮演角色与用户扮演角色不能相同");
+    }
+    if (previousCharacterId === characterId && previousUserCharacterId === nextUserCharacterId) {
+      return this.getAiConversationSummary(conversationId);
+    }
     const messageCount = Number(this.db.get(
       "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
       conversationId
@@ -8124,17 +8144,29 @@ export class Store {
         throw new AppError(409, "ROLEPLAY_CHARACTER_MERGED", "已合并角色不能用于角色扮演");
       }
     }
+    if (nextUserCharacterId) {
+      const userCharacter = this.getCharacter(nextUserCharacterId);
+      if (String(userCharacter.workId) !== workId) {
+        throw new AppError(400, "ROLEPLAY_USER_CHARACTER_WORK_MISMATCH", "用户扮演的角色不属于当前作品");
+      }
+      if (userCharacter.mergedIntoCharacterId) {
+        throw new AppError(409, "ROLEPLAY_USER_CHARACTER_MERGED", "已合并角色不能用于关系扮演");
+      }
+    }
     this.db.transaction(() => {
       this.db.run(
-        "UPDATE ai_conversations SET roleplay_character_id = ?, task_type = CASE WHEN ? IS NOT NULL THEN 'roleplay' ELSE task_type END, updated_at = ? WHERE id = ?",
+        "UPDATE ai_conversations SET roleplay_character_id = ?, roleplay_user_character_id = ?, task_type = CASE WHEN ? IS NOT NULL THEN 'roleplay' ELSE task_type END, updated_at = ? WHERE id = ?",
         characterId,
+        nextUserCharacterId,
         characterId,
         now(),
         conversationId
       );
       this.audit(workId, "ai-conversation.roleplay-updated", "ai-conversation", conversationId, {
         previousCharacterId,
-        characterId
+        characterId,
+        previousUserCharacterId,
+        userCharacterId: nextUserCharacterId
       });
     });
     return this.getAiConversationSummary(conversationId);
@@ -8156,7 +8188,8 @@ export class Store {
     }
     this.db.transaction(() => {
       this.db.run(
-        "UPDATE ai_conversations SET task_type = ?, roleplay_character_id = CASE WHEN ? = 'roleplay' THEN roleplay_character_id ELSE NULL END, updated_at = ? WHERE id = ?",
+        "UPDATE ai_conversations SET task_type = ?, roleplay_character_id = CASE WHEN ? = 'roleplay' THEN roleplay_character_id ELSE NULL END, roleplay_user_character_id = CASE WHEN ? = 'roleplay' THEN roleplay_user_character_id ELSE NULL END, updated_at = ? WHERE id = ?",
+        taskType,
         taskType,
         taskType,
         now(),
@@ -8566,10 +8599,11 @@ export class Store {
     const systemClockText = optionalString(conversation, "system_clock_text") ?? "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, roleplay_user_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         workId,
         optionalString(conversation, "roleplay_character_id"),
+        optionalString(conversation, "roleplay_user_character_id"),
         optionalString(conversation, "task_type"),
         optionalString(conversation, "context_scope_json"),
         title.slice(0, 200),
@@ -8651,6 +8685,7 @@ export class Store {
 
   private mapAiConversation(row: Row): Record<string, unknown> {
     const roleplayCharacterId = optionalString(row, "roleplay_character_id");
+    const roleplayUserCharacterId = optionalString(row, "roleplay_user_character_id");
     const firstUserMessage = this.db.get(
       `SELECT metadata_json FROM ai_conversation_messages
        WHERE conversation_id = ? AND role = 'user'
@@ -8666,6 +8701,9 @@ export class Store {
       : null;
     const roleplayCharacter = roleplayCharacterId
       ? this.db.get("SELECT id, name, code FROM characters WHERE id = ? AND work_id = ?", roleplayCharacterId, requiredString(row, "work_id"))
+      : undefined;
+    const roleplayUserCharacter = roleplayCharacterId && roleplayUserCharacterId
+      ? this.db.get("SELECT id, name, code FROM characters WHERE id = ? AND work_id = ?", roleplayUserCharacterId, requiredString(row, "work_id"))
       : undefined;
     return {
       id: requiredString(row, "id"),
@@ -8684,6 +8722,11 @@ export class Store {
         id: requiredString(roleplayCharacter, "id"),
         name: requiredString(roleplayCharacter, "name"),
         code: requiredString(roleplayCharacter, "code")
+      } : null,
+      roleplayUserCharacter: roleplayUserCharacter ? {
+        id: requiredString(roleplayUserCharacter, "id"),
+        name: requiredString(roleplayUserCharacter, "name"),
+        code: requiredString(roleplayUserCharacter, "code")
       } : null,
       agentTools: row.agent_tools_json == null || row.agent_tools_json === undefined
         ? null

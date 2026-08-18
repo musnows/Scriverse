@@ -1654,7 +1654,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(generationToolSnapshots[0]).toContain("story_index");
   });
 
-  it("角色扮演对话只提供自身回忆工具并持久化角色卡", async () => {
+  it("角色扮演对话可将用户视为指定角色，并只提供自身回忆工具", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     const role = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
@@ -1707,6 +1707,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(200);
     expect(roleplay.body.data.taskType).toBe("roleplay");
     expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(roleplay.body.data.roleplayUserCharacter).toBeNull();
     expect(roleplay.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
     const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
     const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
@@ -1714,6 +1715,22 @@ describe("AI 供应商、模型与建议 API", () => {
       characterId: foreignCharacter.body.data.id
     }).expect(400);
     expect(mismatch.body.error.code).toBe("ROLEPLAY_CHARACTER_WORK_MISMATCH");
+    const userMismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: role.body.data.id,
+      userCharacterId: foreignCharacter.body.data.id
+    }).expect(400);
+    expect(userMismatch.body.error.code).toBe("ROLEPLAY_USER_CHARACTER_WORK_MISMATCH");
+    const sameCharacter = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: role.body.data.id,
+      userCharacterId: role.body.data.id
+    }).expect(400);
+    expect(sameCharacter.body.error.code).toBe("ROLEPLAY_CHARACTER_SAME_AS_USER");
+    const relationshipRoleplay = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: role.body.data.id,
+      userCharacterId: otherRole.body.data.id
+    }).expect(200);
+    expect(relationshipRoleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(relationshipRoleplay.body.data.roleplayUserCharacter).toMatchObject({ id: otherRole.body.data.id, name: "顾潮" });
     await request(runtime.app).patch("/api/platform/ai/settings").send({
       systemPrompt: "平台创作助手提示不得进入角色扮演。"
     }).expect(200);
@@ -1735,9 +1752,13 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).toContain("<roleplay_main_prompt>");
       expect(systemPrompt).toContain("你是沉浸式角色扮演引擎");
       expect(systemPrompt).toContain("<character_card>");
+      expect(systemPrompt).toContain("<user_character_card>");
       expect(systemPrompt).toContain('"name":"林舟"');
       expect(systemPrompt).toContain('"gender":"male"');
       expect(systemPrompt).toContain('"isDead":false');
+      expect(systemPrompt).toContain('"name":"顾潮"');
+      expect(systemPrompt).toContain("将每一条 <user_message> 都视为该角色");
+      expect(systemPrompt).not.toContain("这段其他角色的私密档案不得被读取");
       expect(systemPrompt).not.toContain("小说作者的创作协作助手");
       expect(systemPrompt).not.toContain("平台创作助手提示不得进入角色扮演");
       expect(systemPrompt).not.toContain("作品创作助手提示不得进入角色扮演");
@@ -1829,13 +1850,20 @@ describe("AI 供应商、模型与建议 API", () => {
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
     expect(reloaded.body.data.taskType).toBe("roleplay");
     expect(reloaded.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(reloaded.body.data.roleplayUserCharacter).toMatchObject({ id: otherRole.body.data.id, name: "顾潮" });
     expect(reloaded.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
     const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
       messageId: reloaded.body.data.messages.at(-1).id
     }).expect(201);
     expect(forked.body.data.taskType).toBe("roleplay");
     expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(forked.body.data.roleplayUserCharacter).toMatchObject({ id: otherRole.body.data.id, name: "顾潮" });
     expect(forked.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
+    const lockedUserRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: role.body.data.id,
+      userCharacterId: thirdRole.body.data.id
+    }).expect(409);
+    expect(lockedUserRole.body.error.code).toBe("ROLEPLAY_CHARACTER_LOCKED");
     const lockedRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
       characterId: otherRole.body.data.id
     }).expect(409);

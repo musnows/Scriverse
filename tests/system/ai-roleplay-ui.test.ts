@@ -13,10 +13,18 @@ describe("AI 角色扮演界面", () => {
 
     expect(page).toContain('<option value="roleplay">角色扮演</option>');
     expect(page).toContain('id="ai-roleplay-character" class="ai-roleplay-character hidden"');
+    expect(page).toContain('id="ai-roleplay-user-character" class="ai-roleplay-character ai-roleplay-user-character hidden"');
     expect(page).toContain("选择角色卡");
+    expect(page).toContain("选择我的角色（可选）");
+    expect(page).toContain("feature=ai-relationship-roleplay-v1");
     expect(application).toContain('name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`');
     expect(application).toContain("与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……");
+    expect(application).toContain("以 ${String(state.aiRoleplayUserCharacter.name)} 的身份与 ${String(state.aiRoleplayCharacter.name)} 对话……");
     expect(application).toContain("/roleplay`");
+    expect(application).toContain("function renderAiRoleplayUserCharacterSelect()");
+    expect(application).toContain('body: { characterId: characterId || null, userCharacterId: userCharacterId || null }');
+    expect(application).toContain('tab.roleplayUserCharacter = conversation.roleplayUserCharacter ?? null;');
+    expect(application).toContain('return roleplayUserCharacter?.name || "作者";');
     expect(application).toContain("会话选项在会话开始后不支持修改，若需要修改，请新建会话");
     expect(application).toContain('$("#ai-task").disabled = interactionBusy;');
     expect(application).toContain('$("#ai-scope").disabled = interactionBusy || roleplaySelected;');
@@ -26,6 +34,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("if (state.aiPromptSent) {");
     expect(application).toContain("return toast(aiConversationOptionLockedMessage);");
     expect(application).toContain("角色扮演模式只使用角色自身的记忆");
+    expect(application).toContain("AI 会将每条用户消息视为该角色的发言或行动");
     expect(application).toContain("/task-type`");
     expect(application).toContain("/context-scope`");
     expect(application).toContain("if (state.aiPromptSent) {");
@@ -38,6 +47,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("function syncAiTaskOptions()");
     expect(application).toContain('const taskType = roleplaySelected ? "chat" : selectedTaskType;');
     expect(styles).toContain(".prompt-options .ai-roleplay-character { min-width: 0; }");
+    expect(styles).toContain(".prompt-options .ai-roleplay-user-character { grid-column: 1 / -1; }");
     expect(styles).toContain(".ai-panel.is-roleplaying .ai-roleplay-character");
   });
 });
