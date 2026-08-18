@@ -2301,22 +2301,15 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(generated.content).toBe("首个增量");
   });
 
-  it("首轮对话默认使用提示词前十五字并可由独立模型生成标题", async () => {
+  it("第二轮助手回复后保留首个提示词截断标题，并由独立模型生成标题", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     const settingsBefore = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
     expect(settingsBefore.body.data.titleGenerationModelId).toBeNull();
 
-    const defaultConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
-    await request(runtime.app).post(`/api/ai-conversations/${defaultConversation.body.data.id}/messages`).send({
-      role: "user",
-      content: "一二三四五六七八九十一二三四五六七八九十"
-    }).expect(201);
-    const defaultReloaded = await request(runtime.app).get(`/api/ai-conversations/${defaultConversation.body.data.id}`).expect(200);
-    expect(defaultReloaded.body.data.title).toBe("一二三四五六七八九十一二三四五");
-
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
     const completionBodies: Array<{ stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> }> = [];
+    let chatRequestCount = 0;
     let titleRequestStarted = false;
     let releaseTitleRequest: (() => void) | null = null;
     fetchMock.mockImplementation(async (input, init) => {
@@ -2324,24 +2317,42 @@ describe("AI 供应商、模型与建议 API", () => {
       const body = JSON.parse(String(init?.body)) as { stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> };
       completionBodies.push(body);
       if (body.stream) {
-        return new Response("data: {\"choices\":[{\"delta\":{\"content\":\"助手回答\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", {
+        chatRequestCount += 1;
+        const content = chatRequestCount === 1 ? "首轮助手回答" : "第二轮助手回答";
+        return new Response(`data: {"choices":[{"delta":{"content":"${content}"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`, {
           status: 200,
           headers: { "Content-Type": "text/event-stream" }
         });
       }
       expect(body.tools).toBeUndefined();
+      expect(body.messages?.some((message) => message.content?.includes("你好"))).toBe(true);
       expect(body.messages?.some((message) => message.content?.includes("请规划北港跃迁路线"))).toBe(true);
-      expect(body.messages?.some((message) => message.content?.includes("助手回答"))).toBe(true);
+      expect(body.messages?.some((message) => message.content?.includes("第二轮助手回答"))).toBe(true);
       titleRequestStarted = true;
       return new Promise<Response>((resolve) => {
         releaseTitleRequest = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 }));
       });
     });
 
+    const firstStream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "你好",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const firstComplete = JSON.parse(firstStream.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId?: string };
+    const conversationId = String(firstComplete.conversationId ?? "");
+    expect(conversationId).not.toBe("");
+    expect(titleRequestStarted).toBe(false);
+    expect(completionBodies).toHaveLength(1);
+    let reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data.title).toBe("你好");
+    expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
+
     const streamPromise = request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
       instruction: "请规划北港跃迁路线",
       scope: { type: "chapter", chapterId },
-      modelId
+      modelId,
+      conversationId
     }).expect(200).expect("Content-Type", /text\/event-stream/u).then((response) => response);
     for (let index = 0; index < 50 && !titleRequestStarted; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
     expect(titleRequestStarted).toBe(true);
@@ -2353,15 +2364,14 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: context");
     expect(streamed.text).toContain("event: user_message");
     expect(streamed.text).not.toContain('"conversationTitle":"北港跃迁路线"');
-    expect(completionBodies).toHaveLength(2);
-    const completePayload = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId?: string };
-    let reloaded = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
+    expect(completionBodies).toHaveLength(3);
+    reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
     for (let index = 0; index < 50 && reloaded.body.data.title !== "北港跃迁路线"; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2));
-      reloaded = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
+      reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
     }
     expect(reloaded.body.data.title).toBe("北港跃迁路线");
-    expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
+    expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
     const settingsAfter = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
@@ -2551,7 +2561,7 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
-  it("首轮标题生成失败时不影响主回答", async () => {
+  it("第二轮助手回复后的标题生成失败时不影响主回答", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
@@ -2569,10 +2579,21 @@ describe("AI 供应商、模型与建议 API", () => {
       return new Response(JSON.stringify({ error: { message: "标题模型不可用" } }), { status: 400 });
     });
 
-    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+    const firstStream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
       instruction: "标题生成失败时仍保留默认",
       scope: { type: "none" },
       modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const firstComplete = JSON.parse(firstStream.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId?: string };
+    const conversationId = String(firstComplete.conversationId ?? "");
+    expect(conversationId).not.toBe("");
+    expect(titleRequestCount).toBe(0);
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请继续说明",
+      scope: { type: "none" },
+      modelId,
+      conversationId
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
 
     for (let index = 0; index < 50 && titleRequestCount < 1; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
@@ -2580,6 +2601,8 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: complete");
     expect(streamed.text).not.toContain("event: error");
     expect(titleRequestCount).toBe(4);
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data.title).toBe("标题生成失败时仍保留默认");
   });
 
   it("侧栏问答失败时通过 SSE 返回受控错误信息", async () => {
