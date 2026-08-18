@@ -17,8 +17,10 @@ describe("交互式 AI 流事件空闲超时", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
   let workId: string;
   let modelId: string;
+  let retryDelays: number[];
 
   beforeEach(async () => {
+    retryDelays = [];
     fetchMock = vi.fn<typeof fetch>(async (input) => {
       if (String(input).endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "stream-model" }] }), {
@@ -37,7 +39,8 @@ describe("交互式 AI 流事件空闲超时", () => {
       disableUserAuth: true,
       fetchImpl: fetchMock,
       serveUi: false,
-      aiStreamIdleTimeoutMs: 30_000
+      aiStreamIdleTimeoutMs: 30_000,
+      aiRetrySleep: async (delayMs) => { retryDelays.push(delayMs); }
     });
     const work = await request(runtime.app).post("/api/works").send({ title: "流超时测试" }).expect(201);
     workId = work.body.data.id;
@@ -240,6 +243,37 @@ describe("交互式 AI 流事件空闲超时", () => {
       code: "AI_STREAM_NETWORK_ERROR"
     });
     expect(networkDeltas.join("")).toBe("网络错误前内容");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(retryDelays).toEqual([]);
+  });
+
+  it("首个流事件前的网络连接失败复用 502 重试链路", async () => {
+    const encoder = new TextEncoder();
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new TypeError("connection reset"));
+      }
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(openAiDelta("重连成功", "stop")));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    const deltas: string[] = [];
+
+    await expect(runtime.ai.createStreamingChat({
+      workId,
+      instruction: "流连接失败后重试",
+      scope: { type: "none" },
+      modelId,
+      maxAttempts: 1
+    }, (delta) => deltas.push(delta))).resolves.toMatchObject({ content: "重连成功" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(retryDelays).toEqual([500]);
+    expect(deltas.join("")).toBe("重连成功");
   });
 
   it("请求方取消时停止等待且不改写为超时", async () => {

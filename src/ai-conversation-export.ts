@@ -58,7 +58,9 @@ export function exportAiConversationMarkdown(conversation: unknown): string {
   const record = recordValue(conversation) ?? {};
   const title = stringValue(record.title, "AI 对话");
   const roleplayCharacter = recordValue(record.roleplayCharacter);
+  const roleplayUserCharacter = recordValue(record.roleplayUserCharacter);
   const assistantLabel = stringValue(roleplayCharacter?.name, "助手") || "助手";
+  const userLabel = stringValue(roleplayUserCharacter?.name, "作者") || "作者";
   const messages = Array.isArray(record.messages)
     ? record.messages.map(recordValue).filter((message): message is ExportRecord => message !== null)
     : [];
@@ -74,7 +76,7 @@ export function exportAiConversationMarkdown(conversation: unknown): string {
     return `${sections.join("\n")}\n`;
   }
   for (const message of messages) {
-    const role = message.role === "user" ? "作者" : assistantLabel;
+    const role = message.role === "user" ? userLabel : assistantLabel;
     const content = stringValue(message.content);
     sections.push(
       "",

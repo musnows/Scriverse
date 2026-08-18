@@ -51,4 +51,15 @@ describe("AI 对话 Markdown 导出", () => {
     expect(disposition).not.toMatch(/[\r\n]/u);
     expect(disposition).not.toContain("../");
   });
+
+  it("关系扮演导出时使用双方角色名标记消息", () => {
+    const markdown = exportAiConversationMarkdown({
+      ...conversation,
+      roleplayCharacter: { id: "character-ai", name: "林舟" },
+      roleplayUserCharacter: { id: "character-user", name: "顾潮" }
+    });
+
+    expect(markdown).toContain("## 顾潮 · 2026-08-12T01:03:00.000Z");
+    expect(markdown).toContain("## 林舟 · 2026-08-12T01:04:00.000Z");
+  });
 });
