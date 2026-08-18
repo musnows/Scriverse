@@ -92,7 +92,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; }");
     expect(styles.text).toContain("@container editor-workspace (max-width: 720px)");
     expect(styles.text).toContain(".chapter-stats { display: none; }");
-    expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
+    expect(styles.text).toContain(".editor-body { display: flex; grid-row: 3; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
     expect(application.text).toContain("function renderChapterLineNumbers({ targetLineIndex = null } = {})");
     expect(application.text).toContain("syncChapterLineNumberScroll");
@@ -126,6 +126,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('addEventListener("pointermove"');
     expect(styles.text).toContain(".chapter-line-number.is-line-selected");
     expect(styles.text).toContain(".chapter-line-number.is-line-selected::after");
+    expect(styles.text).toContain(".app-shell:not(.shelf-mode):not(.ai-workspace-mode) { grid-template-columns: minmax(0, 1fr); }");
     expect(styles.text).toContain(".chapter-space-marker::after");
     expect(styles.text).toContain(".chapter-space-marker.tab::after");
     expect(styles.text).toContain("width: 100vw; height: 100%");
@@ -639,7 +640,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-permission-preset="read"');
     expect(application.text).toContain('data-member-permission=');
     expect(application.text).toContain('body: existing ? { permissions } : { userId, permissions }');
-    expect(application.text).toContain('/work-permissions.js?v=20260731-drafts-to-ideas-v1');
+    expect(application.text).toContain('/work-permissions.js?v=20260818-annotation-permissions-v1');
     expect(workPermissions.text).toContain('label: "AI 对话"');
     expect(workPermissions.text).toContain('label: "AI 分析"');
     expect(workPermissions.text).toContain('id: "ai-chat"');

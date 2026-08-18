@@ -1,5 +1,7 @@
 export const WORK_PERMISSION_MODULES = Object.freeze([
   { id: "prose", uiModule: "editor", label: "正文" },
+  { id: "comments", uiModule: "comments", label: "正文评论" },
+  { id: "todos", uiModule: null, label: "正文待办" },
   { id: "drafts", uiModule: "drafts", label: "想法" },
   { id: "settings", uiModule: "settings", label: "设定库" },
   { id: "characters", uiModule: "characters", label: "角色" },
@@ -22,6 +24,8 @@ const validAccess = new Set(["none", "read", "write"]);
 function migrateLegacyModulePermissions(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const migrated = { ...value };
+  if (!validAccess.has(migrated.comments)) migrated.comments = validAccess.has(migrated.prose) ? migrated.prose : "none";
+  if (!validAccess.has(migrated.todos)) migrated.todos = validAccess.has(migrated.prose) ? migrated.prose : "none";
   if (!validAccess.has(migrated.drafts)) {
     const prose = validAccess.has(migrated.prose) ? migrated.prose : "none";
     const settings = validAccess.has(migrated.settings) ? migrated.settings : "none";
@@ -83,10 +87,16 @@ export function canWritePermissionModule(work, moduleId) {
 }
 
 export function canReadUiModule(work, uiModule) {
+  if (uiModule === "comments") {
+    return canReadPermissionModule(work, "comments") || canReadPermissionModule(work, "todos");
+  }
   return canReadPermissionModule(work, permissionModuleForUiModule(uiModule));
 }
 
 export function canWriteUiModule(work, uiModule) {
+  if (uiModule === "comments") {
+    return canWritePermissionModule(work, "comments") || canWritePermissionModule(work, "todos");
+  }
   return canWritePermissionModule(work, permissionModuleForUiModule(uiModule));
 }
 
@@ -96,10 +106,12 @@ export function firstReadableUiModule(work) {
 
 export function permissionSummary(value) {
   const permissions = normalizeModulePermissions(value, "custom");
-  const writable = WORK_PERMISSION_MODULES.filter((item) => permissions[item.id] === "write").map((item) => item.label);
+  const addable = WORK_PERMISSION_MODULES.filter((item) => ["comments", "todos"].includes(item.id) && permissions[item.id] === "write").map((item) => item.label);
+  const writable = WORK_PERMISSION_MODULES.filter((item) => !["comments", "todos"].includes(item.id) && permissions[item.id] === "write").map((item) => item.label);
   const readable = WORK_PERMISSION_MODULES.filter((item) => permissions[item.id] === "read").map((item) => item.label);
   const parts = [];
   if (writable.length) parts.push(`可编辑：${writable.join("、")}`);
+  if (addable.length) parts.push(`可添加：${addable.join("、")}`);
   if (readable.length) parts.push(`只读：${readable.join("、")}`);
   if (!parts.length) parts.push("未授权任何模块");
   return parts.join("；");

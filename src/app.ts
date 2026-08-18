@@ -48,7 +48,7 @@ import { S3BackupManager, type S3BackupManagerOptions } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
 import { ReleaseUpdateChecker } from "./release-update.js";
 import { DEFAULT_IMAGE_UPLOAD_LIMITS, formatUploadLimit, type ImageUploadLimits } from "./upload-limits.js";
-import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
+import { canReadWorkModule, canWriteWorkModule, chapterAnnotationPermissionModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
   editorPageKey,
@@ -69,6 +69,12 @@ import {
   UserAuthService,
   type AuthUser
 } from "./user-auth.js";
+
+const chapterAnnotationKinds = ["note", "todo"] as const;
+
+function readableChapterAnnotationKinds(permissions: WorkModulePermissions): Array<typeof chapterAnnotationKinds[number]> {
+  return chapterAnnotationKinds.filter((kind) => canReadWorkModule(permissions, chapterAnnotationPermissionModule(kind)));
+}
 
 const nonEmpty = z.string().trim().min(1);
 const identifier = z.string().trim().min(1).max(200);
@@ -137,6 +143,8 @@ const memberRoleValueSchema = z.enum(["editor", "settings-editor", "viewer"]);
 const moduleAccessSchema = z.enum(["none", "read", "write"]);
 const modulePermissionsSchema = z.object({
   prose: moduleAccessSchema,
+  comments: moduleAccessSchema.optional(),
+  todos: moduleAccessSchema.optional(),
   drafts: moduleAccessSchema.optional(),
   settings: moduleAccessSchema,
   characters: moduleAccessSchema,
@@ -151,6 +159,8 @@ const modulePermissionsSchema = z.object({
   "ai-settings": moduleAccessSchema
 }).strict().transform((permissions) => ({
   ...permissions,
+  comments: permissions.comments ?? permissions.prose,
+  todos: permissions.todos ?? permissions.prose,
   drafts: permissions.drafts ?? (
     permissions.prose === "write" && permissions.settings === "write"
       ? "write"
@@ -1788,12 +1798,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listChapterInsightsPage(request.params.chapterId, pagination) : store.listChapterInsights(request.params.chapterId));
   });
-  app.get("/api/chapters/:chapterId/annotations", (request, response) => data(response, store.listChapterAnnotations(request.params.chapterId)));
+  app.get("/api/chapters/:chapterId/annotation-counts", (request, response) => {
+    const permissions = requestPermissions(request);
+    data(response, store.listChapterAnnotationCounts(request.params.chapterId, readableChapterAnnotationKinds(permissions)));
+  });
+  app.get("/api/chapters/:chapterId/annotations", (request, response) => {
+    const line = request.query.line === undefined
+      ? undefined
+      : parse(z.coerce.number().int().positive().max(100_000), request.query.line);
+    const permissions = requestPermissions(request);
+    data(response, store.listChapterAnnotations(request.params.chapterId, readableChapterAnnotationKinds(permissions), line));
+  });
   app.get("/api/works/:workId/chapter-annotations", (request, response) => {
     const pagination = parsePagination(request.query);
+    const permissions = requestPermissions(request, request.params.workId);
     data(response, pagination
-      ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination)
-      : store.listWorkChapterAnnotations(request.params.workId));
+      ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination, readableChapterAnnotationKinds(permissions))
+      : store.listWorkChapterAnnotations(request.params.workId, readableChapterAnnotationKinds(permissions)));
   });
   app.post("/api/chapters/:chapterId/annotations", (request, response) => {
     const input = parse(z.object({

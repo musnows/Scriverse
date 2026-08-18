@@ -73,7 +73,7 @@ import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelatio
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260818-annotation-permissions-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
@@ -230,6 +230,8 @@ let systemBootCheckTimer = null;
 let systemBootCheckPromise = null;
 let systemRestartDetected = false;
 let chapterAnnotations = [];
+let chapterAnnotationCounts = new Map();
+let chapterAnnotationsLineIndex = null;
 let workAuditRecords = [];
 let workAuditNextPage = null;
 const chapterBatchSelectedIds = new Set();
@@ -374,6 +376,13 @@ function canEditWork(work = state.work) {
 
 function canEditProse(work = state.work) {
   return canWriteUiModule(work, "editor");
+}
+
+function canManageChapterAnnotation(annotation, work = state.work) {
+  if (!work) return false;
+  if (annotation.kind !== "todo") return canEditProse(work);
+  if (["admin", "owner"].includes(String(work.accessRole))) return true;
+  return annotation.createdByUserId === state.user?.userId && canWritePermissionModule(work, "todos");
 }
 
 function canReplaceProse(work = state.work) {
@@ -1501,7 +1510,7 @@ function applyChapterEditorMode() {
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
   $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
-  $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
+  $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter || !canReadModule("comments"));
   $("#chapter-reader-button").classList.toggle("hidden", !state.chapter || !canReadModule("editor"));
   syncChapterSearchControls();
   if (viewOnly) cancelChapterAutoSave();
@@ -1793,22 +1802,36 @@ function renderChapterLineNumbers({ targetLineIndex = null } = {}) {
   );
   const numbers = document.createDocumentFragment();
   for (let index = lineWindow.start; index < lineWindow.end; index += 1) {
-    const number = document.createElement("button");
-    number.type = "button";
+    const number = document.createElement("div");
     number.className = "chapter-line-number";
-    number.textContent = String(index + 1);
     number.dataset.lineIndex = String(index);
-    number.setAttribute("aria-label", `选择第 ${index + 1} 行`);
-    number.tabIndex = -1;
+    const lineSelect = document.createElement("button");
+    lineSelect.type = "button";
+    lineSelect.className = "chapter-line-number-select";
+    lineSelect.textContent = String(index + 1);
+    lineSelect.setAttribute("aria-label", `选择第 ${index + 1} 行`);
+    lineSelect.tabIndex = -1;
+    number.append(lineSelect);
+    const annotationCount = chapterAnnotationCounts.get(index + 1) ?? 0;
+    if (annotationCount > 0) {
+      const bubble = document.createElement("button");
+      bubble.type = "button";
+      bubble.className = "chapter-line-annotation-count";
+      bubble.dataset.lineIndex = String(index);
+      bubble.dataset.lineAnnotationCount = String(annotationCount);
+      bubble.textContent = String(annotationCount);
+      bubble.setAttribute("aria-label", `查看第 ${index + 1} 行的 ${annotationCount} 条评论和待办`);
+      number.append(bubble);
+    }
     const selected = chapterLineSelection && index >= chapterLineSelection.start && index <= chapterLineSelection.end;
     if (selected) {
       number.classList.add("is-line-selected");
-      number.setAttribute("aria-pressed", "true");
+      lineSelect.setAttribute("aria-pressed", "true");
     }
     const bounds = getLineBounds(index);
     number.style.top = `${bounds.top}px`;
     number.style.height = `${bounds.bottom - bounds.top}px`;
-    number.style.paddingTop = `${numberTextOffset}px`;
+    lineSelect.style.paddingTop = `${numberTextOffset}px`;
     numbers.append(number);
   }
   inner.replaceChildren(numbers);
@@ -1884,7 +1907,7 @@ function paintChapterLineSelection(anchor, focus) {
   $("#chapter-line-numbers-inner").querySelectorAll(".chapter-line-number").forEach((row) => {
     const selected = Number(row.dataset.lineIndex) >= start && Number(row.dataset.lineIndex) <= end;
     row.classList.toggle("is-line-selected", selected);
-    row.setAttribute("aria-pressed", String(selected));
+    row.querySelector(".chapter-line-number-select")?.setAttribute("aria-pressed", String(selected));
   });
 }
 
@@ -3589,7 +3612,8 @@ function addSelectedLinesAsCitation() {
 }
 
 async function createSelectedLineAnnotation(kind) {
-  if (!state.chapter || !chapterLineSelection || !canEditProse()) return;
+  const permissionModule = kind === "todo" ? "todos" : "comments";
+  if (!state.chapter || !chapterLineSelection || !canWritePermissionModule(state.work, permissionModule)) return;
   const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
   closeLineCitationMenu();
   const note = await inputToast(kind === "todo" ? "描述需要后续处理的事项" : `评论第 ${selection.safeStart + 1} 行正文`, {
@@ -3605,7 +3629,8 @@ async function createSelectedLineAnnotation(kind) {
       body: { kind, startLine: selection.safeStart + 1, endLine: selection.safeEnd + 1, note }
     });
     toast(kind === "todo" ? "正文待办已添加" : "正文评论已添加");
-    await openChapterAnnotationsDialog();
+    await loadChapterAnnotationCounts();
+    await openChapterAnnotationsDialog(selection.safeStart);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -3633,7 +3658,7 @@ function chapterAnnotationCard(annotation, { showSource = false } = {}) {
     <blockquote>${esc(annotation.quote || "空白行")}</blockquote>
     <p data-annotation-content>${esc(annotation.note)}</p>
     <small>${esc(annotation.actor)} · ${esc(formatDateTime(annotation.updatedAt))} · v${Number(annotation.versionNo)}</small>
-    <footer><button type="button" data-annotation-locate>定位原文</button>${canEditProse() ? `<button type="button" data-annotation-edit>${annotation.kind === "todo" ? "编辑待办" : "编辑评论"}</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : (annotation.kind === "todo" ? "完成待办" : "解决评论")}</button><button class="danger-button" type="button" data-annotation-delete>${annotation.kind === "todo" ? "删除待办" : "删除评论"}</button>` : ""}</footer>
+    <footer><button type="button" data-annotation-locate>定位原文</button>${canManageChapterAnnotation(annotation) ? `<button type="button" data-annotation-edit>${annotation.kind === "todo" ? "编辑待办" : "编辑评论"}</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : (annotation.kind === "todo" ? "完成待办" : "解决评论")}</button><button class="danger-button" type="button" data-annotation-delete>${annotation.kind === "todo" ? "删除待办" : "删除评论"}</button>` : ""}</footer>
   </article>`;
 }
 
@@ -3693,9 +3718,12 @@ function renderChapterAnnotations() {
   const host = $("#chapter-annotations-list");
   host.innerHTML = chapterAnnotations.length
     ? chapterAnnotations.map((annotation) => chapterAnnotationCard(annotation)).join("")
-    : '<p class="entity-history-empty">本章还没有评论。在正文行上点击右键即可添加。</p>';
+    : `<p class="entity-history-empty">${chapterAnnotationsLineIndex === null ? "本章还没有评论。在正文行上点击右键即可添加。" : `第 ${chapterAnnotationsLineIndex + 1} 行还没有评论或待办。`}</p>`;
   bindChapterAnnotationCards(host, chapterAnnotations, {
-    refresh: loadChapterAnnotations,
+    refresh: async () => {
+      await loadChapterAnnotationCounts();
+      await loadChapterAnnotations(chapterAnnotationsLineIndex);
+    },
     locate: (annotation) => {
       $("#chapter-annotations-dialog").close();
       paintChapterLineSelection(annotation.startLine - 1, annotation.endLine - 1);
@@ -3705,19 +3733,43 @@ function renderChapterAnnotations() {
   });
 }
 
-async function loadChapterAnnotations() {
+async function loadChapterAnnotationCounts(chapterId = state.chapter?.id) {
+  if (!chapterId || !canReadModule("comments") && !canReadModule("todos")) {
+    chapterAnnotationCounts = new Map();
+    scheduleChapterLineNumbers();
+    return;
+  }
+  const counts = await api(`/api/chapters/${encodeURIComponent(chapterId)}/annotation-counts`);
+  if (String(state.chapter?.id ?? "") !== String(chapterId)) return;
+  chapterAnnotationCounts = new Map(
+    (Array.isArray(counts) ? counts : [])
+      .map((item) => [Number(item.line), Number(item.count)])
+      .filter(([line, count]) => Number.isInteger(line) && line > 0 && Number.isInteger(count) && count > 0)
+  );
+  scheduleChapterLineNumbers();
+}
+
+async function loadChapterAnnotations(lineIndex = chapterAnnotationsLineIndex) {
   if (!state.chapter) return;
-  chapterAnnotations = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}/annotations`);
+  const chapterId = state.chapter.id;
+  const line = Number.isInteger(lineIndex) && lineIndex >= 0 ? lineIndex + 1 : null;
+  const query = line === null ? "" : `?line=${encodeURIComponent(line)}`;
+  const annotations = await api(`/api/chapters/${encodeURIComponent(chapterId)}/annotations${query}`);
+  if (String(state.chapter?.id ?? "") !== String(chapterId)) return;
+  chapterAnnotationsLineIndex = line === null ? null : line - 1;
+  chapterAnnotations = annotations;
   renderChapterAnnotations();
 }
 
-async function openChapterAnnotationsDialog() {
+async function openChapterAnnotationsDialog(lineIndex = null) {
   if (!state.chapter) return;
-  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文评论`;
+  chapterAnnotationsLineIndex = Number.isInteger(lineIndex) && lineIndex >= 0 ? lineIndex : null;
+  const lineLabel = chapterAnnotationsLineIndex === null ? "" : `第 ${chapterAnnotationsLineIndex + 1} 行的`;
+  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》${lineLabel}正文评论与待办`;
   $("#chapter-annotations-list").innerHTML = '<p class="entity-history-empty">正在加载评论…</p>';
   if (!$("#chapter-annotations-dialog").open) $("#chapter-annotations-dialog").showModal();
   try {
-    await loadChapterAnnotations();
+    await loadChapterAnnotations(chapterAnnotationsLineIndex);
   } catch (error) {
     $("#chapter-annotations-dialog").close();
     toast(error.message, "error");
@@ -3735,8 +3787,8 @@ function showLineCitationMenu(event, lineIndex) {
     selectChapterLines(lineIndex, lineIndex);
   }
   const menu = $("#line-citation-menu");
-  $("#add-line-annotation").classList.toggle("hidden", !canEditProse());
-  $("#add-line-todo").classList.toggle("hidden", !canEditProse());
+  $("#add-line-annotation").classList.toggle("hidden", !canWritePermissionModule(state.work, "comments"));
+  $("#add-line-todo").classList.toggle("hidden", !canWritePermissionModule(state.work, "todos"));
   const { start, end } = chapterLineSelection;
   $("#line-citation-label").textContent = start === end ? `第 ${start + 1} 行` : `第 ${start + 1}-${end + 1} 行`;
   menu.classList.remove("hidden");
@@ -3749,7 +3801,7 @@ function clearChapterLineSelection() {
   chapterLineSelection = null;
   $("#chapter-line-numbers-inner")?.querySelectorAll(".is-line-selected").forEach((row) => {
     row.classList.remove("is-line-selected");
-    row.setAttribute("aria-pressed", "false");
+    row.querySelector(".chapter-line-number-select")?.setAttribute("aria-pressed", "false");
   });
 }
 
@@ -5873,7 +5925,7 @@ function renderMemberPermissionGrid(value) {
     <select data-member-permission="${esc(item.id)}" aria-label="${esc(item.label)}权限">
       <option value="none" ${permissions[item.id] === "none" ? "selected" : ""}>无权限</option>
       <option value="read" ${permissions[item.id] === "read" ? "selected" : ""}>只读</option>
-      <option value="write" ${permissions[item.id] === "write" ? "selected" : ""}>可编辑</option>
+      <option value="write" ${permissions[item.id] === "write" ? "selected" : ""}>${["comments", "todos"].includes(item.id) ? "可添加" : "可编辑"}</option>
     </select>
   </label>`).join("");
 }
@@ -7188,8 +7240,12 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   const normalizedContent = normalizeParagraphSpacing(state.chapter.content);
   const spacingChanged = normalizedContent !== state.chapter.content;
   $("#chapter-content").value = normalizedContent;
+  chapterAnnotationCounts = new Map();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
+  void loadChapterAnnotationCounts(state.chapter.id).catch((error) => {
+    if (String(state.chapter?.id ?? "") === String(chapterId)) toast("正文评论数量读取失败，请稍后重试", "error");
+  });
   dismissChapterInsightToast();
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
@@ -7725,7 +7781,7 @@ const moduleMeta = {
   timeline: ["剧情脉络", "大事件时间轴", "候选事件经作者确认后，才进入正式时间线。", "新建事件"],
   outlines: ["创作规划", "大纲/伏笔", "为每章维护目标、冲突与转折，并持续提醒尚未回收的伏笔。", "新建伏笔"],
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
-  comments: ["正文协作", "正文评论", "集中查看并处理当前作品所有章节的评论与待办。", ""],
+  comments: ["正文协作", "正文评论与待办", "集中查看并处理当前作品所有章节的评论与待办。", ""],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
   tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
   "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
@@ -9295,8 +9351,8 @@ async function renderWorkChapterComments(page = moduleListPages.comments) {
   moduleListPages.comments = pageResult.page;
   mountModuleCount(total);
   $("#module-content").innerHTML = result.items.length
-    ? `<div class="chapter-comment-module-list">${result.items.map((annotation) => chapterAnnotationCard(annotation, { showSource: true })).join("")}</div>${renderModulePagination(pageResult, "comments", "正文评论列表")}`
-    : emptyModule("还没有正文评论", "在任一正文行上点击右键，即可添加评论或待办。");
+    ? `<div class="chapter-comment-module-list">${result.items.map((annotation) => chapterAnnotationCard(annotation, { showSource: true })).join("")}</div>${renderModulePagination(pageResult, "comments", "正文评论与待办列表")}`
+    : emptyModule("还没有正文评论或待办", "在任一正文行上点击右键，即可添加评论或待办。");
   bindModulePagination("comments", renderWorkChapterComments);
   bindChapterAnnotationCards($("#module-content"), result.items, {
     refresh: () => renderWorkChapterComments(pageResult.page),
@@ -16678,6 +16734,7 @@ $("#chapter-content").addEventListener("contextmenu", (event) => {
   showLineCitationMenu(event, lineIndexAtPointer(event.clientY));
 });
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
+  if (event.target.closest(".chapter-line-annotation-count")) return;
   const row = event.target.closest(".chapter-line-number");
   if (!row || event.button !== 0) return;
   event.preventDefault();
@@ -16700,7 +16757,23 @@ const finishChapterLineDrag = (event) => {
 };
 $("#chapter-line-numbers-inner").addEventListener("pointerup", finishChapterLineDrag);
 $("#chapter-line-numbers-inner").addEventListener("pointercancel", finishChapterLineDrag);
+$("#chapter-line-numbers-inner").addEventListener("click", (event) => {
+  const bubble = event.target.closest(".chapter-line-annotation-count");
+  if (bubble) {
+    event.preventDefault();
+    event.stopPropagation();
+    openChapterAnnotationsDialog(Number(bubble.dataset.lineIndex)).catch((error) => toast(error.message, "error"));
+    return;
+  }
+  const lineSelect = event.target.closest(".chapter-line-number-select");
+  if (!lineSelect) return;
+  const lineIndex = Number(lineSelect.closest(".chapter-line-number")?.dataset.lineIndex);
+  if (!Number.isInteger(lineIndex)) return;
+  paintChapterLineSelection(lineIndex, lineIndex);
+  selectChapterLines(lineIndex, lineIndex);
+});
 $("#chapter-line-numbers-inner").addEventListener("contextmenu", (event) => {
+  if (event.target.closest(".chapter-line-annotation-count")) return;
   const row = event.target.closest(".chapter-line-number");
   if (row) showLineCitationMenu(event, Number(row.dataset.lineIndex));
 });
@@ -16710,7 +16783,10 @@ $("#add-line-todo").addEventListener("click", () => createSelectedLineAnnotation
 $("#chapter-annotations-button").addEventListener("click", () => openChapterAnnotationsDialog().catch((error) => toast(error.message, "error")));
 $("#chapter-annotations-close").addEventListener("click", () => $("#chapter-annotations-dialog").close());
 $("#chapter-annotations-done").addEventListener("click", () => $("#chapter-annotations-dialog").close());
-$("#chapter-annotations-refresh").addEventListener("click", () => loadChapterAnnotations().catch((error) => toast(error.message, "error")));
+$("#chapter-annotations-refresh").addEventListener("click", () => Promise.all([
+  loadChapterAnnotationCounts(),
+  loadChapterAnnotations(chapterAnnotationsLineIndex)
+]).catch((error) => toast(error.message, "error")));
 $("#left-panel-toggle").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
   applyPanelLayout(true);

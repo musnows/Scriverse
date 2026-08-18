@@ -12,6 +12,7 @@ import { escapeSqlLikePattern } from "./utils.js";
 import {
   canReadWorkModule,
   canWriteWorkModule,
+  chapterAnnotationPermissionModule,
   classifyWorkModulePermissions,
   fullWorkModulePermissions,
   settingsEditorModulePermissions,
@@ -256,6 +257,18 @@ export class UserAuthService {
 
   resolveWorkId(pathname: string): string | null {
     return workIdFromPath(this.database, pathname);
+  }
+
+  chapterAnnotationAccess(annotationId: string): { kind: "note" | "todo"; createdByUserId: string | null } {
+    const row = this.database.get<{ kind: string; created_by_user_id: string | null }>(
+      "SELECT kind, created_by_user_id FROM chapter_annotations WHERE id = ?",
+      annotationId
+    );
+    if (!row) throw notFound("章节批注");
+    return {
+      kind: row.kind === "todo" ? "todo" : "note",
+      createdByUserId: row.created_by_user_id ?? null
+    };
   }
 
   hasUsers(): boolean {
@@ -844,7 +857,7 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
   };
 }
 
-const contentPermissionModules = workPermissionModules.filter((module) => !["drafts", "reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
+const contentPermissionModules = workPermissionModules.filter((module) => !["comments", "todos", "drafts", "reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
 const aiInteractionModules = ["ai-chat", "ai-analysis"] as const satisfies readonly WorkPermissionModule[];
 const attachmentModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
 
@@ -928,7 +941,7 @@ function globalReplaceWriteModules(request: Request): WorkPermissionModule[] {
   return [];
 }
 
-function workModuleRequirements(request: Request, write: boolean): WorkAuthorizationRequirements {
+function workModuleRequirements(request: Request, write: boolean, annotationAccess?: { kind: "note" | "todo"; createdByUserId: string | null }): WorkAuthorizationRequirements {
   const pathname = normalizeApiPath(request.path);
   const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
     write ? { write: [module, ...extraWrite] } : { read: [module] }
@@ -939,7 +952,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/presence$/u.test(pathname)) return {};
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
-  if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
+  if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return { anyRead: ["comments", "todos"] };
   if (/^\/api\/works\/[^/]+\/(?:deleted-chapters|recycle-bin)$/u.test(pathname)) return { write: ["prose"] };
   if (/^\/api\/works\/[^/]+\/chapters\/[^/]+\/foreshadow-reminders(?:\/[^/]+\/resolve)?$/u.test(pathname)) {
     return write ? { read: ["prose"], write: ["outlines"] } : { read: ["prose", "outlines"] };
@@ -961,7 +974,13 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     return { anyWrite: globalReplaceWriteModules(request) };
   }
   if (/^\/api\/chapters\/[^/]+\/outline$/u.test(pathname)) return direct("outlines");
-  if (/^\/api\/(?:chapters\/[^/]+\/annotations|chapter-annotations\/[^/]+)$/u.test(pathname)) return direct("prose");
+  if (/^\/api\/chapters\/[^/]+\/annotation-counts$/u.test(pathname)) return { anyRead: ["comments", "todos"] };
+  if (/^\/api\/chapters\/[^/]+\/annotations$/u.test(pathname)) {
+    return write ? direct(chapterAnnotationPermissionModule(requestBodyRecord(request).kind)) : { anyRead: ["comments", "todos"] };
+  }
+  if (/^\/api\/chapter-annotations\/[^/]+$/u.test(pathname)) {
+    return write && annotationAccess?.kind === "todo" ? direct("todos") : write ? direct("prose") : { anyRead: ["comments", "todos"] };
+  }
   if (/^\/api\/entity-versions\/[^/]+\/[^/]+(?:\/restore)?$/u.test(pathname)) {
     const entityType = pathname.split("/")[3] ?? "";
     const moduleByEntityType: Record<string, WorkPermissionModule> = {
@@ -1121,7 +1140,19 @@ export function createWorkAuthorizationMiddleware(auth: UserAuthService, disable
     }
     if (!workId) return next();
     const write = !["GET", "HEAD", "OPTIONS"].includes(request.method);
-    const requirements = workModuleRequirements(request, write);
+    const annotationMatch = request.path.match(/^\/api\/chapter-annotations\/([^/]+)$/iu);
+    const annotationId = annotationMatch?.[1];
+    const annotationAccess = annotationId
+      ? auth.chapterAnnotationAccess(decodeURIComponent(annotationId))
+      : undefined;
+    if (write && annotationAccess?.kind === "todo") {
+      const role = auth.workRole(user, workId, request.authMethod !== "api-key");
+      const canManageAllTodos = role === "admin" || role === "owner";
+      if (!canManageAllTodos && annotationAccess.createdByUserId !== user.userId) {
+        throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你只能修改或删除自己创建的正文待办");
+      }
+    }
+    const requirements = workModuleRequirements(request, write, annotationAccess);
     auth.assertWorkAccess(user, workId, requirements, requirements.ownerOnly === true, request.authMethod !== "api-key");
     next();
   };

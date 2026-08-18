@@ -1,5 +1,7 @@
 export const workPermissionModules = [
   "prose",
+  "comments",
+  "todos",
   "drafts",
   "settings",
   "characters",
@@ -20,11 +22,13 @@ export type WorkModulePermissions = Record<WorkPermissionModule, WorkModuleAcces
 export type PublicWorkAccessRole = "owner" | "editor" | "settings-editor" | "viewer" | "custom";
 
 export const proseReplacementPermissionModules = workPermissionModules.filter(
-  (module): module is WorkPermissionModule => module !== "ai-settings"
+  (module): module is WorkPermissionModule => !["comments", "todos", "ai-settings"].includes(module)
 );
 
 export const workPermissionModuleLabels: Record<WorkPermissionModule, string> = {
   prose: "正文",
+  comments: "正文评论",
+  todos: "正文待办",
   drafts: "想法",
   settings: "设定库",
   characters: "角色",
@@ -79,8 +83,10 @@ function isModuleAccess(value: unknown): value is WorkModuleAccess {
  */
 export function migrateLegacyModulePermissions(value: Record<string, unknown>): Record<string, unknown> {
   const migrated = { ...value };
+  const prose = isModuleAccess(migrated.prose) ? migrated.prose : "none";
+  if (!isModuleAccess(migrated.comments)) migrated.comments = prose;
+  if (!isModuleAccess(migrated.todos)) migrated.todos = prose;
   if (!isModuleAccess(migrated.drafts)) {
-    const prose = isModuleAccess(migrated.prose) ? migrated.prose : "none";
     const settings = isModuleAccess(migrated.settings) ? migrated.settings : "none";
     migrated.drafts = prose === "write" && settings === "write"
       ? "write"
@@ -164,4 +170,8 @@ export function canReadWorkModule(permissions: WorkModulePermissions, module: Wo
 
 export function canWriteWorkModule(permissions: WorkModulePermissions, module: WorkPermissionModule): boolean {
   return permissions[module] === "write";
+}
+
+export function chapterAnnotationPermissionModule(kind: unknown): "comments" | "todos" {
+  return kind === "todo" ? "todos" : "comments";
 }
