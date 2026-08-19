@@ -229,6 +229,8 @@ describe("数据库版本化迁移", () => {
     )).toBe(true);
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
+    expect(first.get("SELECT stream_idle_timeout_seconds FROM platform_ai_settings WHERE id = 1")).toEqual({ stream_idle_timeout_seconds: 90 });
+    expect(first.all("PRAGMA table_info(platform_ai_settings)").some((column) => column.name === "stream_idle_timeout_seconds" && column.dflt_value === "90")).toBe(true);
     expect(first.get("SELECT toast_position, page_sizes_json, galaxy_frame_rate FROM platform_ui_settings WHERE id = 1")).toEqual({
       toast_position: "top-right",
       page_sizes_json: '{"characters":30,"analysisTasks":30,"fileVersions":30}',

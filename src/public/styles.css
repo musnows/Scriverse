@@ -1598,6 +1598,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .platform-image-tool-field { display: grid; flex: 1 1 360px; gap: 7px; min-width: 0; color: var(--muted); font-size: 10px; }
 .platform-image-tool-field select { width: 100%; height: 36px; min-height: 36px; padding: 8px 10px; font-size: 12px; }
 .platform-image-tool-panel .config-save-button { flex: 0 0 auto; min-height: 36px; padding: 8px 14px; }
+.platform-stream-timeout-section { margin-bottom: 0; }
+.platform-stream-timeout-panel { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.platform-stream-timeout-field { display: grid; flex: 0 1 260px; gap: 7px; min-width: 0; color: var(--muted); font-size: 10px; }
+.platform-stream-timeout-field input { width: 100%; height: 36px; min-height: 36px; padding: 8px 10px; font-size: 12px; }
+.platform-stream-timeout-panel .config-save-button { flex: 0 0 auto; min-height: 36px; padding: 8px 14px; }
 .task-auto-run-panel {
   position: relative;
   display: grid;
@@ -2580,6 +2585,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .platform-image-tool-field { flex: 0 0 auto; }
   .platform-image-tool-field select, .platform-image-tool-panel .config-save-button { height: 40px; min-height: 40px; }
   .platform-image-tool-panel .config-save-button { width: 100%; }
+  .platform-stream-timeout-panel { align-items: stretch; flex-direction: column; }
+  .platform-stream-timeout-field { flex: 0 0 auto; }
+  .platform-stream-timeout-field input, .platform-stream-timeout-panel .config-save-button { height: 40px; min-height: 40px; }
+  .platform-stream-timeout-panel .config-save-button { width: 100%; }
 }
 @media (max-width: 640px) {
   .config-inline-save .book-summary-context-percent-field,

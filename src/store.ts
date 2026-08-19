@@ -36,6 +36,7 @@ import {
 } from "./utils.js";
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
+import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_SECONDS, normalizeAiStreamIdleTimeoutSeconds } from "./ai-stream-timeout.js";
 
 type WorkInput = {
   title: string;
@@ -1412,26 +1413,41 @@ export class Store {
 
   getPlatformAiSettings(): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM platform_ai_settings WHERE id = 1");
+    const streamIdleTimeoutValue = Number(row?.stream_idle_timeout_seconds);
     return {
       systemPrompt: String(row?.system_prompt ?? ""),
       imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
         ? null
         : String(row.image_tool_model_id),
+      streamIdleTimeoutSeconds: Number.isSafeInteger(streamIdleTimeoutValue)
+        ? normalizeAiStreamIdleTimeoutSeconds(streamIdleTimeoutValue)
+        : DEFAULT_AI_STREAM_IDLE_TIMEOUT_SECONDS,
       updatedAt: String(row?.updated_at ?? "")
     };
   }
 
-  updatePlatformAiSettings(input: { systemPrompt?: string; imageToolModelId?: string | null }): Record<string, unknown> {
+  updatePlatformAiSettings(input: {
+    systemPrompt?: string;
+    imageToolModelId?: string | null;
+    streamIdleTimeoutSeconds?: number;
+  }): Record<string, unknown> {
     const timestamp = now();
     const current = this.getPlatformAiSettings();
+    const currentStreamIdleTimeoutSeconds = Number(current.streamIdleTimeoutSeconds);
+    const streamIdleTimeoutSeconds = normalizeAiStreamIdleTimeoutSeconds(
+      input.streamIdleTimeoutSeconds ?? currentStreamIdleTimeoutSeconds
+    );
     this.db.run(
-      `INSERT INTO platform_ai_settings (id, system_prompt, image_tool_model_id, updated_at) VALUES (1, ?, ?, ?)
+      `INSERT INTO platform_ai_settings (id, system_prompt, image_tool_model_id, stream_idle_timeout_seconds, updated_at) VALUES (1, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET system_prompt = excluded.system_prompt,
-         image_tool_model_id = excluded.image_tool_model_id, updated_at = excluded.updated_at`,
+         image_tool_model_id = excluded.image_tool_model_id,
+         stream_idle_timeout_seconds = excluded.stream_idle_timeout_seconds,
+         updated_at = excluded.updated_at`,
       input.systemPrompt ?? String(current.systemPrompt),
       input.imageToolModelId === undefined
         ? (current.imageToolModelId === null ? null : String(current.imageToolModelId))
         : input.imageToolModelId,
+      streamIdleTimeoutSeconds,
       timestamp
     );
     return this.getPlatformAiSettings();
