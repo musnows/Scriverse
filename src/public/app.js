@@ -2450,6 +2450,75 @@ function renderConversationCompactionDivider(compactedMessageCount, totalMessage
   return appendAiContextCompactionDivider("conversation", messages[boundaryIndex] ?? null, feed);
 }
 
+function findAiRetryUserMessage(message) {
+  const feed = message.closest(".ai-feed");
+  if (!feed) return null;
+  const messages = [...feed.children].filter((candidate) => candidate.matches(".user-message, .assistant-message"));
+  const messageIndex = messages.indexOf(message);
+  for (let index = messageIndex - 1; index >= 0; index -= 1) {
+    if (messages[index].classList.contains("user-message")) return messages[index];
+  }
+  return null;
+}
+
+function aiMessageCitations(message) {
+  try {
+    const citations = JSON.parse(message.dataset.aiCitations ?? "[]");
+    return Array.isArray(citations) ? citations : [];
+  } catch {
+    return [];
+  }
+}
+
+async function retryAiMessage(message) {
+  const sourceTab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
+  const userMessage = findAiRetryUserMessage(message);
+  const prompt = userMessage?.dataset.copyText ?? "";
+  const userMessageId = userMessage?.dataset.messageId ?? "";
+  if (!sourceTab?.conversationId || !userMessageId || !prompt.trim()) {
+    toast("找不到需要重试的用户指令", "error");
+    return;
+  }
+  if (aiRequestManager.hasActive(sourceTab.id)) {
+    toast("当前对话仍在生成回复，请等待完成或取消后再重试", "error");
+    return;
+  }
+  if (!isActiveAiChatTab(sourceTab)) activateAiChatTab(sourceTab.id, { persistCurrent: false, force: true });
+  await sendAiWithOptions({
+    retry: {
+      message,
+      prompt,
+      citations: aiMessageCitations(userMessage),
+      userMessageId
+    }
+  });
+}
+
+function clearAiRetryComposer() {
+  clearAiPromptComposer();
+}
+
+function prepareAiRetryState(tab, modelId) {
+  tab.modelId = modelId;
+  tab.selectedModelId = modelId;
+  tab.promptSent = true;
+  clearAiChatTabComposer(tab);
+  if (isActiveAiChatTab(tab)) {
+    state.aiConversationModelId = modelId;
+    state.aiPromptSent = true;
+    syncAiTaskOptions();
+    renderAiRoleplayCharacterSelect();
+    renderAiQuickActions();
+    clearAiRetryComposer();
+  }
+}
+
+function aiRetryStreamRequestBody(body, retry) {
+  return retry?.userMessageId
+    ? { ...body, currentMessageId: retry.userMessageId }
+    : body;
+}
+
 function renderMessageCardActions(message) {
   let actions = message.querySelector(".message-card-actions");
   if (!actions) {
@@ -2478,7 +2547,20 @@ function renderMessageCardActions(message) {
     });
     actions.append(copy);
   }
-  if (message.dataset.messageId && message.classList.contains("assistant-message")) {
+  if (message.dataset.status === "failed" && message.classList.contains("assistant-message")) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "message-retry-button";
+    retry.setAttribute("aria-label", "重试");
+    retry.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L20 15"/><path d="M20 20v-5h-5"/></svg><span>重试</span>';
+    retry.addEventListener("click", () => {
+      retry.disabled = true;
+      void retryAiMessage(message).finally(() => {
+        if (retry.isConnected) retry.disabled = false;
+      });
+    });
+    actions.append(retry);
+  } else if (message.dataset.messageId && message.classList.contains("assistant-message")) {
     const fork = document.createElement("button");
     fork.type = "button";
     fork.className = "message-fork-button";
@@ -14828,20 +14910,23 @@ async function sendAi() {
   return sendAiWithOptions();
 }
 
-async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
+async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } = {}) {
   if (!state.work) return toast("请先选择作品", "error");
   const tab = activeAiChatTab();
   if (!tab) return toast("Agent 对话页签尚未就绪", "error");
   if (aiRequestManager.hasActive(tab.id)) return;
   const composerSnapshot = captureAiPromptComposer();
-  const instruction = composerSnapshot.text.trim();
+  const requestComposerSnapshot = retry
+    ? { text: retry.prompt, citations: retry.citations ?? [], references: [] }
+    : composerSnapshot;
+  const instruction = requestComposerSnapshot.text.trim();
   if (!instruction) return toast("请输入指令", "error");
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
-  const citations = composerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
+  const citations = requestComposerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   const selectedTaskType = $("#ai-task").value;
   persistActiveAiChatTab();
   tab.selectedModelId = $("#ai-model").value || tab.selectedModelId || null;
@@ -14852,6 +14937,9 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       conversationId: state.aiConversationId
     })
   };
+  if (retry?.userMessageId) {
+    requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: retry.userMessageId });
+  }
   setAiChatTabStatus(tab, "streaming");
   syncAiRequestControls();
   try {
@@ -14874,38 +14962,45 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       return toast(`对话配置锁定失败：${error.message}`, "error");
     }
     setAiChatTabStatus(tab, "streaming");
+    if (retry?.message?.isConnected) retry.message.remove();
     if (taskType !== "chat") {
-      try {
-        const request = assertAiRequestCurrent(requestHolder.snapshot);
-        const persistedUserMessage = await persistAiConversationMessage(
-          request.conversationId,
-          "user",
-          instruction,
-          citations,
-          { modelId },
-          { signal: request.signal }
-        );
-        assertAiRequestCurrent(request);
-        updateAiConversationSummaryFromMessage(persistedUserMessage);
-        requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
-        tab.modelId = modelId;
-        tab.selectedModelId = modelId;
-        tab.promptSent = true;
-        clearAiChatTabComposer(tab);
-        appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id, { tab });
-        if (isActiveAiChatTab(tab)) {
-          state.aiConversationModelId = modelId;
-          state.aiPromptSent = true;
-          syncAiTaskOptions();
-          renderAiRoleplayCharacterSelect();
-          renderAiQuickActions();
-          clearAiPromptComposer();
+      if (!retry) {
+        try {
+          const request = assertAiRequestCurrent(requestHolder.snapshot);
+          const persistedUserMessage = await persistAiConversationMessage(
+            request.conversationId,
+            "user",
+            instruction,
+            citations,
+            { modelId },
+            { signal: request.signal }
+          );
+          assertAiRequestCurrent(request);
+          updateAiConversationSummaryFromMessage(persistedUserMessage);
+          requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
+          tab.modelId = modelId;
+          tab.selectedModelId = modelId;
+          tab.promptSent = true;
+          clearAiChatTabComposer(tab);
+          appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id, { tab });
+          if (isActiveAiChatTab(tab)) {
+            state.aiConversationModelId = modelId;
+            state.aiPromptSent = true;
+            syncAiTaskOptions();
+            renderAiRoleplayCharacterSelect();
+            renderAiQuickActions();
+            clearAiPromptComposer();
+          }
+        } catch (error) {
+          if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
+          setAiChatTabStatus(tab, "error");
+          return toast(`对话记录创建失败：${error.message}`, "error");
         }
-      } catch (error) {
-        if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
-        setAiChatTabStatus(tab, "error");
-        return toast(`对话记录创建失败：${error.message}`, "error");
+      } else {
+        prepareAiRetryState(tab, modelId);
       }
+    } else if (retry) {
+      prepareAiRetryState(tab, modelId);
     }
     let assistantContent = "";
     let assistantMessage;
@@ -14913,14 +15008,14 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
     let persistedStreamMessage = null;
     let suggestion = null;
     if (taskType === "chat") {
-      const streamed = await streamChat(requestHolder, {
+      const streamed = await streamChat(requestHolder, aiRetryStreamRequestBody({
         instruction,
         scope,
         modelId,
         citations,
         conversationId: requestHolder.snapshot.conversationId,
         ...(ignoreContextWarning ? { ignoreContextWarning: true } : {})
-      }, createAiIdempotencyKey());
+      }, retry), createAiIdempotencyKey());
       const request = assertAiRequestCurrent(requestHolder.snapshot);
       if (streamed.action === "warn") return;
       assistantContent = streamed.content;
@@ -14963,7 +15058,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
           assistantContent,
           [],
           assistantMetadata,
-          { signal: request.signal, requestId: aiAssistantRequestId(request) }
+          { signal: request.signal, requestId: retry && taskType !== "chat" ? null : aiAssistantRequestId(request) }
         );
         assertAiRequestCurrent(request);
         updateAiConversationSummaryFromMessage(persistedAssistantMessage);
@@ -14998,8 +15093,11 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       return;
     }
     if (error?.code === "AI_CONVERSATION_RESPONSE_IN_PROGRESS") {
-      setAiChatTabComposerSnapshot(tab, composerSnapshot);
-      if (isActiveAiChatTab(tab)) restoreAiPromptComposer(composerSnapshot);
+      setAiChatTabComposerSnapshot(tab, requestComposerSnapshot);
+      if (isActiveAiChatTab(tab)) {
+        if (retry) restoreAiPromptComposer(requestComposerSnapshot);
+        else restoreAiPromptComposer(composerSnapshot);
+      }
       toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
       if (isActiveAiChatTab(tab)) $("#ai-prompt").focus();
       return;
@@ -15055,7 +15153,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
         failureMessage,
         [],
         {},
-        { requestId: aiAssistantRequestId(request) }
+        { requestId: retry && taskType !== "chat" ? null : aiAssistantRequestId(request) }
       );
       updateAiConversationSummaryFromMessage(persistedFailureMessage);
     } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
@@ -15202,7 +15300,11 @@ async function streamChat(requestHolder, body, idempotencyKey) {
           tab.selectedModelId = lockedModelId;
           tab.promptSent = true;
           clearAiChatTabComposer(tab);
-          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id, { tab });
+          const existingUserMessage = [...tab.feed.querySelectorAll(".user-message[data-message-id]")]
+            .find((candidate) => candidate.dataset.messageId === String(persistedUserMessage.id));
+          if (!existingUserMessage) {
+            appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id, { tab });
+          }
           if (isActiveAiChatTab(tab)) {
             state.aiConversationModelId = lockedModelId;
             state.aiPromptSent = true;
@@ -15423,7 +15525,10 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   if (role === "assistant") {
     renderAiProcessSteps(message, processSteps, true, processDurationMs);
   }
-  if (role === "user") attachUserCopyAction(message, text);
+  if (role === "user") {
+    message.dataset.aiCitations = JSON.stringify(Array.isArray(citations) ? citations : []);
+    attachUserCopyAction(message, text);
+  }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModelId = tab?.modelId ?? tab?.selectedModelId ?? $("#ai-model").value;
     const selectedModel = state.models.find((model) => model.id === selectedModelId) ?? state.models[0];
@@ -15437,6 +15542,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     message.append(meta);
     attachAssistantCopyAction(message, text);
   }
+  if (isFailure) renderMessageCardActions(message);
   attachMessageIdentity(message, messageId);
   feed.append(message);
   scrollAiFeedToBottom(feed);
