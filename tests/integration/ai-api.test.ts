@@ -115,6 +115,23 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(409);
   });
 
+  it("删除模型时清理任务默认值并记录审计", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/task-defaults/continue`).send({ modelId }).expect(200);
+
+    await request(runtime.app).delete(`/api/models/${modelId}`).expect(204);
+
+    expect(runtime.database.get("SELECT id FROM models WHERE id = ?", modelId)).toBeUndefined();
+    expect(runtime.database.get("SELECT model_id FROM task_defaults WHERE model_id = ?", modelId)).toBeUndefined();
+    const audit = runtime.database.get<{ detail_json: string }>(
+      "SELECT detail_json FROM audit_logs WHERE action = 'model.deleted' AND entity_id = ? ORDER BY created_at DESC LIMIT 1",
+      modelId
+    );
+    expect(audit).toBeDefined();
+    expect(JSON.parse(audit?.detail_json ?? "{}")).toMatchObject({ providerId, modelId: "mock-novel-model", displayName: "小说模型" });
+  });
+
   it("供应商连接测试复用 402 普通重试策略", async () => {
     const { providerId } = await configureAi();
     let modelListAttempts = 0;

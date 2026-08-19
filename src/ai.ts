@@ -3564,7 +3564,13 @@ export class AiManager {
   }
 
   deleteModel(modelId: string): void {
-    this.getModelRow(modelId);
+    const model = this.getModelRow(modelId);
+    const providerId = stringValue(model, "provider_id");
+    this.store.audit(PLATFORM_AI_WORK_ID, "model.deleted", "model", modelId, {
+      providerId,
+      modelId: stringValue(model, "model_id"),
+      displayName: stringValue(model, "display_name")
+    });
     this.store.db.transaction(() => {
       this.clearImageToolModelReferences(modelId);
       this.store.db.run("DELETE FROM models WHERE id = ?", modelId);
