@@ -10742,6 +10742,27 @@ function renderProviderCards(providers, models) {
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI、Anthropic 或 Google Vertex 接口地址和凭据，测试成功后再添加模型。");
 }
 
+async function deletePlatformModel(item) {
+  if (!item) return;
+  $("#form-dialog").close();
+  if (!await confirmToast(`确认删除模型“${item.displayName}”吗？删除后将从当前供应商的模型列表移除。`, {
+    title: "删除模型",
+    confirmLabel: "继续删除"
+  })) return;
+  if (!await confirmToast(`删除模型“${item.displayName}”后，相关默认模型设置会被清空，且无法恢复。仍要删除吗？`, {
+    title: "删除操作需要再次确认",
+    confirmLabel: "确认删除"
+  })) return;
+  try {
+    await api(`/api/models/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    await renderPlatformAiConfig();
+    await loadModels();
+    deleteToast(`已删除模型“${item.displayName}”`);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 function bindPlatformProviderActions(host, providers, models) {
   host.querySelectorAll("[data-test-provider]").forEach((button) => button.addEventListener("click", async () => {
     const providerId = button.dataset.testProvider;
@@ -14860,7 +14881,9 @@ function openModelDialog(providerId, item = null, provider = null) {
     await renderPlatformAiConfig();
     await loadModels();
     if (item) toast(connectivityConfigurationSavedToast("model"));
-  }, item ? "模型配置" : "供应商模型");
+  }, item ? "模型配置" : "供应商模型", {
+    dangerAction: item ? { label: "删除模型", onClick: () => deletePlatformModel(item) } : null
+  });
   const modelIdInput = $("#dialog-fields input[name='modelId']");
   const contextWindowInput = $("#model-context-window");
   const contextWindowHint = $("#model-context-window-hint");
