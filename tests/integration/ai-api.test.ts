@@ -1937,6 +1937,67 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(changed.body.error.code).toBe("AI_CONVERSATION_MODEL_LOCKED");
   });
 
+  it("分支对话仅在首次新请求后重新锁定模型", async () => {
+    const { providerId, modelId: sourceModelId } = await configureAi();
+    const branchModel = await request(runtime.app).post(`/api/providers/${providerId}/models`).send({
+      displayName: "分支模型",
+      modelId: "branch-model"
+    }).expect(201);
+    const branchModelId = String(branchModel.body.data.id);
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
+
+    const source = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "chat" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "源对话首轮",
+      scope: { type: "none" },
+      modelId: sourceModelId,
+      conversationId: source.body.data.id
+    }).expect(200);
+    const sourceReloaded = await request(runtime.app).get(`/api/ai-conversations/${source.body.data.id}`).expect(200);
+    expect(sourceReloaded.body.data.modelId).toBe(sourceModelId);
+
+    const forked = await request(runtime.app).post(`/api/ai-conversations/${source.body.data.id}/fork`).send({
+      messageId: sourceReloaded.body.data.messages.at(-1).id
+    }).expect(201);
+    expect(forked.body.data).not.toHaveProperty("modelId");
+    expect(forked.body.data.messages.find((message: { role: string }) => message.role === "user")?.metadata)
+      .not.toHaveProperty("modelId");
+
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "分支改用另一模型",
+      scope: { type: "none" },
+      modelId: branchModelId,
+      conversationId: forked.body.data.id
+    }).expect(200);
+    const forkedReloaded = await request(runtime.app).get(`/api/ai-conversations/${forked.body.data.id}`).expect(200);
+    expect(forkedReloaded.body.data.modelId).toBe(branchModelId);
+
+    const locked = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "分支再次切换模型",
+      scope: { type: "none" },
+      modelId: sourceModelId,
+      conversationId: forked.body.data.id
+    }).expect(409);
+    expect(locked.body.error.code).toBe("AI_CONVERSATION_MODEL_LOCKED");
+
+    const reforked = await request(runtime.app).post(`/api/ai-conversations/${forked.body.data.id}/fork`).send({
+      messageId: forkedReloaded.body.data.messages.at(-1).id
+    }).expect(201);
+    expect(reforked.body.data).not.toHaveProperty("modelId");
+
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "二次分支切回源模型",
+      scope: { type: "none" },
+      modelId: sourceModelId,
+      conversationId: reforked.body.data.id
+    }).expect(200);
+    const reforkedReloaded = await request(runtime.app).get(`/api/ai-conversations/${reforked.body.data.id}`).expect(200);
+    expect(reforkedReloaded.body.data.modelId).toBe(sourceModelId);
+    expect((await request(runtime.app).get(`/api/ai-conversations/${source.body.data.id}`).expect(200)).body.data.modelId)
+      .toBe(sourceModelId);
+  });
+
   it("对话开始后锁定实际上下文引用并在分支中保留", async () => {
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
       taskType: "chat"

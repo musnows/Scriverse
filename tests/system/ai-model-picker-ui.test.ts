@@ -19,14 +19,18 @@ describe("AI 模型选择收纳界面", () => {
     expect(page).toContain('<label id="ai-model-popover-title" for="ai-model">实际使用模型</label>');
     expect(page).toContain('<select id="ai-model" aria-label="实际使用模型">');
     expect(page).toContain("feature=ai-model-picker-v1");
+    expect(page).toContain("feature=ai-fork-model-unlock-v1");
 
     expect(application).toContain("function selectedAiModelLabel()");
+    expect(application).toContain("function aiConversationModelLocked()");
     expect(application).toContain("function syncAiModelPicker()");
+    expect(application).toContain("const modelLocked = aiConversationModelLocked();");
     expect(application).toContain('button.setAttribute("aria-label", label);');
     expect(application).toContain('button.disabled = interactionBusy;');
     expect(application).toContain("function setAiModelPickerVisible(visible)");
     expect(application).toContain('popover.classList.toggle("hidden", !visible);');
     expect(application).toContain('$("#ai-model-picker").addEventListener("click", async (event) => {');
+    expect(application).toContain("if (notifyAiConversationModelLocked(button)) return;");
     expect(application).toContain("setAiContextDistributionVisible(false);");
     expect(application).toContain("setAiModelPickerVisible(willOpen);");
     expect(application).toContain('!event.target.closest("#ai-model-picker") && !event.target.closest("#ai-model-popover")');
