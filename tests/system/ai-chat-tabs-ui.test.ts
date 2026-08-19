@@ -30,11 +30,13 @@ describe("Agent 多会话切换界面", () => {
     expect(page.text).toContain('id="ai-conversation-switcher" class="ai-conversation-switcher"');
     expect(page.text).toContain('id="ai-conversation-switcher-menu" class="ai-conversation-switcher-menu hidden"');
     expect(page.text).toContain('id="ai-workspace-open"');
+    expect(page.text).not.toContain('id="ai-workspace-close"');
     expect(page.text).toContain('id="ai-chat-tabs" class="ai-chat-tabs hidden" role="tablist"');
     expect(page.text).toContain('id="ai-chat-panels" class="ai-chat-panels"');
     expect(application.text).toContain('/ai-chat-tabs.js?v=20260816-ai-chat-switcher-v2');
     expect(application.text).toContain('function applyAiChatTabLimit(value)');
     expect(application.text).toContain('function setAiConversationWorkspaceVisible(visible)');
+    expect(application.text).not.toContain('#ai-workspace-close');
     expect(application.text).toContain('$("#ai-chat-tabs").classList.add("hidden")');
     expect(application.text).toContain('最多同时打开 ${aiChatTabLimit} 个对话');
     expect(application.text).toContain('function activateAiChatTab(tabId');
