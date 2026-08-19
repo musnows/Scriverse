@@ -588,7 +588,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
-const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship"] as const;
+const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship", "recall_story"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
 const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_story_entities">, readonly WorkPermissionModule[]> = {
@@ -1050,6 +1050,14 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "recall_relationship",
       description: "查询当前扮演角色的人物关系，并返回关系双方的权威 gender：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据关系或剧情自行推断。未传入 characters 或传入空数组时，只返回与当前角色有关系的其他角色列表；传入一个或多个角色姓名、别名或角色 ID 时，返回当前角色与这些角色之间的关系详情。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。已拒绝的关系候选不会作为记忆返回。",
       parameters: { type: "object", properties: { characters: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 20, default: [], description: "可选的对方角色姓名、别名或角色 ID 列表；留空时只列出有关系的角色。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
+    }
+  },
+  recall_story: {
+    type: "function",
+    function: {
+      name: "recall_story",
+      description: "查询当前作品已保存正文中的关键词，返回匹配的完整段落及章节标题和 ID。用于回忆最近发生的故事情节、场景或原文措辞；只能读取当前正文，不会读取设定库或作者想法。",
+      parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }, cursor: agentToolCursorParameter }, required: ["keyword"], additionalProperties: false }
     }
   },
   calculate_time: {
@@ -5292,6 +5300,7 @@ export class AiManager {
           ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
           ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；先不传 characters 获取有关系的角色列表，再传入 characters 数组获取一个或多个指定角色的关系详情。它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
+          ...(enabledToolIds.includes("recall_story") ? ["当回应涉及已经写入故事的近期情节、场景或具体措辞，而角色自身记忆与对话历史不足以确定时，使用 recall_story 按关键词查询当前正文。"] : []),
           "把返回内容自然地当作角色自己的记忆、认知或感受来表达。没有返回的信息就以符合角色的方式表现为不知道、没见过、记不清或不确定，不得补用全知信息。"
         ].join("\n")
       : enabledToolIds.length > 0
@@ -5626,6 +5635,9 @@ export class AiManager {
       if (canReadWorkModule(permissions, "relationships") && (!requested || requested.has("recall_relationship"))) {
         roleplayTools.push("recall_relationship");
       }
+      if (canReadWorkModule(permissions, "prose") && (!requested || requested.has("recall_story"))) {
+        roleplayTools.push("recall_story");
+      }
       roleplayTools.push("calculate_time");
       return roleplayTools;
     }
@@ -5817,6 +5829,7 @@ export class AiManager {
       : name === "image" ? imageArguments
       : name === "recall_self" ? recallSelfArguments
       : name === "recall_relationship" ? recallRelationshipArguments
+      : name === "recall_story" ? grepArguments
       : name === "calculate_time" ? calculateTimeArguments
       : null;
     const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
@@ -5830,6 +5843,7 @@ export class AiManager {
       ? (toolId === "calculate_time" && enabledTools.has(toolId))
         || (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
         || (toolId === "recall_relationship" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters") && canReadWorkModule(permissions, "relationships"))
+        || (toolId === "recall_story" && enabledTools.has(toolId) && canReadWorkModule(permissions, "prose"))
       : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
     if (!schema || !toolId || !toolAvailable) {
       return {
@@ -6157,7 +6171,7 @@ export class AiManager {
       }), maximumResultChars);
       return { id: toolCall.id, name, calledAt, arguments: { chapterIds, include, ...(cursor > 0 ? { cursor } : {}) }, status: "completed", result };
     }
-    if (name === "grep") {
+    if (name === "grep" || name === "recall_story") {
       const { keyword, limit, cursor } = args as z.infer<typeof grepArguments>;
       const matches = this.store.searchChapterParagraphs(workId, keyword, limit, { excludeAuthorNotes: true })
         .filter((match) => !scopedChapterIds || scopedChapterIds.has(String(match.chapterId)));
