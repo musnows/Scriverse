@@ -7954,15 +7954,21 @@ export class Store {
     const conversation = this.db.get("SELECT work_id FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
-    const message = this.db.get(
+    return this.aiConversationLockedModelId(conversationId);
+  }
+
+  private aiConversationLockedModelId(conversationId: string): string | null {
+    const messages = this.db.all(
       `SELECT metadata_json FROM ai_conversation_messages
        WHERE conversation_id = ? AND role = 'user'
-       ORDER BY created_at, rowid
-       LIMIT 1`,
+       ORDER BY created_at, rowid`,
       conversationId
     );
-    const metadata = message ? json<Record<string, unknown>>(requiredString(message, "metadata_json"), {}) : {};
-    return typeof metadata.modelId === "string" && metadata.modelId.trim() ? metadata.modelId.trim() : null;
+    for (const message of messages) {
+      const metadata = json<Record<string, unknown>>(requiredString(message, "metadata_json"), {});
+      if (typeof metadata.modelId === "string" && metadata.modelId.trim()) return metadata.modelId.trim();
+    }
+    return null;
   }
 
   getAiConversationInjectedEntities(conversationId: string, workId: string): AiInjectedEntities {
@@ -8619,14 +8625,17 @@ export class Store {
         currentRequestActor()?.userId ?? null
       );
       for (const message of messages.slice(0, targetIndex + 1)) {
+        const role = requiredString(message, "role");
+        const inheritedMetadata = json<Record<string, unknown>>(requiredString(message, "metadata_json"), {});
+        if (role === "user") delete inheritedMetadata.modelId;
         this.db.run(
           "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           id("message"),
           forkId,
-          requiredString(message, "role"),
+          role,
           requiredString(message, "content"),
           requiredString(message, "citations_json"),
-          requiredString(message, "metadata_json"),
+          JSON.stringify(inheritedMetadata),
           optionalString(message, "request_id"),
           requiredString(message, "created_at"),
           currentRequestActor()?.userId ?? null
@@ -8686,19 +8695,7 @@ export class Store {
   private mapAiConversation(row: Row): Record<string, unknown> {
     const roleplayCharacterId = optionalString(row, "roleplay_character_id");
     const roleplayUserCharacterId = optionalString(row, "roleplay_user_character_id");
-    const firstUserMessage = this.db.get(
-      `SELECT metadata_json FROM ai_conversation_messages
-       WHERE conversation_id = ? AND role = 'user'
-       ORDER BY created_at, rowid
-       LIMIT 1`,
-      requiredString(row, "id")
-    );
-    const firstUserMetadata = firstUserMessage
-      ? json<Record<string, unknown>>(requiredString(firstUserMessage, "metadata_json"), {})
-      : {};
-    const lockedModelId = typeof firstUserMetadata.modelId === "string" && firstUserMetadata.modelId.trim()
-      ? firstUserMetadata.modelId.trim()
-      : null;
+    const lockedModelId = this.aiConversationLockedModelId(requiredString(row, "id"));
     const roleplayCharacter = roleplayCharacterId
       ? this.db.get("SELECT id, name, code FROM characters WHERE id = ? AND work_id = ?", roleplayCharacterId, requiredString(row, "work_id"))
       : undefined;
