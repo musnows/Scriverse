@@ -11,10 +11,10 @@ describe("平台 AI 模型删除界面", () => {
     ]);
 
     const deletionStart = application.indexOf("async function deletePlatformModel");
-    const bindingStart = application.indexOf("function bindPlatformProviderActions", deletionStart);
+    const providerDeletionStart = application.indexOf("async function deletePlatformProvider", deletionStart);
     expect(deletionStart).toBeGreaterThan(-1);
-    expect(bindingStart).toBeGreaterThan(deletionStart);
-    const deletionSource = application.slice(deletionStart, bindingStart);
+    expect(providerDeletionStart).toBeGreaterThan(deletionStart);
+    const deletionSource = application.slice(deletionStart, providerDeletionStart);
     expect(deletionSource.match(/if \(!await confirmToast/gu)).toHaveLength(2);
     expect(deletionSource).toContain('title: "删除模型"');
     expect(deletionSource).toContain('title: "删除操作需要再次确认"');
