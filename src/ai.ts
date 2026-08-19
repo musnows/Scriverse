@@ -542,6 +542,10 @@ function providerProtocol(provider: Row): AiProviderProtocol {
   throw new AppError(500, "INVALID_PROVIDER_PROTOCOL", `不支持的供应商协议：${value || "(empty)"}`);
 }
 
+function supportsMultimodalProviderProtocol(provider: Row): boolean {
+  return ["openai-chat-completions", "openai-responses", "anthropic-messages", "google-vertex"].includes(providerProtocol(provider));
+}
+
 function providerMaxTokensParameter(provider: Row): MaxTokensParameter {
   if (providerProtocol(provider) === "anthropic-messages") return "max_tokens";
   return stringValue(provider, "max_tokens_parameter") === "max_completion_tokens"
@@ -574,16 +578,18 @@ function isZhipuProvider(provider: Row): boolean {
 function thinkingParameters(provider: Row, model: Row): Record<string, unknown> {
   const thinkingEnabled = boolValue(model, "thinking_enabled");
   const thinkingEffort = stringValue(model, "thinking_effort");
+  const protocol = providerProtocol(provider);
+  if (protocol === "openai-responses" && !thinkingEnabled) return { reasoning_effort: "none" };
   const effortParameters = thinkingEnabled && ["low", "medium", "high", "xhigh", "max"].includes(thinkingEffort)
-    ? providerProtocol(provider) === "anthropic-messages"
+    ? protocol === "anthropic-messages"
       ? { output_config: { effort: thinkingEffort } }
       : { reasoning_effort: thinkingEffort }
     : {};
   if (isGeminiProviderOrModel(provider, model)) return effortParameters;
-  if (providerProtocol(provider) === "anthropic-messages" && isZhipuProvider(provider)) {
+  if (protocol === "anthropic-messages" && isZhipuProvider(provider)) {
     return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
   }
-  if (providerProtocol(provider) === "anthropic-messages" && !isLongCatProvider(provider)) return effortParameters;
+  if (protocol === "anthropic-messages" && !isLongCatProvider(provider)) return effortParameters;
   return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
 }
 
@@ -3319,7 +3325,7 @@ export class AiManager {
     const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
     const startedAt = process.hrtime.bigint();
     const protocol = providerProtocol(provider);
-    const multimodalTested = boolValue(model, "multimodal_enabled") && protocol === "openai-chat-completions";
+    const multimodalTested = boolValue(model, "multimodal_enabled") && supportsMultimodalProviderProtocol(provider);
     let credentialSecret = "";
     let accessToken = "";
     logger.info("ai.model_test.started", { modelId, providerId });
@@ -3398,8 +3404,8 @@ export class AiManager {
     const timestamp = now();
     const multimodalEnabled = input.multimodalEnabled ?? false;
     const enabled = input.enabled ?? true;
-    if (multimodalEnabled && providerProtocol(provider) !== "openai-chat-completions") {
-      throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "多模态模型当前仅支持 Chat Completions 协议");
+    if (multimodalEnabled && !supportsMultimodalProviderProtocol(provider)) {
+      throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态模型");
     }
     if (input.imageToolDefault && !multimodalEnabled) {
       throw new AppError(400, "MODEL_NOT_MULTIMODAL", "只有多模态模型才能设为默认读图模型");
@@ -3407,8 +3413,8 @@ export class AiManager {
     if (input.imageToolDefault && !enabled) {
       throw new AppError(400, "MODEL_DISABLED", "停用模型不能设为默认读图模型");
     }
-    if (input.imageToolDefault && providerProtocol(provider) !== "openai-chat-completions") {
-      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "多模态读图工具当前仅支持 Chat Completions 协议");
+    if (input.imageToolDefault && !supportsMultimodalProviderProtocol(provider)) {
+      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态读图工具");
     }
     this.store.db.transaction(() => {
       this.store.db.run(
@@ -3526,14 +3532,14 @@ export class AiManager {
     const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")), nextModelId);
     const multimodalEnabled = input.multimodalEnabled ?? boolValue(row, "multimodal_enabled");
     const enabled = input.enabled ?? boolValue(row, "enabled");
-    if (multimodalEnabled && providerProtocol(provider) !== "openai-chat-completions") {
-      throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "多模态模型当前仅支持 Chat Completions 协议");
+    if (multimodalEnabled && !supportsMultimodalProviderProtocol(provider)) {
+      throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态模型");
     }
     if (input.imageToolDefault && !multimodalEnabled) {
       throw new AppError(400, "MODEL_NOT_MULTIMODAL", "只有多模态模型才能设为默认读图模型");
     }
-    if (input.imageToolDefault && providerProtocol(provider) !== "openai-chat-completions") {
-      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "多模态读图工具当前仅支持 Chat Completions 协议");
+    if (input.imageToolDefault && !supportsMultimodalProviderProtocol(provider)) {
+      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态读图工具");
     }
     this.store.db.transaction(() => {
       this.store.db.run(
@@ -5710,6 +5716,7 @@ export class AiManager {
       throw new AppError(413, "IMAGE_ATTACHMENT_TOO_LARGE", "图片附件超过多模态读图大小限制");
     }
     const { model, provider } = this.resolveImageToolModel(workId);
+    const protocol = providerProtocol(provider);
     const image = await this.attachmentStorage.read(String(attachment.storageKey));
     if (image.byteLength > IMAGE_TOOL_MAX_BYTES) {
       throw new AppError(413, "IMAGE_ATTACHMENT_TOO_LARGE", "图片附件超过多模态读图大小限制");
@@ -5735,7 +5742,7 @@ export class AiManager {
       temperature: 0.2,
       max_tokens: Math.min(Number.isFinite(configuredMaxTokens) ? configuredMaxTokens : DEFAULT_MAX_TOKENS, IMAGE_TOOL_MAX_OUTPUT_TOKENS)
     }, stringValue(model, "model_id"));
-    const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), "openai-chat-completions");
+    const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
     const { accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider);
     const activeSecrets = [credentialSecret, accessToken];
     const controller = new AbortController();
@@ -5747,9 +5754,9 @@ export class AiManager {
       const response = await this.scheduleProviderRequest(provider, signal, async () => {
         const upstream = await this.outboundFetchWithRetry(endpoint, {
           method: "POST",
-          headers: providerRequestHeaders("openai-chat-completions", accessToken, "application/json"),
+          headers: providerRequestHeaders(protocol, accessToken, "application/json"),
           body: JSON.stringify(buildCompletionRequestBody({
-            protocol: "openai-chat-completions",
+            protocol,
             model: stringValue(model, "model_id"),
             messages,
             parameters,
@@ -5762,7 +5769,7 @@ export class AiManager {
       if (!response.ok) throw new AppError(502, "IMAGE_MODEL_REQUEST_FAILED", "多模态模型读取图片失败");
       let payload: CompletionPayload;
       try {
-        payload = parseCompletionPayload("openai-chat-completions", redactProviderSecrets(JSON.parse(response.body), activeSecrets));
+        payload = parseCompletionPayload(protocol, redactProviderSecrets(JSON.parse(response.body), activeSecrets));
       } catch {
         throw new AppError(502, "IMAGE_MODEL_INVALID_RESPONSE", "多模态模型返回了无效响应");
       }
@@ -7420,6 +7427,95 @@ export class AiManager {
         ? payload.error as Record<string, unknown>
         : null;
       if (error) throw new Error(typeof error.message === "string" ? error.message : "上游流式响应返回错误");
+      if (protocol === "openai-responses") {
+        const type = typeof payload.type === "string" ? payload.type : "";
+        const responseIndex = (value: Record<string, unknown>): number | null => {
+          const index = value.output_index;
+          return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : null;
+        };
+        const updateResponseToolCall = (index: number, item: Record<string, unknown>): void => {
+          const current = openAiToolCalls.get(index) ?? {
+            id: "",
+            type: "function" as const,
+            function: { name: "", arguments: "" }
+          };
+          const callId = typeof item.call_id === "string" ? item.call_id : typeof item.id === "string" ? item.id : "";
+          if (callId) current.id = callId;
+          if (typeof item.name === "string") current.function.name = item.name;
+          if (typeof item.arguments === "string") current.function.arguments = item.arguments;
+          openAiToolCalls.set(index, current);
+        };
+        if ((type === "response.output_item.added" || type === "response.output_item.done")
+          && payload.item && typeof payload.item === "object" && !Array.isArray(payload.item)) {
+          const item = payload.item as Record<string, unknown>;
+          if (item.type === "function_call") {
+            const index = responseIndex(payload) ?? (typeof payload.output_index === "number" ? payload.output_index : null);
+            if (index !== null) updateResponseToolCall(index, item);
+            if (type === "response.output_item.done") openAiToolCallsFinalized = true;
+          }
+        }
+        if (type === "response.function_call_arguments.delta" || type === "response.function_call_arguments.done") {
+          const index = responseIndex(payload);
+          if (index !== null) {
+            const current = openAiToolCalls.get(index) ?? {
+              id: "",
+              type: "function" as const,
+              function: { name: "", arguments: "" }
+            };
+            if (typeof payload.call_id === "string" && !current.id) current.id = payload.call_id;
+            if (typeof payload.name === "string" && !current.function.name) current.function.name = payload.name;
+            if (type === "response.function_call_arguments.delta" && typeof payload.delta === "string") {
+              current.function.arguments = `${String(current.function.arguments)}${payload.delta}`;
+            } else if (typeof payload.arguments === "string") {
+              current.function.arguments = payload.arguments;
+            }
+            openAiToolCalls.set(index, current);
+          }
+          if (type === "response.function_call_arguments.done") openAiToolCallsFinalized = true;
+        }
+        const responseRecord = payload.response && typeof payload.response === "object" && !Array.isArray(payload.response)
+          ? payload.response as Record<string, unknown>
+          : null;
+        const responseUsage = responseRecord?.usage && typeof responseRecord.usage === "object" && !Array.isArray(responseRecord.usage)
+          ? responseRecord.usage as Record<string, unknown>
+          : null;
+        if (responseUsage) usage = responseUsage;
+        if (type === "response.output_text.delta" && typeof payload.delta === "string") appendContent(payload.delta);
+        if ((type === "response.reasoning_summary_text.delta" || type === "response.reasoning_text.delta")
+          && typeof payload.delta === "string") appendReasoning(payload.delta);
+        if (type === "response.output_text.done" && !content && typeof payload.text === "string") appendContent(payload.text);
+        if ((type === "response.reasoning_summary_text.done" || type === "response.reasoning_text.done")
+          && !reasoning && typeof payload.text === "string") appendReasoning(payload.text);
+        if (type === "response.completed") {
+          const output = responseRecord && Array.isArray(responseRecord.output) ? responseRecord.output : [];
+          let hasFunctionCall = false;
+          for (const [index, value] of output.entries()) {
+            if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+            const item = value as Record<string, unknown>;
+            if (item.type !== "function_call") continue;
+            hasFunctionCall = true;
+            updateResponseToolCall(index, item);
+          }
+          if (hasFunctionCall) {
+            openAiToolCallsFinalized = true;
+            finishReason = "tool_calls";
+          } else {
+            finishReason = responseRecord?.status === "incomplete" ? "length" : "stop";
+          }
+          upstreamDone = true;
+        }
+        if (type === "response.incomplete") {
+          finishReason = "length";
+          upstreamDone = true;
+        }
+        if (type === "response.failed") {
+          const failure = responseRecord?.error && typeof responseRecord.error === "object" && !Array.isArray(responseRecord.error)
+            ? responseRecord.error as Record<string, unknown>
+            : null;
+          throw new Error(typeof failure?.message === "string" ? failure.message : "OpenAI Responses 响应失败");
+        }
+        return true;
+      }
       if (protocol === "anthropic-messages") {
         const type = typeof payload.type === "string" ? payload.type : "";
         const index = eventIndex(payload);
@@ -11406,8 +11502,8 @@ export class AiManager {
     if (!boolValue(model, "multimodal_enabled")) {
       throw new AppError(400, "MODEL_NOT_MULTIMODAL", "模型未启用多模态能力");
     }
-    if (providerProtocol(provider) !== "openai-chat-completions") {
-      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "多模态读图工具当前仅支持 Chat Completions 协议");
+    if (!supportsMultimodalProviderProtocol(provider)) {
+      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "当前接口协议不支持多模态读图工具");
     }
     this.assertAvailable(provider, model);
   }
