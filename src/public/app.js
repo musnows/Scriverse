@@ -2233,7 +2233,6 @@ function setAiConversationWorkspaceVisible(visible) {
   $("#ai-assistant-entry").setAttribute("aria-expanded", String(aiConversationWorkspaceOpen));
   applyPanelLayout(true);
   $("#ai-chat-tabs").classList.add("hidden");
-  $("#ai-workspace-close").classList.toggle("hidden", !aiConversationWorkspaceOpen);
   $("#ai-panel-resize").setAttribute("aria-hidden", String(aiConversationWorkspaceOpen));
   setAiConversationSwitcherVisible(false);
   renderAiChatTabs();
@@ -17541,7 +17540,6 @@ $("#ai-conversation-switcher-close").addEventListener("click", () => {
   $("#ai-conversation-switcher").focus();
 });
 $("#ai-workspace-open").addEventListener("click", () => setAiConversationWorkspaceVisible(true));
-$("#ai-workspace-close").addEventListener("click", () => setAiConversationWorkspaceVisible(false));
 $("#ai-switcher-history").addEventListener("click", async () => {
   setAiConversationSwitcherVisible(false);
   try {
