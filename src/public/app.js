@@ -2035,6 +2035,7 @@ function createAiChatTabState(input = {}) {
     return existing;
   }
   const feed = input.feed ?? createAiChatFeed();
+  bindAiFeedAutoScroll(feed);
   const tab = aiChatTabManager.open({
     workId: String(state.work?.id ?? ""),
     conversationId: input.conversationId ?? null,
@@ -2556,6 +2557,9 @@ const AI_TOOL_DESCRIPTIONS = {
 };
 
 const aiFeedScrollFrames = new WeakMap();
+const aiFeedAutoScrollStates = new WeakMap();
+const aiFeedScrollBindings = new WeakSet();
+const AI_FEED_BOTTOM_THRESHOLD_PX = 24;
 let markdownTableMenuTarget = null;
 let markdownTableMenuTrigger = null;
 
@@ -2596,7 +2600,30 @@ function openMarkdownTableMenu(header, clientX, clientY) {
   toggle.focus();
 }
 
+function aiFeedIsNearBottom(feed) {
+  if (!feed.clientHeight) return true;
+  return feed.scrollHeight - feed.scrollTop - feed.clientHeight <= AI_FEED_BOTTOM_THRESHOLD_PX;
+}
+
+function bindAiFeedAutoScroll(feed) {
+  if (!feed || aiFeedScrollBindings.has(feed)) return;
+  const update = () => {
+    const shouldFollow = aiFeedIsNearBottom(feed);
+    aiFeedAutoScrollStates.set(feed, shouldFollow);
+    if (shouldFollow) return;
+    const currentFrame = aiFeedScrollFrames.get(feed);
+    if (currentFrame === undefined) return;
+    window.cancelAnimationFrame(currentFrame);
+    aiFeedScrollFrames.delete(feed);
+  };
+  feed.addEventListener("scroll", update, { passive: true });
+  aiFeedScrollBindings.add(feed);
+  update();
+}
+
 function scrollAiFeedToBottom(feed = $("#ai-feed")) {
+  bindAiFeedAutoScroll(feed);
+  if (!aiFeedAutoScrollStates.get(feed)) return;
   feed.scrollTop = feed.scrollHeight;
   const currentFrame = aiFeedScrollFrames.get(feed);
   if (currentFrame !== undefined) window.cancelAnimationFrame(currentFrame);

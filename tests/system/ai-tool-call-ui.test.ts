@@ -29,6 +29,13 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('step.type !== "intermediate" || typeof step.content !== "string" || step.content.trim().length > 0');
     expect(application).toContain("const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);");
     expect(application).toContain("if (!renderableSteps.length) return;");
+    expect(application).toContain("const aiFeedAutoScrollStates = new WeakMap();");
+    expect(application).toContain("const aiFeedScrollBindings = new WeakSet();");
+    expect(application).toContain("function aiFeedIsNearBottom(feed)");
+    expect(application).toContain("function bindAiFeedAutoScroll(feed)");
+    expect(application).toContain('feed.addEventListener("scroll", update, { passive: true });');
+    expect(application).toContain("if (!aiFeedAutoScrollStates.get(feed)) return;");
+    expect(application).toContain("window.cancelAnimationFrame(currentFrame);");
     expect(application).toContain("const processStepTypewriters = new Map();");
     expect(application).toContain("processStepTypewriter(targetStep).append(step.content)");
     expect(application).toContain('step.type === "intermediate" && typeof step.content === "string"');
