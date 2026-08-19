@@ -229,6 +229,9 @@ describe("数据库版本化迁移", () => {
     )).toBe(true);
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
+    expect(first.get("SELECT stream_idle_timeout_seconds FROM platform_ai_settings WHERE id = 1")).toEqual({ stream_idle_timeout_seconds: 90 });
+    expect(first.all("PRAGMA table_info(platform_ai_settings)").some((column) => column.name === "stream_idle_timeout_seconds" && column.dflt_value === "90")).toBe(true);
+    expect(String(first.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'platform_ai_settings'")?.sql)).toContain("BETWEEN 30 AND 600");
     expect(first.get("SELECT toast_position, page_sizes_json, galaxy_frame_rate FROM platform_ui_settings WHERE id = 1")).toEqual({
       toast_position: "top-right",
       page_sizes_json: '{"characters":30,"analysisTasks":30,"fileVersions":30}',
@@ -372,6 +375,35 @@ describe("数据库版本化迁移", () => {
       { id: "conversation-roleplay-old", task_type: "roleplay", context_scope_json: '{"type":"none"}' }
     ]);
     second.close();
+  });
+
+  it("迁移 101 放宽平台 AI 流超时上限并保留已有设置", () => {
+    const filename = createLegacyDatabase();
+    const current = new Database(filename);
+    current.run("ALTER TABLE platform_ai_settings RENAME TO platform_ai_settings_v101_test_old");
+    current.run(`CREATE TABLE platform_ai_settings (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      system_prompt TEXT NOT NULL DEFAULT '',
+      image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+      stream_idle_timeout_seconds INTEGER NOT NULL DEFAULT 90 CHECK(stream_idle_timeout_seconds BETWEEN 30 AND 120),
+      updated_at TEXT NOT NULL
+    )`);
+    current.run(`INSERT INTO platform_ai_settings (id, system_prompt, image_tool_model_id, stream_idle_timeout_seconds, updated_at)
+      SELECT id, system_prompt, image_tool_model_id, stream_idle_timeout_seconds, updated_at
+      FROM platform_ai_settings_v101_test_old`);
+    current.run("DROP TABLE platform_ai_settings_v101_test_old");
+    current.run("UPDATE platform_ai_settings SET stream_idle_timeout_seconds = 120 WHERE id = 1");
+    current.run("DELETE FROM schema_migrations WHERE version = 101");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT stream_idle_timeout_seconds FROM platform_ai_settings WHERE id = 1")).toEqual({ stream_idle_timeout_seconds: 120 });
+    expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'platform_ai_settings'")?.sql)).toContain("BETWEEN 30 AND 600");
+    expect(() => migrated.run("UPDATE platform_ai_settings SET stream_idle_timeout_seconds = 600 WHERE id = 1")).not.toThrow();
+    expect(migrated.get("SELECT stream_idle_timeout_seconds FROM platform_ai_settings WHERE id = 1")).toEqual({ stream_idle_timeout_seconds: 600 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
   });
 
   it("从已有迁移 74 平滑升级到当前版本并重建 AI 历史短词索引", () => {

@@ -39,9 +39,11 @@ describe("交互式 AI 流事件空闲超时", () => {
       disableUserAuth: true,
       fetchImpl: fetchMock,
       serveUi: false,
-      aiStreamIdleTimeoutMs: 30_000,
       aiRetrySleep: async (delayMs) => { retryDelays.push(delayMs); }
     });
+    const defaultSettings = await request(runtime.app).get("/api/platform/ai/settings").expect(200);
+    expect(defaultSettings.body.data.streamIdleTimeoutSeconds).toBe(90);
+    await request(runtime.app).patch("/api/platform/ai/settings").send({ streamIdleTimeoutSeconds: 30 }).expect(200);
     const work = await request(runtime.app).post("/api/works").send({ title: "流超时测试" }).expect(201);
     workId = work.body.data.id;
     const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
@@ -63,6 +65,16 @@ describe("交互式 AI 流事件空闲超时", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await runtime.close();
+  });
+
+  it("平台 AI 设置拒绝低于 30 秒的流事件空闲超时", async () => {
+    const response = await request(runtime.app).patch("/api/platform/ai/settings")
+      .send({ streamIdleTimeoutSeconds: 29 })
+      .expect(400);
+
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    const settings = await request(runtime.app).get("/api/platform/ai/settings").expect(200);
+    expect(settings.body.data.streamIdleTimeoutSeconds).toBe(30);
   });
 
   it("每 5 秒收到事件时持续超过 60 秒仍正常完成", async () => {

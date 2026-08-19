@@ -7,9 +7,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 99;
+export const DATABASE_SCHEMA_VERSION = 101;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -520,6 +520,7 @@ export class Database {
         id INTEGER PRIMARY KEY CHECK(id = 1),
         system_prompt TEXT NOT NULL DEFAULT '',
         image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+        stream_idle_timeout_seconds INTEGER NOT NULL DEFAULT 90 CHECK(stream_idle_timeout_seconds BETWEEN 30 AND 600),
         updated_at TEXT NOT NULL
       );
 
@@ -947,6 +948,7 @@ export class Database {
         this.run(`CREATE TABLE IF NOT EXISTS platform_ai_settings (
           id INTEGER PRIMARY KEY CHECK(id = 1),
           system_prompt TEXT NOT NULL DEFAULT '',
+          stream_idle_timeout_seconds INTEGER NOT NULL DEFAULT 90 CHECK(stream_idle_timeout_seconds BETWEEN 30 AND 600),
           updated_at TEXT NOT NULL
         )`);
         this.run(`CREATE TABLE IF NOT EXISTS work_ai_settings (
@@ -3734,6 +3736,50 @@ export class Database {
             UPDATE ai_conversations SET roleplay_user_character_id = NULL WHERE id = NEW.id;
           END`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (99, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(100)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(platform_ai_settings)").map((row) => String(row.name)));
+        if (!columns.has("stream_idle_timeout_seconds")) {
+          this.run("ALTER TABLE platform_ai_settings ADD COLUMN stream_idle_timeout_seconds INTEGER NOT NULL DEFAULT 90 CHECK(stream_idle_timeout_seconds BETWEEN 30 AND 120)");
+        }
+        this.run(
+          "UPDATE platform_ai_settings SET stream_idle_timeout_seconds = 90 WHERE stream_idle_timeout_seconds IS NULL OR stream_idle_timeout_seconds < 30 OR stream_idle_timeout_seconds > 120"
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (100, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(101)) {
+      this.transaction(() => {
+        const tableSql = String(this.get<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'platform_ai_settings'")?.sql ?? "");
+        if (!tableSql.includes("BETWEEN 30 AND 600")) {
+          this.run("ALTER TABLE platform_ai_settings RENAME TO platform_ai_settings_v101_old");
+          this.run(`CREATE TABLE platform_ai_settings (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            system_prompt TEXT NOT NULL DEFAULT '',
+            image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+            stream_idle_timeout_seconds INTEGER NOT NULL DEFAULT 90 CHECK(stream_idle_timeout_seconds BETWEEN 30 AND 600),
+            updated_at TEXT NOT NULL
+          )`);
+          this.run(`INSERT INTO platform_ai_settings (id, system_prompt, image_tool_model_id, stream_idle_timeout_seconds, updated_at)
+            SELECT id, system_prompt, image_tool_model_id, stream_idle_timeout_seconds, updated_at
+            FROM platform_ai_settings_v101_old`);
+          this.run("DROP TABLE platform_ai_settings_v101_old");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (101, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

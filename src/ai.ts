@@ -46,7 +46,7 @@ import {
   normalizeAiRetryPolicy,
   type AiRetryPolicy
 } from "./ai-retry.js";
-import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
+import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS, normalizeAiStreamIdleTimeoutSeconds } from "./ai-stream-timeout.js";
 import { CredentialVault } from "./credential-vault.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import {
@@ -2183,7 +2183,7 @@ export class ContextBuilder {
 
 export class AiManager {
   readonly contextBuilder: ContextBuilder;
-  private readonly interactiveStreamIdleTimeoutMs: number;
+  private interactiveStreamIdleTimeoutMs: number;
   private readonly retryPolicy: AiRetryPolicy;
   private readonly retrySleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   private readonly taskControllers = new Map<string, AbortController>();
@@ -2254,6 +2254,13 @@ export class AiManager {
       interactiveStreamIdleTimeoutMs: this.interactiveStreamIdleTimeoutMs,
       retryCount: this.retryPolicy.retryCount,
       backoffRetryCount: this.retryPolicy.backoffRetryCount
+    });
+  }
+
+  setInteractiveStreamIdleTimeoutSeconds(seconds: number): void {
+    this.interactiveStreamIdleTimeoutMs = normalizeAiStreamIdleTimeoutSeconds(seconds) * 1_000;
+    logger.info("ai.manager.stream_idle_timeout_updated", {
+      interactiveStreamIdleTimeoutMs: this.interactiveStreamIdleTimeoutMs
     });
   }
 
