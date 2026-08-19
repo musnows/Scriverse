@@ -25,6 +25,7 @@ import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260819-context-percent-v1";
+import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
@@ -1331,12 +1332,15 @@ function constrainPanelLayout() {
 }
 
 function applyPanelLayout(persist = false) {
+  const phoneClient = isPhoneClient();
+  if (phoneClient && !aiConversationWorkspaceOpen) panelLayout.aiCollapsed = true;
   constrainPanelLayout();
   const app = $("#app");
   app.style.setProperty("--left-panel-width", `${panelLayout.leftWidth}px`);
   app.style.setProperty("--ai-panel-width", `${panelLayout.aiWidth}px`);
   app.classList.toggle("left-panel-collapsed", panelLayout.leftCollapsed);
   app.classList.toggle("ai-panel-collapsed", panelLayout.aiCollapsed);
+  app.classList.toggle("phone-client", phoneClient);
   const mobileViewport = isMobileViewport();
   $("#left-panel-toggle").textContent = mobileViewport ? "›" : (panelLayout.leftCollapsed ? "›" : "‹");
   $("#left-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
@@ -1356,7 +1360,7 @@ function applyPanelLayout(persist = false) {
 
 function ensureAiPanelExpanded() {
   if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) return;
-  if (isMobileViewport()) {
+  if (isPhoneClient() || isMobileViewport()) {
     setAiConversationWorkspaceVisible(true);
     return;
   }
@@ -2219,7 +2223,7 @@ function setAiConversationSwitcherVisible(visible) {
 }
 
 function setAiConversationWorkspaceVisible(visible) {
-  const mobileWorkspace = isMobileViewport();
+  const mobileWorkspace = isPhoneClient() || isMobileViewport();
   aiConversationWorkspaceOpen = Boolean(visible);
   panelLayout.aiCollapsed = aiConversationWorkspaceOpen ? false : mobileWorkspace;
   $("#app").classList.toggle("ai-workspace-mode", aiConversationWorkspaceOpen);
@@ -16941,7 +16945,7 @@ $("#ai-assistant-entry").addEventListener("click", () => {
     return toast("当前账户没有创作助手读取权限", "error");
   }
   setModuleNavExpanded(false);
-  if (isMobileViewport()) {
+  if (isPhoneClient() || isMobileViewport()) {
     panelLayout.leftCollapsed = true;
     applyPanelLayout(true);
     setAiConversationWorkspaceVisible(true);

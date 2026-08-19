@@ -561,6 +561,8 @@ input[type="checkbox"][hidden] { display: none; }
 .panel-resize-handle:hover::after, .panel-resize-handle:focus-visible::after, body.is-panel-resizing .panel-resize-handle::after { background: var(--accent); }
 body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.left-panel-collapsed { --left-panel-width: 42px !important; }.app-shell.ai-panel-collapsed { --ai-panel-width: 42px !important; }
+.app-shell.phone-client.ai-panel-collapsed:not(.ai-workspace-mode) { --ai-panel-width: 0px !important; }
+.app-shell.phone-client.ai-panel-collapsed:not(.ai-workspace-mode) .ai-panel { display: none; }
 .app-shell.left-panel-collapsed .left-panel, .app-shell.ai-panel-collapsed .ai-panel { padding: 0; overflow: hidden; }
 .app-shell.left-panel-collapsed .left-panel > .panel-resize-handle,
 .app-shell.left-panel-collapsed .left-panel-body > :not(.left-actions),
@@ -3801,7 +3803,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .app-shell.shelf-mode .ai-panel { display: none; }
   .ai-panel > .panel-resize-handle { display: none; }
   .app-shell.ai-panel-collapsed .ai-panel { top: auto; height: 58px; padding-block: 8px; transform: translateY(0); }
-  .app-shell.ai-panel-collapsed:not(.ai-workspace-mode) .ai-panel { display: none; }
   .app-shell.ai-panel-collapsed .ai-panel > :not(.ai-heading) { display: none; }
   .app-shell.ai-panel-collapsed .ai-heading { display: flex; justify-content: space-between; padding: 0; }
   .app-shell.ai-workspace-mode.ai-panel-collapsed .ai-panel.is-conversation-workspace .ai-heading > :not(.panel-collapse-button) { display: flex; }
