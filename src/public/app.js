@@ -3255,6 +3255,10 @@ function renderAiRoleplayUserCharacterSelect() {
 
 const aiConversationOptionLockedMessage = "会话选项在会话开始后不支持修改，若需要修改，请新建会话";
 
+function aiConversationModelLocked() {
+  return typeof state.aiConversationModelId === "string" && state.aiConversationModelId.trim().length > 0;
+}
+
 function selectedAiModelLabel() {
   return $("#ai-model").selectedOptions[0]?.textContent?.trim() || "尚未选择模型";
 }
@@ -3263,20 +3267,21 @@ function syncAiModelPicker() {
   const select = $("#ai-model");
   const button = $("#ai-model-picker");
   const interactionBusy = aiInteractionBusy();
+  const modelLocked = aiConversationModelLocked();
   const selectedLabel = selectedAiModelLabel();
-  const label = state.aiPromptSent
+  const label = modelLocked
     ? `当前模型：${selectedLabel}。${aiConversationOptionLockedMessage}`
     : `选择实际使用模型：${selectedLabel}`;
   select.disabled = interactionBusy;
-  select.title = state.aiPromptSent ? aiConversationOptionLockedMessage : "";
+  select.title = modelLocked ? aiConversationOptionLockedMessage : "";
   button.disabled = interactionBusy;
   button.title = label;
   button.setAttribute("aria-label", label);
   if (interactionBusy) setAiModelPickerVisible(false);
 }
 
-function notifyAiConversationOptionLocked(select) {
-  if (!state.aiPromptSent) return false;
+function notifyAiConversationOptionLocked(select, locked = state.aiPromptSent) {
+  if (!locked) return false;
   const now = Date.now();
   const lastToastAt = Number(select.dataset.lockedToastAt ?? 0);
   if (now - lastToastAt > 500) toast(aiConversationOptionLockedMessage);
@@ -3284,9 +3289,16 @@ function notifyAiConversationOptionLocked(select) {
   return true;
 }
 
+function notifyAiConversationModelLocked(control) {
+  return notifyAiConversationOptionLocked(control, aiConversationModelLocked());
+}
+
 function blockLockedAiConversationOptionInteraction(event) {
   const select = event.currentTarget;
-  if (!notifyAiConversationOptionLocked(select)) return;
+  const locked = select.id === "ai-model"
+    ? notifyAiConversationModelLocked(select)
+    : notifyAiConversationOptionLocked(select);
+  if (!locked) return;
   event.preventDefault();
   event.stopPropagation();
 }
@@ -16996,7 +17008,7 @@ $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
 $("#ai-model").addEventListener("change", (event) => {
-  if (state.aiPromptSent) {
+  if (aiConversationModelLocked()) {
     event.currentTarget.value = state.aiConversationModelId ?? event.currentTarget.value;
     syncAiModelPicker();
     return toast(aiConversationOptionLockedMessage);
@@ -17007,7 +17019,7 @@ $("#ai-model").addEventListener("change", (event) => {
 });
 $("#ai-model-picker").addEventListener("click", async (event) => {
   const button = event.currentTarget;
-  if (notifyAiConversationOptionLocked(button)) return;
+  if (notifyAiConversationModelLocked(button)) return;
   const willOpen = $("#ai-model-popover").classList.contains("hidden");
   setAiContextDistributionVisible(false);
   setAiModelPickerVisible(willOpen);
