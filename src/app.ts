@@ -14,7 +14,11 @@ import { AI_PROVIDER_PROTOCOLS, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
 import { DEFAULT_AI_CHAT_TAB_LIMIT } from "./ai-chat-tab-limit.js";
 import type { AiRetryPolicy } from "./ai-retry.js";
-import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
+import {
+  MAX_AI_STREAM_IDLE_TIMEOUT_SECONDS,
+  MIN_AI_STREAM_IDLE_TIMEOUT_SECONDS,
+  normalizeAiStreamIdleTimeoutSeconds
+} from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
@@ -480,7 +484,8 @@ const modelSchema = z.object({
 
 const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
-  imageToolModelId: identifier.nullable().optional()
+  imageToolModelId: identifier.nullable().optional(),
+  streamIdleTimeoutSeconds: z.number().int().min(MIN_AI_STREAM_IDLE_TIMEOUT_SECONDS).max(MAX_AI_STREAM_IDLE_TIMEOUT_SECONDS).optional()
 });
 
 const aiUsageQuerySchema = z.object({
@@ -1113,6 +1118,7 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
     result.agentTools = [
       ...(permissions.characters !== "none" ? ["recall_self"] : []),
       ...(permissions.characters !== "none" && permissions.relationships !== "none" ? ["recall_relationship"] : []),
+      ...(permissions.prose !== "none" ? ["recall_story"] : []),
       "calculate_time"
     ];
   }
@@ -1255,6 +1261,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const platformAiSettings = store.getPlatformAiSettings();
+  const platformAiStreamIdleTimeoutMs = normalizeAiStreamIdleTimeoutSeconds(
+    Number(platformAiSettings.streamIdleTimeoutSeconds)
+  ) * 1_000;
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -1335,7 +1345,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     },
     attachmentStorage,
     {
-      interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS,
+      interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? platformAiStreamIdleTimeoutMs,
       retryPolicy: options.aiRetryPolicy,
       retrySleep: options.aiRetrySleep
     }
@@ -2550,7 +2560,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/platform/ai/settings", (request, response) => {
     const input = parse(aiPromptSchema, request.body);
     if (input.imageToolModelId) ai.assertImageToolModelAvailable(input.imageToolModelId);
-    data(response, store.updatePlatformAiSettings(input));
+    const settings = store.updatePlatformAiSettings(input);
+    ai.setInteractiveStreamIdleTimeoutSeconds(Number(settings.streamIdleTimeoutSeconds));
+    data(response, settings);
   });
   app.get("/api/platform/ai/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);

@@ -17,6 +17,7 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain("选择角色卡");
     expect(page).toContain("选择我的角色（可选）");
     expect(page).toContain("feature=ai-relationship-roleplay-v1");
+    expect(page).toContain("feature=ai-roleplay-story-recall-v1");
     expect(application).toContain('name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`');
     expect(application).toContain("与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……");
     expect(application).toContain("以 ${String(state.aiRoleplayUserCharacter.name)} 的身份与 ${String(state.aiRoleplayCharacter.name)} 对话……");
@@ -34,7 +35,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("select.addEventListener(\"keydown\", blockLockedAiConversationOptionKeydown);");
     expect(application).toContain("if (state.aiPromptSent) {");
     expect(application).toContain("return toast(aiConversationOptionLockedMessage);");
-    expect(application).toContain("角色扮演模式只使用角色自身的记忆");
+    expect(application).toContain("角色扮演模式可以查询角色记忆、人物关系和故事正文");
     expect(application).toContain("AI 会将每条用户消息视为该角色的发言或行动");
     expect(application).toContain("/task-type`");
     expect(application).toContain("/context-scope`");
@@ -42,9 +43,10 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("state.aiContextScope ?? { type: \"none\" }");
     expect(application).toContain('await prepareAiRequestConversation(requestHolder, selectedTaskType, requestScope.conversationScope);');
     expect(application).toContain("mergeAiReferenceScope(conversationScope, state.aiReferences)");
-    expect(application).toContain("Agent 只能查询与该角色自身有关的记忆");
+    expect(application).toContain("Agent 可以查询角色记忆、人物关系和故事正文");
     expect(application).toContain("recall_self: \"回忆自身\"");
     expect(application).toContain("recall_relationship: \"回忆人物关系\"");
+    expect(application).toContain("recall_story: \"回忆故事\"");
     expect(application).toContain("function syncAiTaskOptions()");
     expect(application).toContain('const taskType = roleplaySelected ? "chat" : selectedTaskType;');
     expect(styles).toContain(".prompt-options .ai-roleplay-character { min-width: 0; }");

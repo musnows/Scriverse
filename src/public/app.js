@@ -2035,6 +2035,7 @@ function createAiChatTabState(input = {}) {
     return existing;
   }
   const feed = input.feed ?? createAiChatFeed();
+  bindAiFeedAutoScroll(feed);
   const tab = aiChatTabManager.open({
     workId: String(state.work?.id ?? ""),
     conversationId: input.conversationId ?? null,
@@ -2404,7 +2405,7 @@ function resetAiFeed(
   const roleplayName = roleplayCharacter?.name;
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
-    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我只能通过角色卡和与自己有关的记忆回答。"}</p></div></div>`
+    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系和故事正文回答。"}</p></div></div>`
     : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
@@ -2449,6 +2450,75 @@ function renderConversationCompactionDivider(compactedMessageCount, totalMessage
   return appendAiContextCompactionDivider("conversation", messages[boundaryIndex] ?? null, feed);
 }
 
+function findAiRetryUserMessage(message) {
+  const feed = message.closest(".ai-feed");
+  if (!feed) return null;
+  const messages = [...feed.children].filter((candidate) => candidate.matches(".user-message, .assistant-message"));
+  const messageIndex = messages.indexOf(message);
+  for (let index = messageIndex - 1; index >= 0; index -= 1) {
+    if (messages[index].classList.contains("user-message")) return messages[index];
+  }
+  return null;
+}
+
+function aiMessageCitations(message) {
+  try {
+    const citations = JSON.parse(message.dataset.aiCitations ?? "[]");
+    return Array.isArray(citations) ? citations : [];
+  } catch {
+    return [];
+  }
+}
+
+async function retryAiMessage(message) {
+  const sourceTab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
+  const userMessage = findAiRetryUserMessage(message);
+  const prompt = userMessage?.dataset.copyText ?? "";
+  const userMessageId = userMessage?.dataset.messageId ?? "";
+  if (!sourceTab?.conversationId || !userMessageId || !prompt.trim()) {
+    toast("找不到需要重试的用户指令", "error");
+    return;
+  }
+  if (aiRequestManager.hasActive(sourceTab.id)) {
+    toast("当前对话仍在生成回复，请等待完成或取消后再重试", "error");
+    return;
+  }
+  if (!isActiveAiChatTab(sourceTab)) activateAiChatTab(sourceTab.id, { persistCurrent: false, force: true });
+  await sendAiWithOptions({
+    retry: {
+      message,
+      prompt,
+      citations: aiMessageCitations(userMessage),
+      userMessageId
+    }
+  });
+}
+
+function clearAiRetryComposer() {
+  clearAiPromptComposer();
+}
+
+function prepareAiRetryState(tab, modelId) {
+  tab.modelId = modelId;
+  tab.selectedModelId = modelId;
+  tab.promptSent = true;
+  clearAiChatTabComposer(tab);
+  if (isActiveAiChatTab(tab)) {
+    state.aiConversationModelId = modelId;
+    state.aiPromptSent = true;
+    syncAiTaskOptions();
+    renderAiRoleplayCharacterSelect();
+    renderAiQuickActions();
+    clearAiRetryComposer();
+  }
+}
+
+function aiRetryStreamRequestBody(body, retry) {
+  return retry?.userMessageId
+    ? { ...body, currentMessageId: retry.userMessageId }
+    : body;
+}
+
 function renderMessageCardActions(message) {
   let actions = message.querySelector(".message-card-actions");
   if (!actions) {
@@ -2477,7 +2547,20 @@ function renderMessageCardActions(message) {
     });
     actions.append(copy);
   }
-  if (message.dataset.messageId && message.classList.contains("assistant-message")) {
+  if (message.dataset.status === "failed" && message.classList.contains("assistant-message")) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "message-retry-button";
+    retry.setAttribute("aria-label", "重试");
+    retry.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.7 4L20 15"/><path d="M20 20v-5h-5"/></svg><span>重试</span>';
+    retry.addEventListener("click", () => {
+      retry.disabled = true;
+      void retryAiMessage(message).finally(() => {
+        if (retry.isConnected) retry.disabled = false;
+      });
+    });
+    actions.append(retry);
+  } else if (message.dataset.messageId && message.classList.contains("assistant-message")) {
     const fork = document.createElement("button");
     fork.type = "button";
     fork.className = "message-fork-button";
@@ -2539,6 +2622,7 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_self: "回忆自身",
   image: "读取设定图片",
   recall_relationship: "回忆人物关系",
+  recall_story: "回忆故事",
   calculate_time: "计算日期"
 };
 
@@ -2552,10 +2636,14 @@ const AI_TOOL_DESCRIPTIONS = {
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
   recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
+  recall_story: "查询当前作品已保存正文中的关键词，返回匹配段落及章节信息。",
   calculate_time: "计算日期差值，或从起始日期推算目标日期。"
 };
 
 const aiFeedScrollFrames = new WeakMap();
+const aiFeedAutoScrollStates = new WeakMap();
+const aiFeedScrollBindings = new WeakSet();
+const AI_FEED_BOTTOM_THRESHOLD_PX = 24;
 let markdownTableMenuTarget = null;
 let markdownTableMenuTrigger = null;
 
@@ -2596,7 +2684,30 @@ function openMarkdownTableMenu(header, clientX, clientY) {
   toggle.focus();
 }
 
+function aiFeedIsNearBottom(feed) {
+  if (!feed.clientHeight) return true;
+  return feed.scrollHeight - feed.scrollTop - feed.clientHeight <= AI_FEED_BOTTOM_THRESHOLD_PX;
+}
+
+function bindAiFeedAutoScroll(feed) {
+  if (!feed || aiFeedScrollBindings.has(feed)) return;
+  const update = () => {
+    const shouldFollow = aiFeedIsNearBottom(feed);
+    aiFeedAutoScrollStates.set(feed, shouldFollow);
+    if (shouldFollow) return;
+    const currentFrame = aiFeedScrollFrames.get(feed);
+    if (currentFrame === undefined) return;
+    window.cancelAnimationFrame(currentFrame);
+    aiFeedScrollFrames.delete(feed);
+  };
+  feed.addEventListener("scroll", update, { passive: true });
+  aiFeedScrollBindings.add(feed);
+  update();
+}
+
 function scrollAiFeedToBottom(feed = $("#ai-feed")) {
+  bindAiFeedAutoScroll(feed);
+  if (!aiFeedAutoScrollStates.get(feed)) return;
   feed.scrollTop = feed.scrollHeight;
   const currentFrame = aiFeedScrollFrames.get(feed);
   if (currentFrame !== undefined) window.cancelAnimationFrame(currentFrame);
@@ -2719,9 +2830,17 @@ function resolveAiProcessDuration(metadata, steps, completedAt) {
   return Math.max(0, completedTime - Math.min(...startedTimes));
 }
 
+function shouldRenderAiProcessStep(step) {
+  if (step?.type === "context_compaction") return true;
+  if (step?.type === "tool" && step.toolCall) return true;
+  if (!step?.content || !["thinking", "intermediate"].includes(step.type)) return false;
+  return step.type !== "intermediate" || typeof step.content !== "string" || step.content.trim().length > 0;
+}
+
 function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null) {
   message.querySelector(".ai-process-details")?.remove();
-  if (!Array.isArray(steps) || !steps.length) return;
+  const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);
+  if (!renderableSteps.length) return;
   const details = document.createElement("details");
   details.className = "ai-process-details";
   details.open = !completed;
@@ -2730,11 +2849,11 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null, visi
   title.textContent = completed ? "思考与执行过程" : "正在思考与执行";
   const status = document.createElement("small");
   const duration = durationMs === null || durationMs === undefined ? "" : formatAiProcessDuration(durationMs);
-  status.textContent = `${steps.length} 个步骤${duration ? ` · 耗时 ${duration}` : ""}`;
+  status.textContent = `${renderableSteps.length} 个步骤${duration ? ` · 耗时 ${duration}` : ""}`;
   summary.append(title, status);
   const list = document.createElement("div");
   list.className = "ai-process-list";
-  for (const step of steps) {
+  for (const step of renderableSteps) {
     if (step?.type === "context_compaction") {
       list.append(createAiContextCompactionDivider({
         kind: "tool",
@@ -2752,7 +2871,6 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null, visi
       list.append(tool);
       continue;
     }
-    if (!step?.content || !["thinking", "intermediate"].includes(step.type)) continue;
     const section = document.createElement("section");
     section.className = `ai-process-step ai-process-${step.type}-step`;
     const label = document.createElement("small");
@@ -3214,7 +3332,7 @@ function renderAiRoleplayCharacterSelect() {
   select.title = canSelectCharacter
     ? state.aiPromptSent
       ? aiConversationOptionLockedMessage
-      : "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
+      : "为当前对话选择角色卡；角色扮演时 Agent 可以查询角色记忆、人物关系和故事正文"
     : "当前账户没有角色模块读取权限";
   renderAiRoleplayUserCharacterSelect();
 }
@@ -3323,7 +3441,7 @@ function syncAiTaskOptions() {
   $("#ai-scope").disabled = interactionBusy || roleplaySelected;
   $("#ai-scope").title = state.aiPromptSent
     ? aiConversationOptionLockedMessage
-    : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
+    : roleplaySelected ? "角色扮演模式可以查询角色记忆、人物关系和故事正文" : "";
   syncAiModelPicker();
 }
 
@@ -10624,6 +10742,48 @@ function renderProviderCards(providers, models) {
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI、Anthropic 或 Google Vertex 接口地址和凭据，测试成功后再添加模型。");
 }
 
+async function deletePlatformModel(item) {
+  if (!item) return;
+  $("#form-dialog").close();
+  if (!await confirmToast(`确认删除模型“${item.displayName}”吗？删除后将从当前供应商的模型列表移除。`, {
+    title: "删除模型",
+    confirmLabel: "继续删除"
+  })) return;
+  if (!await confirmToast(`删除模型“${item.displayName}”后，相关默认模型设置会被清空，且无法恢复。仍要删除吗？`, {
+    title: "删除操作需要再次确认",
+    confirmLabel: "确认删除"
+  })) return;
+  try {
+    await api(`/api/models/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    await renderPlatformAiConfig();
+    await loadModels();
+    deleteToast(`已删除模型“${item.displayName}”`);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function deletePlatformProvider(item) {
+  if (!item) return;
+  $("#form-dialog").close();
+  if (!await confirmToast(`确认删除供应商“${item.name}”吗？该供应商下的模型也会一并删除。`, {
+    title: "删除供应商",
+    confirmLabel: "继续删除"
+  })) return;
+  if (!await confirmToast(`删除供应商“${item.name}”后，供应商、模型及相关默认模型设置都无法恢复。仍要删除吗？`, {
+    title: "删除操作需要再次确认",
+    confirmLabel: "确认删除"
+  })) return;
+  try {
+    await api(`/api/providers/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    await renderPlatformAiConfig();
+    await loadModels();
+    deleteToast(`已删除供应商“${item.name}”`);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 function bindPlatformProviderActions(host, providers, models) {
   host.querySelectorAll("[data-test-provider]").forEach((button) => button.addEventListener("click", async () => {
     const providerId = button.dataset.testProvider;
@@ -11003,7 +11163,7 @@ async function renderPlatformAiConfig() {
     const available = isSelectableModel({ ...model, providerStatus: provider?.status, providerConnectionStatus: provider?.connectionStatus });
     return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""} ${available || model.id === settings.imageToolModelId ? "" : "disabled"}>${esc(`${available ? "" : "不可用 · "}${modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })}`)}</option>`;
   }).join("");
-  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models)}</section>`;
+  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-stream-timeout-section"><div class="config-section-header"><div><h2>AI 流事件空闲超时</h2><p>首个流事件或相邻流事件在此时间内没有新数据时，请求会被关闭。默认 90 秒，最低 30 秒，最高 600 秒。</p></div></div><div class="platform-stream-timeout-panel"><label class="platform-stream-timeout-field"><span>超时时间（秒）</span><input id="platform-ai-stream-idle-timeout" type="number" min="30" max="600" step="1" value="${esc(String(settings.streamIdleTimeoutSeconds ?? 90))}" aria-label="AI 流事件空闲超时时间（秒）"></label><button id="save-platform-ai-stream-idle-timeout" class="ghost-button config-save-button" type="button">保存流超时设置</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models)}</section>`;
   $("#save-platform-system-prompt").addEventListener("click", async () => {
     const button = $("#save-platform-system-prompt");
     button.disabled = true;
@@ -11022,6 +11182,20 @@ async function renderPlatformAiConfig() {
     try {
       await api("/api/platform/ai/settings", { method: "PATCH", body: { imageToolModelId: $("#platform-image-tool-model").value || null } });
       toast("平台多模态读图默认模型已更新");
+      await renderPlatformAiConfig();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#save-platform-ai-stream-idle-timeout").addEventListener("click", async () => {
+    const button = $("#save-platform-ai-stream-idle-timeout");
+    const input = $("#platform-ai-stream-idle-timeout");
+    button.disabled = true;
+    try {
+      await api("/api/platform/ai/settings", { method: "PATCH", body: { streamIdleTimeoutSeconds: Number(input.value) } });
+      toast("AI 流事件空闲超时已更新");
       await renderPlatformAiConfig();
     } catch (error) {
       toast(error.message, "error");
@@ -14683,7 +14857,9 @@ function openProviderDialog(item) {
       await loadModels();
       if (item) toast(connectivityConfigurationSavedToast("provider"));
     },
-    item ? "协议、限流与凭据" : "OpenAI / Anthropic / Google Vertex"
+    item ? "协议、限流与凭据" : "OpenAI / Anthropic / Google Vertex", {
+      dangerAction: item ? { label: "删除供应商", onClick: () => deletePlatformProvider(item) } : null
+    }
   );
   const protocolSelect = $("#dialog-fields select[name='protocol']");
   const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
@@ -14728,7 +14904,9 @@ function openModelDialog(providerId, item = null, provider = null) {
     await renderPlatformAiConfig();
     await loadModels();
     if (item) toast(connectivityConfigurationSavedToast("model"));
-  }, item ? "模型配置" : "供应商模型");
+  }, item ? "模型配置" : "供应商模型", {
+    dangerAction: item ? { label: "删除模型", onClick: () => deletePlatformModel(item) } : null
+  });
   const modelIdInput = $("#dialog-fields input[name='modelId']");
   const contextWindowInput = $("#model-context-window");
   const contextWindowHint = $("#model-context-window-hint");
@@ -14794,20 +14972,23 @@ async function sendAi() {
   return sendAiWithOptions();
 }
 
-async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
+async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } = {}) {
   if (!state.work) return toast("请先选择作品", "error");
   const tab = activeAiChatTab();
   if (!tab) return toast("Agent 对话页签尚未就绪", "error");
   if (aiRequestManager.hasActive(tab.id)) return;
   const composerSnapshot = captureAiPromptComposer();
-  const instruction = composerSnapshot.text.trim();
+  const requestComposerSnapshot = retry
+    ? { text: retry.prompt, citations: retry.citations ?? [], references: [] }
+    : composerSnapshot;
+  const instruction = requestComposerSnapshot.text.trim();
   if (!instruction) return toast("请输入指令", "error");
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
-  const citations = composerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
+  const citations = requestComposerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   const selectedTaskType = $("#ai-task").value;
   persistActiveAiChatTab();
   tab.selectedModelId = $("#ai-model").value || tab.selectedModelId || null;
@@ -14818,6 +14999,9 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       conversationId: state.aiConversationId
     })
   };
+  if (retry?.userMessageId) {
+    requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: retry.userMessageId });
+  }
   setAiChatTabStatus(tab, "streaming");
   syncAiRequestControls();
   try {
@@ -14840,38 +15024,45 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       return toast(`对话配置锁定失败：${error.message}`, "error");
     }
     setAiChatTabStatus(tab, "streaming");
+    if (retry?.message?.isConnected) retry.message.remove();
     if (taskType !== "chat") {
-      try {
-        const request = assertAiRequestCurrent(requestHolder.snapshot);
-        const persistedUserMessage = await persistAiConversationMessage(
-          request.conversationId,
-          "user",
-          instruction,
-          citations,
-          { modelId },
-          { signal: request.signal }
-        );
-        assertAiRequestCurrent(request);
-        updateAiConversationSummaryFromMessage(persistedUserMessage);
-        requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
-        tab.modelId = modelId;
-        tab.selectedModelId = modelId;
-        tab.promptSent = true;
-        clearAiChatTabComposer(tab);
-        appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id, { tab });
-        if (isActiveAiChatTab(tab)) {
-          state.aiConversationModelId = modelId;
-          state.aiPromptSent = true;
-          syncAiTaskOptions();
-          renderAiRoleplayCharacterSelect();
-          renderAiQuickActions();
-          clearAiPromptComposer();
+      if (!retry) {
+        try {
+          const request = assertAiRequestCurrent(requestHolder.snapshot);
+          const persistedUserMessage = await persistAiConversationMessage(
+            request.conversationId,
+            "user",
+            instruction,
+            citations,
+            { modelId },
+            { signal: request.signal }
+          );
+          assertAiRequestCurrent(request);
+          updateAiConversationSummaryFromMessage(persistedUserMessage);
+          requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
+          tab.modelId = modelId;
+          tab.selectedModelId = modelId;
+          tab.promptSent = true;
+          clearAiChatTabComposer(tab);
+          appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id, { tab });
+          if (isActiveAiChatTab(tab)) {
+            state.aiConversationModelId = modelId;
+            state.aiPromptSent = true;
+            syncAiTaskOptions();
+            renderAiRoleplayCharacterSelect();
+            renderAiQuickActions();
+            clearAiPromptComposer();
+          }
+        } catch (error) {
+          if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
+          setAiChatTabStatus(tab, "error");
+          return toast(`对话记录创建失败：${error.message}`, "error");
         }
-      } catch (error) {
-        if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
-        setAiChatTabStatus(tab, "error");
-        return toast(`对话记录创建失败：${error.message}`, "error");
+      } else {
+        prepareAiRetryState(tab, modelId);
       }
+    } else if (retry) {
+      prepareAiRetryState(tab, modelId);
     }
     let assistantContent = "";
     let assistantMessage;
@@ -14879,14 +15070,14 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
     let persistedStreamMessage = null;
     let suggestion = null;
     if (taskType === "chat") {
-      const streamed = await streamChat(requestHolder, {
+      const streamed = await streamChat(requestHolder, aiRetryStreamRequestBody({
         instruction,
         scope,
         modelId,
         citations,
         conversationId: requestHolder.snapshot.conversationId,
         ...(ignoreContextWarning ? { ignoreContextWarning: true } : {})
-      }, createAiIdempotencyKey());
+      }, retry), createAiIdempotencyKey());
       const request = assertAiRequestCurrent(requestHolder.snapshot);
       if (streamed.action === "warn") return;
       assistantContent = streamed.content;
@@ -14929,7 +15120,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
           assistantContent,
           [],
           assistantMetadata,
-          { signal: request.signal, requestId: aiAssistantRequestId(request) }
+          { signal: request.signal, requestId: retry && taskType !== "chat" ? null : aiAssistantRequestId(request) }
         );
         assertAiRequestCurrent(request);
         updateAiConversationSummaryFromMessage(persistedAssistantMessage);
@@ -14964,8 +15155,11 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       return;
     }
     if (error?.code === "AI_CONVERSATION_RESPONSE_IN_PROGRESS") {
-      setAiChatTabComposerSnapshot(tab, composerSnapshot);
-      if (isActiveAiChatTab(tab)) restoreAiPromptComposer(composerSnapshot);
+      setAiChatTabComposerSnapshot(tab, requestComposerSnapshot);
+      if (isActiveAiChatTab(tab)) {
+        if (retry) restoreAiPromptComposer(requestComposerSnapshot);
+        else restoreAiPromptComposer(composerSnapshot);
+      }
       toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
       if (isActiveAiChatTab(tab)) $("#ai-prompt").focus();
       return;
@@ -15021,7 +15215,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
         failureMessage,
         [],
         {},
-        { requestId: aiAssistantRequestId(request) }
+        { requestId: retry && taskType !== "chat" ? null : aiAssistantRequestId(request) }
       );
       updateAiConversationSummaryFromMessage(persistedFailureMessage);
     } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
@@ -15168,7 +15362,11 @@ async function streamChat(requestHolder, body, idempotencyKey) {
           tab.selectedModelId = lockedModelId;
           tab.promptSent = true;
           clearAiChatTabComposer(tab);
-          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id, { tab });
+          const existingUserMessage = [...tab.feed.querySelectorAll(".user-message[data-message-id]")]
+            .find((candidate) => candidate.dataset.messageId === String(persistedUserMessage.id));
+          if (!existingUserMessage) {
+            appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id, { tab });
+          }
           if (isActiveAiChatTab(tab)) {
             state.aiConversationModelId = lockedModelId;
             state.aiPromptSent = true;
@@ -15389,7 +15587,10 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   if (role === "assistant") {
     renderAiProcessSteps(message, processSteps, true, processDurationMs);
   }
-  if (role === "user") attachUserCopyAction(message, text);
+  if (role === "user") {
+    message.dataset.aiCitations = JSON.stringify(Array.isArray(citations) ? citations : []);
+    attachUserCopyAction(message, text);
+  }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModelId = tab?.modelId ?? tab?.selectedModelId ?? $("#ai-model").value;
     const selectedModel = state.models.find((model) => model.id === selectedModelId) ?? state.models[0];
@@ -15403,6 +15604,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     message.append(meta);
     attachAssistantCopyAction(message, text);
   }
+  if (isFailure) renderMessageCardActions(message);
   attachMessageIdentity(message, messageId);
   feed.append(message);
   scrollAiFeedToBottom(feed);
