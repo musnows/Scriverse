@@ -15032,13 +15032,9 @@ function createAiStreamCharacterCount(value) {
   return count;
 }
 
-function renderAiStreamingCharacterProgress(meta, visibleCharacters, receivedCharacters) {
+function renderAiStreamingCharacterProgress(meta, visibleCharacters) {
   const visible = Math.max(0, Number(visibleCharacters) || 0);
-  const received = Math.max(visible, Number(receivedCharacters) || 0);
-  const children = ["正在生成 · ", createAiStreamCharacterCount(visible)];
-  if (received > visible) children.push(" / ", createAiStreamCharacterCount(received));
-  children.push(" 字");
-  meta.replaceChildren(...children);
+  meta.replaceChildren("正在生成 · ", createAiStreamCharacterCount(visible), " 字");
 }
 
 async function streamChat(requestHolder, body, idempotencyKey) {
@@ -15067,8 +15063,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     onRender: (text, progress) => {
       if (!aiRequestTargetsCurrentState(requestHolder.snapshot) || !mountAssistantMessage()) return;
       content.innerHTML = renderMarkdown(text);
-      const receivedCharacters = progress.visibleCharacters + progress.pendingCharacters;
-      renderAiStreamingCharacterProgress(meta, progress.visibleCharacters, receivedCharacters);
+      renderAiStreamingCharacterProgress(meta, progress.visibleCharacters);
       scrollAiFeedToBottom(feed);
     }
   });
@@ -15178,7 +15173,6 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         streamedText += delta;
         streamedPendingText += delta;
         typewriter.append(delta);
-        meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
         mountAssistantMessage();
         const step = { ...payload };
