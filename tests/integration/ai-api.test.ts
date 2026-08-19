@@ -1654,7 +1654,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(generationToolSnapshots[0]).toContain("story_index");
   });
 
-  it("角色扮演对话可将用户视为指定角色，并只提供自身回忆工具", async () => {
+  it("角色扮演对话可将用户视为指定角色，并提供角色记忆、关系和故事查询工具", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     const role = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
@@ -1708,7 +1708,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(roleplay.body.data.taskType).toBe("roleplay");
     expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     expect(roleplay.body.data.roleplayUserCharacter).toBeNull();
-    expect(roleplay.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
+    expect(roleplay.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "recall_story", "calculate_time"]);
     const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
     const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
     const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
@@ -1767,17 +1767,19 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).not.toContain("<extra_system_prompt>");
       expect(systemPrompt).not.toContain("<current_time>");
       expect(systemPrompt).toContain("使用 calculate_time");
+      expect(systemPrompt).toContain("使用 recall_story 按关键词查询当前正文");
       expect(JSON.stringify(body.messages)).toContain("<scene_context>");
       expect(JSON.stringify(body.messages)).toContain("<user_message>");
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship", "recall_story", "calculate_time"]);
       expect(body.tools?.[0]?.function?.description).toContain("只有值为 true 才能判定已死亡");
       expect(body.tools?.[0]?.function?.description).toContain("gender=unknown 时禁止");
       expect(body.tools?.[0]?.function?.description).toContain("字段为 false 时必须视为仍存活");
       expect(body.tools?.[1]?.function?.description).toContain("只能返回当前角色参与的关系");
       expect(body.tools?.[1]?.function?.description).toContain("未传入 characters");
       expect(body.tools?.[1]?.function?.description).toContain("关系双方的权威 gender");
-      expect(body.tools?.[2]?.function?.description).toContain("纯计算工具");
+      expect(body.tools?.[2]?.function?.description).toContain("查询当前作品已保存正文中的关键词");
+      expect(body.tools?.[3]?.function?.description).toContain("纯计算工具");
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
       expect(JSON.stringify(body.tools)).not.toContain("otherCharacter");
       if (completionCount === 1) {
@@ -1785,8 +1787,10 @@ describe("AI 供应商、模型与建议 API", () => {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "self-memory", type: "function", function: { name: "recall_self", arguments: JSON.stringify({ categories: ["profile", "sections", "chapters"] }) } },
           { id: "relationship-list", type: "function", function: { name: "recall_relationship", arguments: "{}" } },
+          { id: "story-memory", type: "function", function: { name: "recall_story", arguments: JSON.stringify({ keyword: "密钥" }) } },
           { id: "date-calculation", type: "function", function: { name: "calculate_time", arguments: JSON.stringify({ operation: "diff", startYear: 2025, startMonth: 1, startDay: 1, endYear: 2025, endMonth: 1, endDay: 8 }) } },
-          { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } }
+          { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } },
+          { id: "forbidden-grep", type: "function", function: { name: "grep", arguments: JSON.stringify({ keyword: "密钥" }) } }
         ] } }] }), { status: 200 });
       }
       if (completionCount === 2) {
@@ -1804,8 +1808,10 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(toolMessages[1]).toContain("relationshipCount");
         expect(toolMessages[1]).not.toContain("旧友");
         expect(toolMessages[1]).not.toContain("共同远航");
-        expect(toolMessages[2]).toContain('"totalDays":7');
-        expect(toolMessages[3]).toContain("TOOL_NOT_AVAILABLE");
+        expect(toolMessages[2]).toContain("顾潮独自藏起了只有自己知道的密钥");
+        expect(toolMessages[3]).toContain('"totalDays":7');
+        expect(toolMessages[4]).toContain("TOOL_NOT_AVAILABLE");
+        expect(toolMessages[5]).toContain("TOOL_NOT_AVAILABLE");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "relationship-details", type: "function", function: { name: "recall_relationship", arguments: JSON.stringify({ characters: ["潮哥", "沈星"] }) } }
         ] } }] }), { status: 200 });
@@ -1833,6 +1839,7 @@ describe("AI 供应商、模型与建议 API", () => {
       conversationId: conversation.body.data.id
     }).expect(200);
     expect(streamed.text).toContain('"name":"recall_self"');
+    expect(streamed.text).toContain('"name":"recall_story"');
     expect(streamed.text).toContain('"name":"story_index"');
     expect(streamed.text).toContain('"name":"calculate_time"');
     expect(streamed.text).toContain('"status":"failed"');
@@ -1851,14 +1858,14 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(reloaded.body.data.taskType).toBe("roleplay");
     expect(reloaded.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     expect(reloaded.body.data.roleplayUserCharacter).toMatchObject({ id: otherRole.body.data.id, name: "顾潮" });
-    expect(reloaded.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
+    expect(reloaded.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "recall_story", "calculate_time"]);
     const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
       messageId: reloaded.body.data.messages.at(-1).id
     }).expect(201);
     expect(forked.body.data.taskType).toBe("roleplay");
     expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     expect(forked.body.data.roleplayUserCharacter).toMatchObject({ id: otherRole.body.data.id, name: "顾潮" });
-    expect(forked.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
+    expect(forked.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "recall_story", "calculate_time"]);
     const lockedUserRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
       characterId: role.body.data.id,
       userCharacterId: thirdRole.body.data.id

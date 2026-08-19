@@ -2404,7 +2404,7 @@ function resetAiFeed(
   const roleplayName = roleplayCharacter?.name;
   const roleplayUserName = roleplayUserCharacter?.name;
   feed.innerHTML = roleplayName
-    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我只能通过角色卡和与自己有关的记忆回答。"}</p></div></div>`
+    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。${roleplayUserName ? `你将以 ${esc(roleplayUserName)} 的身份与我互动。` : "我可以通过角色卡、人物关系和故事正文回答。"}</p></div></div>`
     : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
@@ -2539,6 +2539,7 @@ const AI_TOOL_DISPLAY_NAMES = {
   recall_self: "回忆自身",
   image: "读取设定图片",
   recall_relationship: "回忆人物关系",
+  recall_story: "回忆故事",
   calculate_time: "计算日期"
 };
 
@@ -2552,6 +2553,7 @@ const AI_TOOL_DESCRIPTIONS = {
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
   recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
+  recall_story: "查询当前作品已保存正文中的关键词，返回匹配段落及章节信息。",
   calculate_time: "计算日期差值，或从起始日期推算目标日期。"
 };
 
@@ -3214,7 +3216,7 @@ function renderAiRoleplayCharacterSelect() {
   select.title = canSelectCharacter
     ? state.aiPromptSent
       ? aiConversationOptionLockedMessage
-      : "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
+      : "为当前对话选择角色卡；角色扮演时 Agent 可以查询角色记忆、人物关系和故事正文"
     : "当前账户没有角色模块读取权限";
   renderAiRoleplayUserCharacterSelect();
 }
@@ -3323,7 +3325,7 @@ function syncAiTaskOptions() {
   $("#ai-scope").disabled = interactionBusy || roleplaySelected;
   $("#ai-scope").title = state.aiPromptSent
     ? aiConversationOptionLockedMessage
-    : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
+    : roleplaySelected ? "角色扮演模式可以查询角色记忆、人物关系和故事正文" : "";
   syncAiModelPicker();
 }
 

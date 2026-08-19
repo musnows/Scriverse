@@ -1113,6 +1113,7 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
     result.agentTools = [
       ...(permissions.characters !== "none" ? ["recall_self"] : []),
       ...(permissions.characters !== "none" && permissions.relationships !== "none" ? ["recall_relationship"] : []),
+      ...(permissions.prose !== "none" ? ["recall_story"] : []),
       "calculate_time"
     ];
   }
