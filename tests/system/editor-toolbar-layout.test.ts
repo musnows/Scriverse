@@ -31,10 +31,15 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('id="add-line-annotation"');
     expect(page.text).toContain('id="add-line-annotation" type="button" role="menuitem">添加评论</button>');
     expect(page.text).toContain('id="add-line-todo"');
+    expect(page.text).toContain('&feature=annotation-precise-locate-v1');
+    expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=markdown-word-count-five-digit-v2/u);
+    expect(page.text).toMatch(/styles\.css\?[^"\n]*feature=annotation-marker-offset-v1/u);
     expect(application.text).toContain("async function createSelectedLineAnnotation(");
     expect(application.text).toContain("function chapterAnnotationCard(");
     expect(application.text).toContain("function bindChapterAnnotationCards(");
     expect(application.text).toContain("function renderChapterAnnotations(");
+    expect(application.text).toContain("function revealChapterLines(startLine, endLine)");
+    expect(application.text).toContain("revealChapterLines(annotation.startLine, annotation.endLine);");
     expect(application.text).toContain("/annotation-counts");
     expect(application.text).toContain("lineAnnotationCount");
     expect(application.text).toContain("?line=${encodeURIComponent(line)}");
@@ -48,6 +53,7 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".chapter-annotation-card");
     expect(styles.text).toContain(".chapter-comment-module-list");
     expect(styles.text).toContain(".chapter-annotation-source");
+    expect(styles.text).toContain(".chapter-line-annotation-count { position: absolute; top: -4px; right: -10px;");
     expect(styles.text).toContain("font-family: var(--font-mono), monospace; font-size: 10px; line-height: 1.6");
     expect(page.text).toContain(">编辑</button>");
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
@@ -131,6 +137,7 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('.chapter-title { min-height: 36px; }');
     expect(styles.text).toContain('.vditor-editor-host .vditor-toolbar { display: flex; align-items: center; flex: 0 0 auto; }');
     expect(styles.text).toContain('.markdown-word-count { display: inline-flex; align-items: center; align-self: center; min-height: 28px; margin-left: 24px;');
+    expect(styles.text).toContain('.markdown-word-count-value { display: inline-block; min-width: 6ch; font-variant-numeric: tabular-nums; text-align: right; }');
     expect(styles.text).toContain('.vditor-editor-host .vditor-line-numbers { display: none; position: absolute;');
     expect(styles.text).toContain('.vditor-editor-host .vditor-line-numbers { display: none; position: absolute; z-index: 1; inset: 0 auto 0 0; width: 42px; padding: 0; overflow: hidden; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 88%, transparent); color: var(--muted); font: 12px/1.75 var(--font-latin), monospace; text-align: center;');
     expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-line-numbers { display: block; }');
@@ -142,6 +149,8 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain('name: "line-number"');
     expect(application.text).toContain('function toggleVditorLineNumbers(editor)');
     expect(application.text).toContain('function updateVditorLineNumbers(editor, markdown)');
+    expect(application.text).toContain('data-markdown-word-count-value');
+    expect(application.text).toContain('unit.textContent = " 字";');
     expect(application.text).toContain('function collectVditorVisualLineRects(surface)');
     expect(application.text).toContain('buildVditorLineNumberRows');
     expect(styles.text).toContain('.chapter-stats { display: none; }');

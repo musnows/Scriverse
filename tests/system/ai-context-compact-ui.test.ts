@@ -25,6 +25,7 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(page).toContain('id="ai-context-compact"');
     expect(page).toContain('id="ai-context-dismiss"');
     expect(page).toContain('id="ai-context-new-conversation"');
+    expect(page).toContain('&feature=context-percent-format-v1');
     expect(page).toContain("当前对话上下文过长，是否进行压缩？不压缩可能会导致后续请求失败");
     expect(page).toContain('id="ai-context-compact" type="button">压缩</button>');
     expect(page).toContain('id="ai-context-dismiss" type="button">忽略</button>');
@@ -67,7 +68,7 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain("normalizeAiContextTokenDistribution");
     expect(application).toContain("formatAiContextUsagePercent");
     expect(application).toContain("formatAiContextUsagePercent(displayUsage.inputTokens, displayUsage.contextWindow)");
-    expect(application).toContain('/ai-context-meter.js?v=20260812-context-usage-remaining-v2');
+    expect(application).toContain('/ai-context-meter.js?v=20260819-context-percent-v1');
     expect(application).toContain("setAiContextDistributionVisible");
     expect(styles).toContain(".ai-context-popover::after { position: absolute; right: 87px;");
     expect(styles).toContain(".ai-context-popover.hidden { display: none; }");

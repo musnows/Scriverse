@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "../../src/public/ai-context-meter.js";
 
 describe("AI 上下文用量提示", () => {
-  it("按实际占用量显示一位小数百分比", () => {
+  it("低于 10% 时保留一位小数，其余显示整数", () => {
     expect(formatAiContextUsagePercent(2_177, 200_000)).toBe("1.1%");
     expect(formatAiContextUsagePercent(962, 200_000)).toBe("0.5%");
     expect(formatAiContextUsagePercent(0, 0)).toBe("0.0%");
+    expect(formatAiContextUsagePercent(48_400, 200_000)).toBe("24%");
+    expect(formatAiContextUsagePercent(20_000, 200_000)).toBe("10%");
+    expect(formatAiContextUsagePercent(19_999, 200_000)).toBe("10%");
   });
 
   it("分别显示作品、对话和输出预留预算", () => {
