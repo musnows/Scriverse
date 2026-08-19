@@ -25,6 +25,10 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('eventName === "process_step"');
     expect(application).toContain('`调用了 ${name} 工具`');
     expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null)");
+    expect(application).toContain("function shouldRenderAiProcessStep(step)");
+    expect(application).toContain('step.type !== "intermediate" || typeof step.content !== "string" || step.content.trim().length > 0');
+    expect(application).toContain("const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);");
+    expect(application).toContain("if (!renderableSteps.length) return;");
     expect(application).toContain("const processStepTypewriters = new Map();");
     expect(application).toContain("processStepTypewriter(targetStep).append(step.content)");
     expect(application).toContain('step.type === "intermediate" && typeof step.content === "string"');

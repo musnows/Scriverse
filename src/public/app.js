@@ -2719,9 +2719,17 @@ function resolveAiProcessDuration(metadata, steps, completedAt) {
   return Math.max(0, completedTime - Math.min(...startedTimes));
 }
 
+function shouldRenderAiProcessStep(step) {
+  if (step?.type === "context_compaction") return true;
+  if (step?.type === "tool" && step.toolCall) return true;
+  if (!step?.content || !["thinking", "intermediate"].includes(step.type)) return false;
+  return step.type !== "intermediate" || typeof step.content !== "string" || step.content.trim().length > 0;
+}
+
 function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null) {
   message.querySelector(".ai-process-details")?.remove();
-  if (!Array.isArray(steps) || !steps.length) return;
+  const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);
+  if (!renderableSteps.length) return;
   const details = document.createElement("details");
   details.className = "ai-process-details";
   details.open = !completed;
@@ -2730,11 +2738,11 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null, visi
   title.textContent = completed ? "思考与执行过程" : "正在思考与执行";
   const status = document.createElement("small");
   const duration = durationMs === null || durationMs === undefined ? "" : formatAiProcessDuration(durationMs);
-  status.textContent = `${steps.length} 个步骤${duration ? ` · 耗时 ${duration}` : ""}`;
+  status.textContent = `${renderableSteps.length} 个步骤${duration ? ` · 耗时 ${duration}` : ""}`;
   summary.append(title, status);
   const list = document.createElement("div");
   list.className = "ai-process-list";
-  for (const step of steps) {
+  for (const step of renderableSteps) {
     if (step?.type === "context_compaction") {
       list.append(createAiContextCompactionDivider({
         kind: "tool",
@@ -2752,7 +2760,6 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null, visi
       list.append(tool);
       continue;
     }
-    if (!step?.content || !["thinking", "intermediate"].includes(step.type)) continue;
     const section = document.createElement("section");
     section.className = `ai-process-step ai-process-${step.type}-step`;
     const label = document.createElement("small");
