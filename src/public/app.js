@@ -22,7 +22,7 @@ import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-s
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
-import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
+import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260819-context-percent-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
@@ -11683,6 +11683,9 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   const cacheDescription = summary.cacheHitRate === null || summary.cacheHitRate === undefined
     ? "供应商尚未返回可计算的缓存明细"
     : `${cachedInputTokens.toLocaleString("zh-CN")} / ${cacheEligibleInputTokens.toLocaleString("zh-CN")} 个可统计输入 Token 命中缓存`;
+  const estimatedCost = formatEstimatedCost(summary.estimatedCost);
+  const unpricedModelCount = Math.max(0, Math.round(Number(summary.unpricedModelCount) || 0));
+  const pricingDescription = "根据 LiteLLM 模型 ID 价格表估算，价格单位为美元；未匹配模型不计入。";
   const estimateNote = estimatedRequests > 0
     ? `其中 ${estimatedRequests.toLocaleString("zh-CN")} 次调用包含历史或供应商缺失用量时的估算。`
     : "全部用量均来自供应商返回的 Token 统计。";
@@ -11698,12 +11701,12 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
     <div class="config-section-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div></div>
     <div class="usage-stat-grid">
-      <article class="usage-stat is-primary"><span>总消耗</span><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
+      <article class="usage-stat is-primary"><div class="usage-stat-label"><span>总消耗</span><span class="usage-cost-bubble" title="${esc(pricingDescription)}">预计 ${esc(estimatedCost)}</span></div><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
       <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small>${Number(summary.inputTokens || 0).toLocaleString("zh-CN")}</small></article>
       <article class="usage-stat"><span>输出 Token</span><strong>${esc(formatTokenCount(summary.outputTokens))}</strong><small>${Number(summary.outputTokens || 0).toLocaleString("zh-CN")}</small></article>
       <article class="usage-stat"><span>缓存命中率</span><strong>${esc(formatCacheHitRate(summary.cacheHitRate))}</strong><small>${esc(cacheDescription)}</small></article>
     </div>
-    <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)}</p>
+    <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)} 有 ${unpricedModelCount.toLocaleString("zh-CN")} 个模型在价格表中未找到对应价格</p>
     <section class="usage-calendar-section" aria-labelledby="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">
       <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格展示过去 53 周；颜色越深，当天消耗越高。</p></div></header>
       ${tokenUsageCalendarMarkup(usage?.daily)}

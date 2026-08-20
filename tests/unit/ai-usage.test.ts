@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "../../src/public/ai-usage.js";
+import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "../../src/public/ai-usage.js";
 
 describe("AI 用量日历", () => {
   it("生成按周排列的 GitHub 风格年度网格", () => {
@@ -23,5 +23,8 @@ describe("AI 用量日历", () => {
     expect(formatTokenCount(12000)).toContain("1.2");
     expect(formatCacheHitRate(46.7)).toBe("46.7%");
     expect(formatCacheHitRate(null)).toBe("暂无数据");
+    expect(formatEstimatedCost(0.000039)).toBe("$0.000039");
+    expect(formatEstimatedCost(0)).toBe("$0.00");
+    expect(formatEstimatedCost(null)).toBe("暂无价格");
   });
 });

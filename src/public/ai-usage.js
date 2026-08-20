@@ -27,6 +27,17 @@ export function formatCacheHitRate(value) {
   return Number.isFinite(rate) ? `${rate.toFixed(1).replace(/\.0$/u, "")}%` : "暂无数据";
 }
 
+export function formatEstimatedCost(value) {
+  if (value === null || value === undefined || value === "") return "暂无价格";
+  const cost = Number(value);
+  if (!Number.isFinite(cost) || cost < 0) return "暂无价格";
+  const maximumFractionDigits = cost < 0.01 ? 6 : cost < 1 ? 4 : 2;
+  return `$${cost.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits
+  })}`;
+}
+
 export function buildUsageCalendar(daily, today = new Date(), weekCount = 53) {
   const normalizedToday = startOfLocalDay(today);
   const start = new Date(normalizedToday);

@@ -25,6 +25,7 @@ import {
   type CompletionToolCall,
   type MaxTokensParameter
 } from "./ai-protocol.js";
+import { estimateLiteLlmUsageCost, type ModelTokenUsage } from "./ai-model-pricing.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
@@ -2902,6 +2903,25 @@ export class AiManager {
       timezoneOffset,
       ...scopeParams
     ).map((row) => this.mapTokenUsageRow(row, { date: stringValue(row, "usage_date") }));
+    const modelUsages: ModelTokenUsage[] = this.store.db.all(
+      `SELECT
+         COALESCE(model.model_id, call.model_id) AS usage_model_id,
+         COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
+         COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
+         COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens
+       FROM ai_calls call
+       JOIN works work ON work.id = call.work_id
+       LEFT JOIN models model ON model.id = call.model_id
+       WHERE COALESCE(work.is_internal, 0) = 0 AND ${usageFilter}${scopeSql}
+       GROUP BY COALESCE(model.model_id, call.model_id)`,
+      ...scopeParams
+    ).map((row) => ({
+      modelId: stringValue(row, "usage_model_id"),
+      inputTokens: numberValue(row, "input_tokens"),
+      outputTokens: numberValue(row, "output_tokens"),
+      cachedInputTokens: numberValue(row, "cached_input_tokens")
+    }));
+    const pricing = estimateLiteLlmUsageCost(modelUsages);
     const works = includeWorks
       ? this.store.db.all(
         `SELECT
@@ -2930,7 +2950,8 @@ export class AiManager {
     return {
       summary: this.mapTokenUsageRow(summary, {
         firstUsedAt: summary.first_used_at === null || summary.first_used_at === undefined ? null : stringValue(summary, "first_used_at"),
-        lastUsedAt: summary.last_used_at === null || summary.last_used_at === undefined ? null : stringValue(summary, "last_used_at")
+        lastUsedAt: summary.last_used_at === null || summary.last_used_at === undefined ? null : stringValue(summary, "last_used_at"),
+        ...pricing
       }),
       daily,
       ...(works ? { works } : {}),

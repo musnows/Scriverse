@@ -26,15 +26,17 @@ describe("AI Token 用量统计 API", () => {
       cachedInputTokens: number,
       cacheEligibleInputTokens: number,
       source: "reported" | "estimated",
-      createdAt: string
+      createdAt: string,
+      modelId = "model"
     ) => runtime.database.run(
       `INSERT INTO ai_calls (
          id, work_id, task_type, provider_id, model_id, context_scope_json, status,
          input_tokens, output_tokens, cached_input_tokens, cache_eligible_input_tokens,
          cache_usage_available, token_usage_source, created_at, completed_at
-       ) VALUES (?, ?, 'chat', 'provider', 'model', '{}', 'completed', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, 'chat', 'provider', ?, '{}', 'completed', ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       workId,
+      modelId,
       inputTokens,
       outputTokens,
       cachedInputTokens,
@@ -44,9 +46,9 @@ describe("AI Token 用量统计 API", () => {
       createdAt,
       createdAt
     );
-    insertCall("call-1", String(firstWork.id), 100, 20, 40, 100, "reported", "2026-07-26T16:30:00.000Z");
-    insertCall("call-2", String(firstWork.id), 30, 10, 0, 0, "estimated", "2026-07-27T05:00:00.000Z");
-    insertCall("call-3", String(secondWork.id), 200, 50, 100, 200, "reported", "2026-07-27T08:00:00.000Z");
+    insertCall("call-1", String(firstWork.id), 100, 20, 40, 100, "reported", "2026-07-26T16:30:00.000Z", "deepseek-chat");
+    insertCall("call-2", String(firstWork.id), 30, 10, 0, 0, "estimated", "2026-07-27T05:00:00.000Z", "deepseek-chat");
+    insertCall("call-3", String(secondWork.id), 200, 50, 100, 200, "reported", "2026-07-27T08:00:00.000Z", "not-in-price-table");
     vi.stubEnv("TZ", "Asia/Shanghai");
     await request(runtime.app)
       .patch(`/api/works/${firstWork.id}/ai-settings`)
@@ -72,7 +74,9 @@ describe("AI Token 用量统计 API", () => {
       cacheEligibleInputTokens: 300,
       cacheHitRate: 46.7,
       requestCount: 3,
-      estimatedRequestCount: 1
+      estimatedRequestCount: 1,
+      estimatedCost: 0.00003892,
+      unpricedModelCount: 1
     });
     expect(platform.body.data.daily).toEqual([
       expect.objectContaining({ date: "2026-07-27", totalTokens: 410, requestCount: 3 })
@@ -81,6 +85,7 @@ describe("AI Token 用量统计 API", () => {
       expect.objectContaining({ workId: secondWork.id, workTitle: "第二部作品", totalTokens: 250, cacheHitRate: 50 }),
       expect.objectContaining({ workId: firstWork.id, workTitle: "第一部作品", totalTokens: 160, cacheHitRate: 40 })
     ]);
+    expect(platform.body.data.summary.estimatedCost).toBeCloseTo(0.00003892, 10);
 
     const work = await request(runtime.app)
       .get(`/api/works/${firstWork.id}/ai-settings/usage?timezoneOffset=480`)
@@ -91,7 +96,9 @@ describe("AI Token 用量统计 API", () => {
       outputTokens: 30,
       cacheHitRate: 40,
       requestCount: 2,
-      estimatedRequestCount: 1
+      estimatedRequestCount: 1,
+      estimatedCost: 0.00003892,
+      unpricedModelCount: 0
     });
     expect(work.body.data).not.toHaveProperty("works");
     expect(work.body.data.quota).toMatchObject({
