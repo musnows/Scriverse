@@ -911,7 +911,7 @@ describe("AI 供应商、模型与建议 API", () => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }>; tools?: Array<{ function?: { name?: string } }> };
       if (completionCount === 1) {
         expect(body.messages[0]?.content).toContain("预加载上下文为空或不足时，必须先调用工具主动查询");
-        expect(body.messages[0]?.content).toContain("整体介绍、作品基本信息、目录或章节定位优先调用 story_index");
+        expect(body.messages[0]?.content).toContain("整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index");
         expect(body.messages[1]?.content).toContain("本轮未预加载作品上下文");
         expect(body.tools?.map((tool) => tool.function?.name)).toContain("story_index");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "project-index", type: "function", function: { name: "story_index", arguments: "{}" } }] } }] }), { status: 200 });
@@ -1027,6 +1027,8 @@ describe("AI 供应商、模型与建议 API", () => {
       }
       const toolMessage = body.messages.find((message) => message.role === "tool");
       expect(toolMessage?.content).toContain("第一章");
+      expect(toolMessage?.content).toContain('"storyOrdering"');
+      expect(toolMessage?.content).toContain('"storyOrder"');
       return new Response(JSON.stringify({ choices: [{ message: { content: "已根据章节目录回答。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
 
@@ -1180,14 +1182,14 @@ describe("AI 供应商、模型与建议 API", () => {
       }
       const results = new Map(body.messages.filter((message) => message.role === "tool").map((message) => [message.tool_call_id, JSON.parse(message.content ?? "{}") as Record<string, unknown>]));
       expect(results.size).toBe(calls.length);
-      expect(results.get("index-default")).toMatchObject({ ok: true, data: { offset: 0, totalChapters: 1 } });
-      expect(results.get("index-page")).toMatchObject({ ok: true, data: { chapters: [{ title: "第一章" }] } });
-      expect(results.get("chapter-summary")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, summary: "" }] } });
+      expect(results.get("index-default")).toMatchObject({ ok: true, data: { offset: 0, totalChapters: 1, storyOrdering: expect.any(Object) } });
+      expect(results.get("index-page")).toMatchObject({ ok: true, data: { chapters: [{ title: "第一章", storyOrder: { volume: { storyOrder: 0 }, chapter: { order: 0 } } }] } });
+      expect(results.get("chapter-summary")).toMatchObject({ ok: true, data: { storyOrdering: expect.any(Object), chapters: [{ chapterId, summary: "", storyOrder: { volume: { storyOrder: 0 }, chapter: { order: 0 } } }] } });
       expect(results.get("chapter-summary")).not.toHaveProperty("data.chapters.0.content");
       expect(results.get("chapter-content")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, content: "林舟启动了飞船。" }] } });
       expect(results.get("chapter-content")).not.toHaveProperty("data.chapters.0.summary");
       expect(results.get("chapter-both")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, summary: "", content: "林舟启动了飞船。" }] } });
-      expect(results.get("grep-default")).toMatchObject({ ok: true, data: { keyword: "林舟", limit: 20, matches: [{ chapterId, chapterTitle: "第一章", paragraph: "林舟启动了飞船。" }] } });
+      expect(results.get("grep-default")).toMatchObject({ ok: true, data: { keyword: "林舟", limit: 20, storyOrdering: expect.any(Object), matches: [{ chapterId, chapterTitle: "第一章", paragraph: "林舟启动了飞船。", storyOrder: { volume: { storyOrder: 0 }, chapter: { order: 0 } } }] } });
       expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
       expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "hybrid_exact_phonetic" } });
       expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matchMode: "hybrid_exact_phonetic", matches: expect.any(Array) } });
@@ -1718,6 +1720,14 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
       content: "林舟启动了飞船。\n\n顾潮独自藏起了只有自己知道的密钥。"
     }).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/timeline`).send({
+      name: "顾潮藏起密钥",
+      timeLabel: "远航第 12 日",
+      timeSort: 12,
+      chapterIds: [chapterId],
+      participantIds: [role.body.data.id],
+      status: "confirmed"
+    }).expect(201);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const roleplay = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
       characterId: role.body.data.id
@@ -1785,6 +1795,7 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).not.toContain("<current_time>");
       expect(systemPrompt).toContain("使用 calculate_time");
       expect(systemPrompt).toContain("使用 recall_story 按关键词查询当前正文");
+      expect(systemPrompt).toContain("storyOrdering 与 storyOrder");
       expect(JSON.stringify(body.messages)).toContain("<scene_context>");
       expect(JSON.stringify(body.messages)).toContain("<user_message>");
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
@@ -1817,6 +1828,8 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(toolMessages[0]).toContain('"isDead":false');
         expect(toolMessages[0]).toContain("第一次看见星舰");
         expect(toolMessages[0]).toContain("林舟启动了飞船");
+        expect(toolMessages[0]).toContain('"storyOrdering"');
+        expect(toolMessages[0]).toContain('"timeSort":12');
         expect(toolMessages[0]).not.toContain("其他角色的私密档案");
         expect(toolMessages[0]).not.toContain("只有自己知道的密钥");
         expect(toolMessages[1]).toContain("顾潮");
@@ -1826,6 +1839,9 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(toolMessages[1]).not.toContain("旧友");
         expect(toolMessages[1]).not.toContain("共同远航");
         expect(toolMessages[2]).toContain("顾潮独自藏起了只有自己知道的密钥");
+        expect(toolMessages[2]).toContain('"storyOrdering"');
+        expect(toolMessages[2]).toContain('"storyOrder"');
+        expect(toolMessages[2]).toContain('"timeSort":12');
         expect(toolMessages[3]).toContain('"totalDays":7');
         expect(toolMessages[4]).toContain("TOOL_NOT_AVAILABLE");
         expect(toolMessages[5]).toContain("TOOL_NOT_AVAILABLE");

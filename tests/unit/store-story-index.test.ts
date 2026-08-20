@@ -43,8 +43,26 @@ describe("story_index 目录读取", () => {
     expect(page).toEqual({
       totalChapters: 4,
       chapters: [
-        { id: chapters[1]?.id, volumeTitle: "第一卷", title: "第二章", versionNo: 1, summary: "第 2 章摘要" },
-        { id: chapters[2]?.id, volumeTitle: "第二卷", title: "第三章", versionNo: 1, summary: "第 3 章摘要" }
+        {
+          id: chapters[1]?.id,
+          title: "第二章",
+          versionNo: 1,
+          summary: "第 2 章摘要",
+          storyOrder: {
+            volume: { id: firstVolume.id, title: "第一卷", directoryOrder: 0, storyOrder: 0 },
+            chapter: { order: 1, type: "正文", isLatestByStructure: false }
+          }
+        },
+        {
+          id: chapters[2]?.id,
+          title: "第三章",
+          versionNo: 1,
+          summary: "第 3 章摘要",
+          storyOrder: {
+            volume: { id: secondVolume.id, title: "第二卷", directoryOrder: 1, storyOrder: 1 },
+            chapter: { order: 0, type: "正文", isLatestByStructure: false }
+          }
+        }
       ]
     });
     expect(JSON.stringify(page)).not.toContain("正文内容");
@@ -83,5 +101,65 @@ describe("story_index 目录读取", () => {
       expect.objectContaining({ id: chapter.id, title: "第一章" })
     ]);
     expect(JSON.stringify(page)).not.toContain("作者的话");
+  });
+
+  it("按独立分卷剧情顺序分页并完整返回可比较时间线信息", () => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "倒叙目录" });
+    const directoryFirst = runtime.store.createVolume(String(work.id), { title: "回忆卷", storyOrder: 8 });
+    const directorySecond = runtime.store.createVolume(String(work.id), { title: "序幕卷", storyOrder: 1 });
+    const laterChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(directoryFirst.id),
+      title: "重返港口",
+      content: "较晚剧情。"
+    });
+    const earlierChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(directorySecond.id),
+      title: "初次离港",
+      content: "较早剧情。"
+    });
+    const track = runtime.store.createTimelineTrack(String(work.id), { name: "主线" });
+    runtime.store.createTimelineEvent(String(work.id), {
+      name: "离港",
+      trackId: String(track.id),
+      timeLabel: "第 1 日",
+      timeSort: 1,
+      chapterIds: [String(earlierChapter.id)],
+      status: "confirmed"
+    });
+    runtime.store.createTimelineEvent(String(work.id), {
+      name: "返港",
+      trackId: String(track.id),
+      timeLabel: "第 9 日",
+      timeSort: 9,
+      chapterIds: [String(laterChapter.id)],
+      status: "confirmed"
+    });
+    runtime.store.createTimelineEvent(String(work.id), {
+      name: "候选事件",
+      trackId: String(track.id),
+      timeLabel: "待定",
+      timeSort: 99,
+      chapterIds: [String(laterChapter.id)],
+      status: "candidate"
+    });
+
+    const page = runtime.store.getStoryIndexChapterPage(String(work.id), 0, 20, {
+      excludeAuthorNotes: true,
+      includeTimeline: true
+    });
+
+    expect(page.chapters.map((chapter) => chapter.id)).toEqual([earlierChapter.id, laterChapter.id]);
+    expect(page.chapters[0]?.storyOrder).toMatchObject({
+      volume: { id: directorySecond.id, directoryOrder: 1, storyOrder: 1 },
+      chapter: { order: 0, isLatestByStructure: false },
+      confirmedTimelineEvents: [{ name: "离港", timeSort: 1, trackId: track.id, trackName: "主线" }]
+    });
+    expect(page.chapters[1]?.storyOrder).toMatchObject({
+      volume: { id: directoryFirst.id, directoryOrder: 0, storyOrder: 8 },
+      chapter: { order: 0, isLatestByStructure: true },
+      confirmedTimelineEvents: [{ name: "返港", timeSort: 9, trackId: track.id, trackName: "主线" }]
+    });
+    expect(JSON.stringify(page)).not.toContain("候选事件");
   });
 });

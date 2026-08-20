@@ -673,11 +673,37 @@ export type StoryIndexChapterPage = {
   totalChapters: number;
   chapters: Array<{
     id: string;
-    volumeTitle: string;
     title: string;
     versionNo: number;
     summary: string;
+    storyOrder: ChapterStoryOrderDetails;
   }>;
+};
+
+export type ConfirmedTimelineOrderEvent = {
+  id: string;
+  name: string;
+  eventType: string;
+  timeLabel: string;
+  timeSort: number;
+  trackId: string | null;
+  trackName: string | null;
+  trackOrder: number | null;
+};
+
+export type ChapterStoryOrderDetails = {
+  volume: {
+    id: string;
+    title: string;
+    directoryOrder: number;
+    storyOrder: number;
+  };
+  chapter: {
+    order: number;
+    type: ChapterType;
+    isLatestByStructure: boolean;
+  };
+  confirmedTimelineEvents?: ConfirmedTimelineOrderEvent[];
 };
 
 type RestorableFileSnapshotChapter = {
@@ -2089,7 +2115,12 @@ export class Store {
     return { ...work, volumes, directoryPage: pageResult };
   }
 
-  getStoryIndexChapterPage(workId: string, offset: number, limit: number, options: { excludeAuthorNotes?: boolean } = {}): StoryIndexChapterPage {
+  getStoryIndexChapterPage(
+    workId: string,
+    offset: number,
+    limit: number,
+    options: { excludeAuthorNotes?: boolean; includeTimeline?: boolean } = {}
+  ): StoryIndexChapterPage {
     const work = this.getWork(workId);
     const permissions = work.modulePermissions as WorkModulePermissions;
     if (permissions.prose === "none") return { totalChapters: 0, chapters: [] };
@@ -2101,17 +2132,18 @@ export class Store {
       workId
     );
     const chapterRows = this.db.all(
-      `SELECT chapter.id, chapter.title, chapter.version_no, volume.title AS volume_title
+      `SELECT chapter.id, chapter.title, chapter.version_no
        FROM chapters chapter
        JOIN volumes volume ON volume.id = chapter.volume_id
        WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL${authorNoteFilter}
-       ORDER BY volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at
+       ORDER BY volume.story_order, volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at
        LIMIT ? OFFSET ?`,
       workId,
       limit,
       offset
     );
     const chapterIds = chapterRows.map((row) => requiredString(row, "id"));
+    const storyOrders = this.getChapterStoryOrders(workId, chapterIds, { includeTimeline: options.includeTimeline });
     const summaries = new Map<string, string>();
     if (chapterIds.length > 0) {
       const placeholders = chapterIds.map(() => "?").join(", ");
@@ -2137,13 +2169,109 @@ export class Store {
         const chapterId = requiredString(row, "id");
         return {
           id: chapterId,
-          volumeTitle: requiredString(row, "volume_title"),
           title: requiredString(row, "title"),
           versionNo: numberValue(row, "version_no"),
-          summary: summaries.get(chapterId) ?? ""
+          summary: summaries.get(chapterId) ?? "",
+          storyOrder: storyOrders.get(chapterId) as ChapterStoryOrderDetails
         };
       })
     };
+  }
+
+  getChapterStoryOrders(
+    workId: string,
+    chapterIds: string[],
+    options: { includeTimeline?: boolean } = {}
+  ): Map<string, ChapterStoryOrderDetails> {
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none") return new Map();
+    const includeTimeline = options.includeTimeline === true && permissions.timeline !== "none";
+    const uniqueChapterIds = [...new Set(chapterIds)].slice(0, 500);
+    if (!uniqueChapterIds.length) return new Map();
+    const placeholders = uniqueChapterIds.map(() => "?").join(", ");
+    const rows = this.db.all(
+      `SELECT chapter.id AS chapter_id, chapter.chapter_type, chapter.sort_order AS chapter_order,
+        volume.id AS volume_id, volume.title AS volume_title, volume.sort_order AS volume_directory_order,
+        volume.story_order AS volume_story_order,
+        CASE WHEN chapter.chapter_type = '正文'
+          AND volume.story_order = (
+            SELECT MAX(candidate_volume.story_order)
+            FROM volumes candidate_volume
+            WHERE candidate_volume.work_id = chapter.work_id AND candidate_volume.deleted_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM chapters candidate_volume_chapter
+                WHERE candidate_volume_chapter.volume_id = candidate_volume.id
+                  AND candidate_volume_chapter.deleted_at IS NULL AND candidate_volume_chapter.chapter_type = '正文'
+              )
+          )
+          AND chapter.sort_order = (
+            SELECT MAX(candidate_chapter.sort_order)
+            FROM chapters candidate_chapter
+            WHERE candidate_chapter.volume_id = chapter.volume_id
+              AND candidate_chapter.deleted_at IS NULL AND candidate_chapter.chapter_type = '正文'
+          )
+        THEN 1 ELSE 0 END AS is_latest_by_structure
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id AND volume.work_id = chapter.work_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+         AND chapter.id IN (${placeholders})`,
+      workId,
+      ...uniqueChapterIds
+    );
+    const result = new Map<string, ChapterStoryOrderDetails>();
+    for (const row of rows) {
+      result.set(requiredString(row, "chapter_id"), {
+        volume: {
+          id: requiredString(row, "volume_id"),
+          title: requiredString(row, "volume_title"),
+          directoryOrder: numberValue(row, "volume_directory_order"),
+          storyOrder: numberValue(row, "volume_story_order")
+        },
+        chapter: {
+          order: numberValue(row, "chapter_order"),
+          type: requiredString(row, "chapter_type") as ChapterType,
+          isLatestByStructure: booleanValue(row, "is_latest_by_structure")
+        },
+        ...(includeTimeline ? { confirmedTimelineEvents: [] } : {})
+      });
+    }
+    if (!includeTimeline || result.size === 0) return result;
+    const timelineRows = this.db.all(
+      `SELECT event.id, event.name, event.event_type, event.time_label, event.time_sort,
+        event.track_id, track.name AS track_name, track.sort_order AS track_order, event.chapter_ids_json
+       FROM timeline_events event
+       LEFT JOIN timeline_tracks track ON track.id = event.track_id
+       WHERE event.work_id = ? AND event.status = 'confirmed' AND event.time_sort IS NOT NULL
+         AND typeof(event.time_sort) IN ('integer', 'real') AND json_valid(event.chapter_ids_json)
+         AND EXISTS (
+           SELECT 1 FROM json_each(event.chapter_ids_json) linked_chapter
+           WHERE linked_chapter.value IN (${placeholders})
+         )
+       ORDER BY event.track_id IS NOT NULL, track.sort_order, event.time_sort, event.created_at, event.id`,
+      workId,
+      ...uniqueChapterIds
+    );
+    const requestedIds = new Set(uniqueChapterIds);
+    for (const row of timelineRows) {
+      const timeSort = Number(row.time_sort);
+      if (!Number.isFinite(timeSort)) continue;
+      const event: ConfirmedTimelineOrderEvent = {
+        id: requiredString(row, "id"),
+        name: requiredString(row, "name"),
+        eventType: requiredString(row, "event_type"),
+        timeLabel: requiredString(row, "time_label"),
+        timeSort,
+        trackId: optionalString(row, "track_id"),
+        trackName: optionalString(row, "track_name"),
+        trackOrder: row.track_order === null || row.track_order === undefined ? null : numberValue(row, "track_order")
+      };
+      for (const chapterId of json<string[]>(requiredString(row, "chapter_ids_json"), [])) {
+        if (!requestedIds.has(chapterId)) continue;
+        result.get(chapterId)?.confirmedTimelineEvents?.push(event);
+      }
+    }
+    return result;
   }
 
   listFileVersions(workId: string): Record<string, unknown>[] {
@@ -3715,10 +3843,15 @@ export class Store {
     );
   }
 
-  searchChapterParagraphs(workId: string, keyword: string, limit = 20, options: { excludeAuthorNotes?: boolean } = {}): Array<{
+  searchChapterParagraphs(workId: string, keyword: string, limit = 20, options: {
+    excludeAuthorNotes?: boolean;
+    includeStoryOrder?: boolean;
+    includeTimeline?: boolean;
+  } = {}): Array<{
     chapterId: string;
     chapterTitle: string;
     paragraph: string;
+    storyOrder?: ChapterStoryOrderDetails;
   }> {
     this.getWork(workId);
     const normalizedKeyword = normalizeDocumentSearchText(keyword.trim());
@@ -3750,11 +3883,20 @@ export class Store {
           `"${normalizedKeyword.replaceAll('"', '""')}"`,
           safeLimit
         );
-    return rows.map((row) => ({
-      chapterId: requiredString(row, "chapter_id"),
-      chapterTitle: requiredString(row, "chapter_title"),
-      paragraph: requiredString(row, "content")
-    }));
+    const chapterIds = rows.map((row) => requiredString(row, "chapter_id"));
+    const storyOrders = options.includeStoryOrder
+      ? this.getChapterStoryOrders(workId, chapterIds, { includeTimeline: options.includeTimeline })
+      : new Map<string, ChapterStoryOrderDetails>();
+    return rows.map((row) => {
+      const chapterId = requiredString(row, "chapter_id");
+      const storyOrder = storyOrders.get(chapterId);
+      return {
+        chapterId,
+        chapterTitle: requiredString(row, "chapter_title"),
+        paragraph: requiredString(row, "content"),
+        ...(storyOrder ? { storyOrder } : {})
+      };
+    });
   }
 
   private invalidateChapter(workId: string, chapterId: string, versionNo: number): void {

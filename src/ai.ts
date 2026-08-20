@@ -1034,12 +1034,26 @@ const agentToolCursorParameter = {
   description: "续页游标，取 pagination.nextCursor。"
 };
 
+function storyOrderingGuide(timelineAvailable: boolean): Record<string, unknown> {
+  return {
+    defaultLatest: "默认以 volume.storyOrder 最大的分卷中 chapter.order 最大的正文章节为最新剧情；标题文本、编辑时间和目录顺序都不能代替剧情顺序。",
+    comparisonPriority: timelineAvailable
+      ? ["confirmedTimelineEvents.timeSort（仅限双方在同一 trackId 上都有可比事件）", "volume.storyOrder", "chapter.order（仅在同一分卷内比较）"]
+      : ["volume.storyOrder", "chapter.order（仅在同一分卷内比较）"],
+    timelineRule: timelineAvailable
+      ? "storyOrder.confirmedTimelineEvents 仅包含 status=confirmed 且 timeSort 有限的事件。比较双方时必须找到相同 trackId；只有一方有事件、轨道不同或无有效事件时，回退到结构顺序。相同 timeSort 表示同时或无法定序，不再用结构顺序强行拆分。"
+      : "当前请求不能读取时间线，禁止推测时间线顺序，只能使用结构顺序。",
+    structureRule: "先比较 volume.storyOrder；仅在同一分卷内再比较 chapter.order。相同的分卷剧情顺序表示并行或顺序未知，不能用 volume.directoryOrder 或标题补猜。",
+    directoryOrderRule: "volume.directoryOrder 只表示界面、阅读和导出目录位置，不是剧情顺序。"
+  };
+}
+
 const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
   story_index: {
     type: "function",
     function: {
       name: "story_index",
-      description: "读取当前作品的基本信息，并按分页列出卷章目录和章节概要。回答作品简介、整体结构或定位章节时优先使用；不会返回正文。",
+      description: "读取当前作品的基本信息，并按分卷剧情顺序分页列出卷章、章节概要和完整顺序元数据。返回独立的分卷剧情顺序、目录顺序、卷内章节顺序、结构最新标记；有时间线读取权限时还返回已确认且可排序的关联事件。回答作品简介、最新剧情、情节先后、整体结构或定位章节时优先使用；不会返回正文。",
       parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 50 }, cursor: agentToolCursorParameter }, additionalProperties: false }
     }
   },
@@ -1047,7 +1061,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "read_chapters",
-      description: "读取指定章节的当前正文与章节概要。仅在需要原文证据或精确措辞时使用；每次最多 3 章。",
+      description: "读取指定章节的当前正文、章节概要和完整剧情顺序元数据。仅在需要原文证据或精确措辞时使用；每次最多 3 章。",
       parameters: { type: "object", properties: { chapterIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] }, cursor: agentToolCursorParameter }, required: ["chapterIds"], additionalProperties: false }
     }
   },
@@ -1055,7 +1069,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "grep",
-      description: "在当前作品的章节正文索引中查询关键字，返回关键字所在的完整段落及章节标题和 ID。默认查询前 20 条，可按需调整 limit。",
+      description: "在当前作品的章节正文索引中查询关键字，返回关键字所在的完整段落、章节标题、ID 和完整剧情顺序元数据。默认查询前 20 条，可按需调整 limit。",
       parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }, cursor: agentToolCursorParameter }, required: ["keyword"], additionalProperties: false }
     }
   },
@@ -1111,7 +1125,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "recall_story",
-      description: "查询当前作品已保存正文中的关键词，返回匹配的完整段落及章节标题和 ID。用于回忆最近发生的故事情节、场景或原文措辞；只能读取当前正文，不会读取设定库或作者想法。",
+      description: "查询当前作品已保存正文中的关键词，返回匹配的完整段落、章节标题、ID 和完整剧情顺序元数据；有时间线读取权限时还返回已确认且可排序的关联事件。用于回忆最近发生的故事情节、场景、先后顺序或原文措辞；只能读取当前正文，不会读取设定库或作者想法。",
       parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }, cursor: agentToolCursorParameter }, required: ["keyword"], additionalProperties: false }
     }
   },
@@ -5519,7 +5533,7 @@ export class AiManager {
           ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
           ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；先不传 characters 获取有关系的角色列表，再传入 characters 数组获取一个或多个指定角色的关系详情。它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
-          ...(enabledToolIds.includes("recall_story") ? ["当回应涉及已经写入故事的近期情节、场景或具体措辞，而角色自身记忆与对话历史不足以确定时，使用 recall_story 按关键词查询当前正文。"] : []),
+          ...(enabledToolIds.includes("recall_story") ? ["当回应涉及已经写入故事的近期情节、场景、最新进展、先后顺序或具体措辞，而角色自身记忆与对话历史不足以确定时，使用 recall_story 按关键词查询当前正文，并严格按返回的 storyOrdering 与 storyOrder 判断顺序。"] : []),
           "把返回内容自然地当作角色自己的记忆、认知或感受来表达。没有返回的信息就以符合角色的方式表现为不知道、没见过、记不清或不确定，不得补用全知信息。"
         ].join("\n")
       : enabledToolIds.length > 0
@@ -5528,7 +5542,7 @@ export class AiManager {
           ...directImageToolGuidance,
           ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
+          "整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index，并严格按返回的 storyOrdering 与 storyOrder 判断顺序；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -6343,9 +6357,20 @@ export class AiManager {
         }
       }
       if (requestedCategories.includes("timeline")) {
-        for (const event of this.store.listTimelineEvents(workId)) {
-          if (!(event.participantIds as unknown[]).includes(roleplayCharacterId)) continue;
-          const record = { category: "timeline", ...event };
+        const timelineEvents = this.store.listTimelineEvents(workId).filter(
+          (event) => event.status === "confirmed" && (event.participantIds as unknown[]).includes(roleplayCharacterId)
+        );
+        const linkedChapterIds = timelineEvents.flatMap((event) => (
+          Array.isArray(event.chapterIds) ? event.chapterIds.filter((chapterId): chapterId is string => typeof chapterId === "string") : []
+        ));
+        const linkedChapterStoryOrders = this.store.getChapterStoryOrders(workId, linkedChapterIds);
+        for (const event of timelineEvents) {
+          const chapterStoryOrders = (Array.isArray(event.chapterIds) ? event.chapterIds : []).flatMap((chapterId) => {
+            if (typeof chapterId !== "string") return [];
+            const storyOrder = linkedChapterStoryOrders.get(chapterId);
+            return storyOrder ? [{ chapterId, storyOrder }] : [];
+          });
+          const record = { category: "timeline", ...event, chapterStoryOrders };
           if (matchesQuery(record)) memoryRecords.push(record);
         }
       }
@@ -6354,7 +6379,11 @@ export class AiManager {
           .map((item) => item.trim()).filter(Boolean).slice(0, 10);
         const seenParagraphs = new Set<string>();
         for (const identityTerm of identityTerms) {
-          for (const paragraph of this.store.searchChapterParagraphs(workId, identityTerm, 50, { excludeAuthorNotes: true })) {
+          for (const paragraph of this.store.searchChapterParagraphs(workId, identityTerm, 50, {
+            excludeAuthorNotes: true,
+            includeStoryOrder: true,
+            includeTimeline: canReadWorkModule(permissions, "timeline")
+          })) {
             const key = `${String(paragraph.chapterId)}:${String(paragraph.paragraph)}`;
             if (seenParagraphs.has(key)) continue;
             seenParagraphs.add(key);
@@ -6370,6 +6399,9 @@ export class AiManager {
           identity: { name: character.name, gender: character.gender, code: character.code },
           query,
           categories: requestedCategories,
+          ...(requestedCategories.some((category) => category === "timeline" || category === "chapters")
+            ? { storyOrdering: storyOrderingGuide(canReadWorkModule(permissions, "timeline")) }
+            : {}),
           memories: page,
           ...(memoryRecords.length === 0 ? { hint: "No matching self-related memory was found." } : {})
         },
@@ -6387,7 +6419,11 @@ export class AiManager {
     if (name === "story_index") {
       const { offset, limit, cursor } = args as z.infer<typeof storyIndexArguments>;
       const work = this.store.getWork(workId);
-      const chapterPage = this.store.getStoryIndexChapterPage(workId, offset, limit, { excludeAuthorNotes: true });
+      const timelineAvailable = canReadWorkModule(permissions, "timeline");
+      const chapterPage = this.store.getStoryIndexChapterPage(workId, offset, limit, {
+        excludeAuthorNotes: true,
+        includeTimeline: timelineAvailable
+      });
       const workRecords = structuralToolResultRecords([{
         id: work.id,
         title: work.title,
@@ -6416,6 +6452,7 @@ export class AiManager {
           data: {
             ...(pageWork[0] ? { work: pageWork[0] } : {}),
             ...(pageWork.length > 1 ? { workFragments: pageWork } : {}),
+            storyOrdering: storyOrderingGuide(timelineAvailable),
             totalChapters: chapterPage.totalChapters,
             offset,
             chapters: pageChapters,
@@ -6436,6 +6473,8 @@ export class AiManager {
     if (name === "read_chapters") {
       const { chapterIds, include, cursor } = args as z.infer<typeof readChaptersArguments>;
       const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
+      const timelineAvailable = canReadWorkModule(permissions, "timeline");
+      const storyOrders = this.store.getChapterStoryOrders(workId, chapterIds, { includeTimeline: timelineAvailable });
       const chapters = chapterIds.map((chapterId) => {
         if (scopedChapterIds && !scopedChapterIds.has(chapterId)) {
           return { chapterId, error: { code: "CHAPTER_OUTSIDE_ANALYSIS_SCOPE", message: "The requested chapter is outside the current analysis scope." } };
@@ -6445,7 +6484,14 @@ export class AiManager {
           if (chapter.workId !== workId) return { chapterId, error: { code: "CHAPTER_WORK_MISMATCH", message: "The requested chapter belongs to a different work." } };
           if (isAuthorNoteChapter(chapter)) return { chapterId, error: { code: "CHAPTER_AUTHOR_NOTE_EXCLUDED", message: "Author notes are excluded from AI context." } };
           const content = collapseAiBlankLines(String(chapter.content));
-          return { chapterId, title: chapter.title, versionNo: chapter.versionNo, ...(include !== "content" ? { summary: summaries.get(chapterId) ?? "" } : {}), ...(include !== "summary" ? { content } : {}) };
+          return {
+            chapterId,
+            title: chapter.title,
+            versionNo: chapter.versionNo,
+            storyOrder: storyOrders.get(chapterId),
+            ...(include !== "content" ? { summary: summaries.get(chapterId) ?? "" } : {}),
+            ...(include !== "summary" ? { content } : {})
+          };
         } catch {
           return { chapterId, error: { code: "CHAPTER_NOT_FOUND", message: "The requested chapter was not found." } };
         }
@@ -6453,19 +6499,24 @@ export class AiManager {
       const records = structuralToolResultRecords(chapters, maximumRecordChars);
       const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
         ok: true,
-        data: { chapters: page },
+        data: { storyOrdering: storyOrderingGuide(timelineAvailable), chapters: page },
         pagination
       }), maximumResultChars);
       return { id: toolCall.id, name, calledAt, arguments: { chapterIds, include, ...(cursor > 0 ? { cursor } : {}) }, status: "completed", result };
     }
     if (name === "grep" || name === "recall_story") {
       const { keyword, limit, cursor } = args as z.infer<typeof grepArguments>;
-      const matches = this.store.searchChapterParagraphs(workId, keyword, limit, { excludeAuthorNotes: true })
+      const timelineAvailable = canReadWorkModule(permissions, "timeline");
+      const matches = this.store.searchChapterParagraphs(workId, keyword, limit, {
+        excludeAuthorNotes: true,
+        includeStoryOrder: true,
+        includeTimeline: timelineAvailable
+      })
         .filter((match) => !scopedChapterIds || scopedChapterIds.has(String(match.chapterId)));
       const records = structuralToolResultRecords(matches, maximumRecordChars);
       const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
         ok: true,
-        data: { keyword, limit, matches: page },
+        data: { keyword, limit, storyOrdering: storyOrderingGuide(timelineAvailable), matches: page },
         pagination
       }), maximumResultChars);
       return {

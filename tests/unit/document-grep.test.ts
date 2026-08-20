@@ -78,4 +78,37 @@ describe("章节段落关键字索引", () => {
 
     expect(matches).toEqual([expect.objectContaining({ chapterId: chapter.id, chapterTitle: "第一章" })]);
   });
+
+  it("供 AI 检索时附带独立分卷、卷内章节与已确认时间线顺序", async () => {
+    runtime = createTestRuntime();
+    const work = await createWork(runtime, "剧情顺序检索");
+    const volume = runtime.store.createVolume(String(work.id), { title: "倒叙卷", storyOrder: 6 });
+    const chapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "重逢",
+      content: "林舟在港口重逢。"
+    });
+    runtime.store.createTimelineEvent(String(work.id), {
+      name: "港口重逢",
+      timeLabel: "第 12 日",
+      timeSort: 12,
+      chapterIds: [String(chapter.id)],
+      status: "confirmed"
+    });
+
+    const matches = runtime.store.searchChapterParagraphs(String(work.id), "重逢", 20, {
+      excludeAuthorNotes: true,
+      includeStoryOrder: true,
+      includeTimeline: true
+    });
+
+    expect(matches[0]).toMatchObject({
+      chapterId: chapter.id,
+      storyOrder: {
+        volume: { id: volume.id, directoryOrder: 0, storyOrder: 6 },
+        chapter: { order: 0, isLatestByStructure: true },
+        confirmedTimelineEvents: [{ name: "港口重逢", timeSort: 12, trackId: null }]
+      }
+    });
+  });
 });
