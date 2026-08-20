@@ -116,3 +116,25 @@ export function buildWritingCalendar(now: Date, days: number, timeZone = resolve
     endExclusive: localDateTimeToUtc(shiftWritingDateKey(todayKey, 1), timeZone).toISOString()
   };
 }
+
+export function buildWritingMonthCalendar(now: Date, timeZone = resolveWritingTimeZone()): {
+  timeZone: string;
+  monthKey: string;
+  startKey: string;
+  startInclusive: string;
+  endExclusive: string;
+} {
+  const todayKey = writingDateKey(now, timeZone);
+  const monthKey = todayKey.slice(0, 7);
+  const startKey = `${monthKey}-01`;
+  const year = Number(monthKey.slice(0, 4));
+  const month = Number(monthKey.slice(5, 7));
+  const nextMonthKey = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+  return {
+    timeZone,
+    monthKey,
+    startKey,
+    startInclusive: localDateTimeToUtc(startKey, timeZone).toISOString(),
+    endExclusive: localDateTimeToUtc(nextMonthKey, timeZone).toISOString()
+  };
+}

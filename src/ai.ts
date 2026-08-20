@@ -87,7 +87,7 @@ import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, normalizeCharacterName, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
-import { buildWritingCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
+import { buildWritingCalendar, buildWritingMonthCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
@@ -2372,7 +2372,7 @@ export class AiManager {
     this.store.getWork(workId);
     return {
       ...this.getTokenUsage(workId, timezoneOffset, false),
-      quota: this.getWorkDailyTokenQuotaStatus(workId)
+      quota: this.getWorkTokenQuotaStatus(workId)
     };
   }
 
@@ -2398,6 +2398,45 @@ export class AiManager {
       dayStartedAt: calendar.startInclusive,
       resetsAt: calendar.endExclusive,
       timezone: calendar.timeZone
+    };
+  }
+
+  getWorkMonthlyTokenQuotaStatus(workId: string, referenceDate = new Date()): Record<string, unknown> {
+    const settings = this.store.getWorkAiSettings(workId);
+    const monthlyTokenQuota = settings.monthlyTokenQuota === null
+      ? null
+      : Number(settings.monthlyTokenQuota);
+    const calendar = buildWritingMonthCalendar(referenceDate, resolveServerTimeZone());
+    const usage = this.store.db.get(
+      `SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS used_tokens
+       FROM ai_calls WHERE work_id = ? AND created_at >= ? AND created_at < ?`,
+      workId,
+      calendar.startInclusive,
+      calendar.endExclusive
+    );
+    const usedTokens = numberValue(usage ?? {}, "used_tokens");
+    return {
+      monthlyTokenQuota,
+      usedTokens,
+      remainingTokens: monthlyTokenQuota === null ? null : Math.max(0, monthlyTokenQuota - usedTokens),
+      reached: monthlyTokenQuota !== null && usedTokens >= monthlyTokenQuota,
+      monthStartedAt: calendar.startInclusive,
+      resetsAt: calendar.endExclusive,
+      timezone: calendar.timeZone
+    };
+  }
+
+  private getWorkTokenQuotaStatus(workId: string, referenceDate = new Date()): Record<string, unknown> {
+    const daily = this.getWorkDailyTokenQuotaStatus(workId, referenceDate);
+    const monthly = this.getWorkMonthlyTokenQuotaStatus(workId, referenceDate);
+    return {
+      ...daily,
+      monthlyTokenQuota: monthly.monthlyTokenQuota,
+      monthlyUsedTokens: monthly.usedTokens,
+      monthlyRemainingTokens: monthly.remainingTokens,
+      monthlyReached: monthly.reached,
+      monthStartedAt: monthly.monthStartedAt,
+      monthlyResetsAt: monthly.resetsAt
     };
   }
 
@@ -3089,13 +3128,15 @@ export class AiManager {
       logger.debug("ai.auto_run.drain_started", { workId });
       const settings = this.store.getWorkAiSettings(workId);
       if (!settings.autoRunEnabled || settings.autoRunPaused) return;
-      const tokenQuota = this.getWorkDailyTokenQuotaStatus(workId);
-      if (tokenQuota.reached) {
-        const dailyTokenQuota = Number(tokenQuota.dailyTokenQuota);
-        const resumeAt = String(tokenQuota.resetsAt);
-        this.store.pauseAutoRun(workId, `已达到每日 Token 额度 ${dailyTokenQuota}`, resumeAt);
+      const tokenQuota = this.getWorkTokenQuotaStatus(workId);
+      if (tokenQuota.reached || tokenQuota.monthlyReached) {
+        const monthlyReached = Boolean(tokenQuota.monthlyReached) && !Boolean(tokenQuota.reached);
+        const quota = Number(monthlyReached ? tokenQuota.monthlyTokenQuota : tokenQuota.dailyTokenQuota);
+        const periodLabel = monthlyReached ? "每月" : "每日";
+        const resumeAt = String(monthlyReached ? tokenQuota.monthlyResetsAt : tokenQuota.resetsAt);
+        this.store.pauseAutoRun(workId, `已达到${periodLabel} Token 额度 ${quota}`, resumeAt);
         this.scheduleAutoRun(workId);
-        logger.info("ai.auto_run.token_quota_reached", { workId, dailyTokenQuota, resumeAt });
+        logger.info("ai.auto_run.token_quota_reached", { workId, period: monthlyReached ? "monthly" : "daily", quota, resumeAt });
         return;
       }
       const dailyTaskLimit = Number(settings.autoRunDailyTaskLimit);
@@ -7029,34 +7070,61 @@ export class AiManager {
     };
   }
 
-  private constrainParametersForDailyTokenQuota(
+  private constrainParametersForTokenQuota(
     workId: string,
     messages: CompletionMessage[],
     parameters: Record<string, unknown>,
     tools: Record<string, unknown>[] = [],
     additionalUsedTokens = 0
   ): Record<string, unknown> {
-    const status = this.getWorkDailyTokenQuotaStatus(workId);
-    if (status.dailyTokenQuota === null) return parameters;
-    const dailyTokenQuota = Number(status.dailyTokenQuota);
-    const usedTokens = Number(status.usedTokens) + Math.max(0, additionalUsedTokens);
-    const remainingTokens = Math.max(0, dailyTokenQuota - usedTokens);
+    const status = this.getWorkTokenQuotaStatus(workId);
+    const dailyTokenQuota = status.dailyTokenQuota === null ? null : Number(status.dailyTokenQuota);
+    const monthlyTokenQuota = status.monthlyTokenQuota === null ? null : Number(status.monthlyTokenQuota);
+    if (dailyTokenQuota === null && monthlyTokenQuota === null) return parameters;
+    const additionalTokens = Math.max(0, additionalUsedTokens);
     const estimatedInputTokens = estimateCompletionMessageTokens(messages)
       + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
-    if (remainingTokens <= estimatedInputTokens) {
-      throw new AppError(
-        429,
-        "DAILY_TOKEN_QUOTA_EXCEEDED",
-        `本书今日剩余 Token 额度不足以发起本次请求（已用 ${usedTokens.toLocaleString("zh-CN")} / ${dailyTokenQuota.toLocaleString("zh-CN")}）`,
-        {
-          dailyTokenQuota,
-          usedTokens,
-          remainingTokens,
-          estimatedInputTokens,
-          resetsAt: status.resetsAt,
-          timezone: status.timezone
-        }
-      );
+    let remainingTokens = Number.POSITIVE_INFINITY;
+    const quotas = [
+      {
+        period: "daily" as const,
+        quota: dailyTokenQuota,
+        usedTokens: Number(status.usedTokens) + additionalTokens,
+        resetsAt: String(status.resetsAt),
+        startedAt: String(status.dayStartedAt)
+      },
+      {
+        period: "monthly" as const,
+        quota: monthlyTokenQuota,
+        usedTokens: Number(status.monthlyUsedTokens) + additionalTokens,
+        resetsAt: String(status.monthlyResetsAt),
+        startedAt: String(status.monthStartedAt)
+      }
+    ];
+    for (const item of quotas) {
+      if (item.quota === null) continue;
+      const availableTokens = Math.max(0, item.quota - item.usedTokens);
+      remainingTokens = Math.min(remainingTokens, availableTokens);
+      if (availableTokens <= estimatedInputTokens) {
+        const periodLabel = item.period === "daily" ? "今日" : "本月";
+        const code = item.period === "daily" ? "DAILY_TOKEN_QUOTA_EXCEEDED" : "MONTHLY_TOKEN_QUOTA_EXCEEDED";
+        const quotaDetails = item.period === "daily"
+          ? { dailyTokenQuota: item.quota, dayStartedAt: item.startedAt }
+          : { monthlyTokenQuota: item.quota, monthStartedAt: item.startedAt };
+        throw new AppError(
+          429,
+          code,
+          `本书${periodLabel}剩余 Token 额度不足以发起本次请求（已用 ${item.usedTokens.toLocaleString("zh-CN")} / ${item.quota.toLocaleString("zh-CN")}）`,
+          {
+            ...quotaDetails,
+            usedTokens: item.usedTokens,
+            remainingTokens: availableTokens,
+            estimatedInputTokens,
+            resetsAt: item.resetsAt,
+            timezone: status.timezone
+          }
+        );
+      }
     }
     return {
       ...parameters,
@@ -7129,7 +7197,7 @@ export class AiManager {
         modelId: stringValue(model, "id")
       });
     }
-    parameters = this.constrainParametersForDailyTokenQuota(input.workId, messages, parameters, tools);
+    parameters = this.constrainParametersForTokenQuota(input.workId, messages, parameters, tools);
     const completionMessages: CompletionMessage[] = [...messages];
     const callId = id("call");
     const timestamp = now();
@@ -7243,7 +7311,7 @@ export class AiManager {
         const streamResponse = Boolean(onDelta) && purpose === "generation";
         const processRound = streamResponse ? streamingGenerationRound + 1 : 0;
         if (streamResponse) streamingGenerationRound = processRound;
-        const roundParameters = this.constrainParametersForDailyTokenQuota(
+        const roundParameters = this.constrainParametersForTokenQuota(
           input.workId,
           requestMessages,
           this.constrainParametersForContext(model, requestMessages, requestParameters, requestTools),
@@ -7822,6 +7890,7 @@ export class AiManager {
       if (error instanceof AppError && (
         error.code === "CONTEXT_WINDOW_EXCEEDED"
         || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED"
+        || error.code === "MONTHLY_TOKEN_QUOTA_EXCEEDED"
         || isInteractiveStreamError(error)
       )) {
         throw new AppError(error.status, error.code, error.message, {

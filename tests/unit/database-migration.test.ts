@@ -188,6 +188,7 @@ describe("数据库版本化迁移", () => {
       "token_usage_source"
     ]));
     expect(first.all("PRAGMA table_info(work_ai_settings)").some((column) => column.name === "daily_token_quota")).toBe(true);
+    expect(first.all("PRAGMA table_info(work_ai_settings)").some((column) => column.name === "monthly_token_quota")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_call_traces)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["call_id", "task_id", "initial_messages_json", "rounds_json", "source_refs_json", "created_at", "updated_at"])
     );

@@ -50,7 +50,7 @@ describe("AI Token 用量统计 API", () => {
     vi.stubEnv("TZ", "Asia/Shanghai");
     await request(runtime.app)
       .patch(`/api/works/${firstWork.id}/ai-settings`)
-      .send({ dailyTokenQuota: 10_000 })
+      .send({ dailyTokenQuota: 10_000, monthlyTokenQuota: 10_000 })
       .expect(200);
     expect(runtime.ai.getWorkDailyTokenQuotaStatus(String(firstWork.id), new Date("2026-07-27T05:00:00.000Z"))).toMatchObject({
       dailyTokenQuota: 10_000,
@@ -58,6 +58,14 @@ describe("AI Token 用量统计 API", () => {
       remainingTokens: 9_840,
       dayStartedAt: "2026-07-26T16:00:00.000Z",
       resetsAt: "2026-07-27T16:00:00.000Z",
+      timezone: "Asia/Shanghai"
+    });
+    expect(runtime.ai.getWorkMonthlyTokenQuotaStatus(String(firstWork.id), new Date("2026-07-27T05:00:00.000Z"))).toMatchObject({
+      monthlyTokenQuota: 10_000,
+      usedTokens: 160,
+      remainingTokens: 9_840,
+      monthStartedAt: "2026-06-30T16:00:00.000Z",
+      resetsAt: "2026-07-31T16:00:00.000Z",
       timezone: "Asia/Shanghai"
     });
 
@@ -99,6 +107,10 @@ describe("AI Token 用量统计 API", () => {
       usedTokens: 0,
       remainingTokens: 10_000,
       reached: false,
+      monthlyTokenQuota: 10_000,
+      monthlyUsedTokens: 0,
+      monthlyRemainingTokens: 10_000,
+      monthlyReached: false,
       timezone: "Asia/Shanghai"
     });
   });

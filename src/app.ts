@@ -643,6 +643,7 @@ const aiProcessStepSchema = z.discriminatedUnion("type", [
 const workAiSettingsSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
   dailyTokenQuota: z.number().int().min(10_000).max(2_000_000_000).nullable().optional(),
+  monthlyTokenQuota: z.number().int().min(10_000).max(2_000_000_000).nullable().optional(),
   autoRunEnabled: z.boolean().optional(),
   autoRunConcurrency: z.number().int().min(1).max(8).optional(),
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),

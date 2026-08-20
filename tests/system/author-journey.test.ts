@@ -353,8 +353,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('发送一张测试图片验证图片请求');
     expect(application.text).toContain('id="daily-token-quota" type="number" min="10000"');
     expect(application.text).toContain('<label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled"');
+    expect(application.text).toContain('id="monthly-token-quota" type="number" min="10000"');
+    expect(application.text).toContain('<label class="checkbox-field config-checkbox-field"><input id="monthly-token-quota-enabled"');
     expect(application.text).toContain('后端部署时区（${esc(quotaTimezone)}）');
     expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');
+    expect(application.text).toContain('body: { monthlyTokenQuota: enabled ? quota : null }');
     expect(application.text).toContain('/page-route.js?v=20260812-reader-preview-v1');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');

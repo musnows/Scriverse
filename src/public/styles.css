@@ -2567,19 +2567,24 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .context-compact-threshold-field { width: min(100%, 280px); }
 .agent-tool-call-limit-field { width: min(100%, 280px); }
 .daily-token-quota-field { width: min(100%, 144px); }
+.monthly-token-quota-field { width: min(100%, 144px); }
 .agent-tool-call-global-multiplier-field { width: auto; min-width: 0; }
 .book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input, .daily-token-quota-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px; font-family: var(--font-latin), monospace; }
 .daily-token-quota-field input { width: 144px; }
+.monthly-token-quota-field input { width: 144px; }
+.monthly-token-quota-field input { min-height: 32px; padding: 5px 8px; font-size: 13px; font-family: var(--font-latin), monospace; }
 .config-inline-save { display: flex; align-items: flex-end; gap: 10px; margin: 14px 0 4px; flex-wrap: wrap; }
 .config-inline-save .book-summary-context-percent-field,
 .config-inline-save .context-compact-threshold-field,
 .config-inline-save .agent-tool-call-limit-field,
 .config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
+.config-inline-save .monthly-token-quota-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
 .config-inline-save .book-summary-context-percent-field,
 .config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(110px, 130px) 88px; align-items: center; column-gap: 12px; width: min(100%, 230px); }
 .config-inline-save .book-summary-context-percent-field input,
 .config-inline-save .context-compact-threshold-field input { width: 88px; }
 .config-inline-save .daily-token-quota-field { width: 144px; }
+.config-inline-save .monthly-token-quota-field { width: 144px; }
 .config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto; margin: 0; color: var(--muted); font-size: 10px; }
 .config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px; min-height: 32px; margin: 0; color: var(--muted); font-size: calc(11px * var(--ui-font-scale)); line-height: 1.4; white-space: nowrap; }
 .config-inline-save > .config-checkbox-field input[type="checkbox"] { width: 18px; min-width: 18px; height: 18px; }

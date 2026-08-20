@@ -231,6 +231,44 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", workId)).toEqual({ count: 1 });
   });
 
+  it("达到本书每月 Token 额度后拒绝新的 AI 调用", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      monthlyTokenQuota: 10_000,
+      agentTools: []
+    }).expect(200);
+    const createdAt = new Date().toISOString();
+    runtime.database.run(
+      `INSERT INTO ai_calls (
+         id, work_id, task_type, provider_id, model_id, context_scope_json, status,
+         input_tokens, output_tokens, token_usage_source, created_at, completed_at
+       ) VALUES ('monthly-quota-used', ?, 'chat', ?, ?, '{}', 'completed', 9000, 1000, 'reported', ?, ?)`,
+      workId,
+      providerId,
+      modelId,
+      createdAt,
+      createdAt
+    );
+
+    const rejected = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "继续分析",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(429);
+    expect(rejected.body.error).toMatchObject({
+      code: "MONTHLY_TOKEN_QUOTA_EXCEEDED",
+      details: {
+        monthlyTokenQuota: 10_000,
+        usedTokens: 10_000,
+        remainingTokens: 0,
+        timezone: resolveServerTimeZone()
+      }
+    });
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", workId)).toEqual({ count: 1 });
+  });
+
   it("聊天模型和历史列表通过独立接口返回", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
