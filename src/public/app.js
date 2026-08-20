@@ -13929,7 +13929,6 @@ function renderCharacterEditorFields(item) {
       `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
       field("name", "标准名", "text", item?.name) +
       field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
-      field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("aliases", "别名", "item-list", item?.aliases ?? []) +
       (!canReadModule("races")
         ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
@@ -13953,6 +13952,7 @@ function renderCharacterEditorFields(item) {
       field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
       '<div id="character-markdown-sections" class="character-markdown-sections"></div>'),
     characterEditorSection("state", "状态与约束", "维护任意当前状态，并明确禁止 AI 自行覆盖的字段。",
+      field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("currentState", "当前状态", "key-value-list", stateEntries, {
         keyName: "stateKey",
         valueName: "stateValue",
