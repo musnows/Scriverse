@@ -242,6 +242,24 @@ export type AttachmentInput = {
   animated: boolean;
 };
 
+export type CharacterAvatarInput = {
+  mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+  byteLength: number;
+  sha256: string;
+  storageKey: string;
+  width: number;
+  height: number;
+};
+
+export type CharacterAvatarMetadata = CharacterAvatarInput & {
+  updatedAt: string;
+};
+
+export type CharacterAvatarUpdateResult = {
+  character: Record<string, unknown>;
+  previousStorageKey: string | null;
+};
+
 type CharacterSnapshot = {
   name: string;
   gender: CharacterGender;
@@ -6534,6 +6552,82 @@ export class Store {
     return this.mapCharacter(row);
   }
 
+  getCharacterAvatar(characterId: string): CharacterAvatarMetadata | null {
+    const character = this.db.get("SELECT id FROM characters WHERE id = ?", characterId);
+    if (!character) throw notFound("角色");
+    const row = this.db.get("SELECT * FROM character_avatars WHERE character_id = ?", characterId);
+    if (!row) return null;
+    return {
+      mimeType: requiredString(row, "mime_type") as CharacterAvatarMetadata["mimeType"],
+      byteLength: numberValue(row, "byte_length"),
+      sha256: requiredString(row, "sha256"),
+      storageKey: requiredString(row, "storage_key"),
+      width: numberValue(row, "width"),
+      height: numberValue(row, "height"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  setCharacterAvatar(characterId: string, input: CharacterAvatarInput): CharacterAvatarUpdateResult {
+    const character = this.db.get<{ work_id: string; merged_into_character_id?: unknown }>("SELECT work_id, merged_into_character_id FROM characters WHERE id = ?", characterId);
+    if (!character) throw notFound("角色");
+    if (character.merged_into_character_id) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能直接设置头像");
+    const previous = this.db.get("SELECT storage_key FROM character_avatars WHERE character_id = ?", characterId);
+    const previousStorageKey = optionalString(previous ?? {}, "storage_key");
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO character_avatars (character_id, mime_type, byte_length, sha256, storage_key, width, height, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(character_id) DO UPDATE SET mime_type = excluded.mime_type, byte_length = excluded.byte_length,
+         sha256 = excluded.sha256, storage_key = excluded.storage_key, width = excluded.width,
+         height = excluded.height, updated_at = excluded.updated_at`,
+        characterId,
+        input.mimeType,
+        input.byteLength,
+        input.sha256,
+        input.storageKey,
+        input.width,
+        input.height,
+        timestamp
+      );
+      this.audit(character.work_id, "character.avatar-updated", "character", characterId, {
+        mimeType: input.mimeType,
+        byteLength: input.byteLength,
+        width: input.width,
+        height: input.height
+      });
+    });
+    return { character: this.getCharacter(characterId), previousStorageKey };
+  }
+
+  deleteCharacterAvatar(characterId: string): { character: Record<string, unknown>; storageKey: string | null } {
+    const character = this.db.get<{ work_id: string }>("SELECT work_id FROM characters WHERE id = ?", characterId);
+    if (!character) throw notFound("角色");
+    const current = this.db.get("SELECT storage_key FROM character_avatars WHERE character_id = ?", characterId);
+    const storageKey = optionalString(current ?? {}, "storage_key");
+    if (storageKey) {
+      this.db.transaction(() => {
+        this.db.run("DELETE FROM character_avatars WHERE character_id = ?", characterId);
+        this.audit(character.work_id, "character.avatar-deleted", "character", characterId);
+      });
+    }
+    return { character: this.getCharacter(characterId), storageKey };
+  }
+
+  listCharacterAvatarStorageKeysForWork(workId: string): string[] {
+    return this.db.all(
+      `SELECT avatar.storage_key FROM character_avatars avatar
+       JOIN characters character ON character.id = avatar.character_id
+       WHERE character.work_id = ?`,
+      workId
+    ).map((row) => requiredString(row, "storage_key"));
+  }
+
+  characterAvatarStorageKeyInUse(storageKey: string): boolean {
+    return Number(this.db.get("SELECT COUNT(*) AS count FROM character_avatars WHERE storage_key = ?", storageKey)?.count ?? 0) > 0;
+  }
+
   updateCharacter(
     characterId: string,
     input: Partial<CharacterInput>,
@@ -6796,6 +6890,8 @@ export class Store {
         versionNo: section.versionNo
       }));
     }
+    const avatar = this.db.get("SELECT sha256 FROM character_avatars WHERE character_id = ?", characterId);
+    const avatarSha256 = optionalString(avatar ?? {}, "sha256");
     return {
       id: characterId,
       workId: requiredString(row, "work_id"),
@@ -6819,6 +6915,9 @@ export class Store {
       profileSectionCount,
       currentState: json(requiredString(row, "current_state_json"), {}),
       isDead: booleanValue(row, "is_dead"),
+      avatarUrl: avatarSha256
+        ? `/api/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
+        : null,
       lockedFields: json(requiredString(row, "locked_fields_json"), []),
       firstChapterId: optionalString(row, "first_chapter_id"),
       mergedIntoCharacterId: optionalString(row, "merged_into_character_id"),

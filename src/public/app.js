@@ -487,6 +487,7 @@ const defaultImageUploadLimits = {
   coverBytes: 5 * 1024 * 1024,
   attachmentBytes: 30 * 1024 * 1024
 };
+const characterAvatarImageMaxBytes = 2 * 1024 * 1024;
 let imageUploadLimits = { ...defaultImageUploadLimits };
 
 function formatUploadLimit(bytes) {
@@ -679,6 +680,17 @@ function userAvatarHtml(user, extraClass = "") {
     ? `<img src="${esc(user.avatarUrl)}" alt="" loading="lazy" decoding="async" data-user-avatar-image>`
     : "";
   return `<span class="user-avatar ${esc(extraClass)}" aria-hidden="true"><span class="user-avatar-fallback">${esc(userAvatarInitial(user))}</span>${image}</span>`;
+}
+
+function characterAvatarInitial(character) {
+  return Array.from(String(character?.name || "角"))[0] ?? "角";
+}
+
+function characterAvatarHtml(character, extraClass = "") {
+  const image = character?.avatarUrl
+    ? `<img src="${esc(character.avatarUrl)}" alt="" loading="lazy" decoding="async">`
+    : "";
+  return `<span class="character-avatar ${esc(extraClass)}" aria-hidden="true"><span class="character-avatar-fallback">${esc(characterAvatarInitial(character))}</span>${image}</span>`;
 }
 
 function bindUserAvatarFallbacks(root) {
@@ -8823,7 +8835,7 @@ async function renderCharacters(page = characterListPage) {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
     <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
-    <div class="character-card-heading"><h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
+    <div class="character-card-heading">${characterAvatarHtml(item)}<h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     <div class="character-gender"><b>性别</b><span class="pill">${esc(characterGenderLabel(item.gender))}</span></div>
     ${item.aliases.length ? `<div class="character-aliases"><b>别名</b>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
@@ -8847,7 +8859,7 @@ async function renderCharacters(page = characterListPage) {
     const line = meta ? `${meta} · ${preview}` : preview;
     return `
     <article class="record-card module-row character-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
-      <div class="character-card-heading"><h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
+      <div class="character-card-heading">${characterAvatarHtml(item)}<h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
       <p class="module-row-preview" title="${esc(line)}">${esc(line)}</p>
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;
@@ -13515,6 +13527,34 @@ async function loadCharacterMarkdownSections(characterId) {
   }
 }
 
+function renderCharacterAvatar(item) {
+  const preview = $("#character-avatar-preview");
+  if (!preview) return;
+  preview.replaceChildren();
+  const fallback = document.createElement("span");
+  fallback.className = "character-avatar-fallback";
+  fallback.textContent = characterAvatarInitial(item);
+  preview.append(fallback);
+  if (item?.avatarUrl) {
+    const image = document.createElement("img");
+    image.alt = "";
+    image.decoding = "async";
+    image.src = item.avatarUrl;
+    image.addEventListener("error", () => image.remove(), { once: true });
+    preview.append(image);
+  }
+  const uploadButton = $("#character-avatar-upload-button");
+  const removeButton = $("#character-avatar-remove-button");
+  if (uploadButton) {
+    uploadButton.textContent = item?.avatarUrl ? "更换头像" : "上传头像";
+    uploadButton.disabled = !item?.id || entityEditorReadOnly || !canEditModule("characters");
+  }
+  if (removeButton) {
+    removeButton.classList.toggle("hidden", !item?.avatarUrl);
+    removeButton.disabled = entityEditorReadOnly || !canEditModule("characters");
+  }
+}
+
 function renderCharacterEditorFields(item) {
   const raceOptions = [["", "未指定"], ...state.races.map((race) => [race.id, racePathLabel(race)])];
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
@@ -13522,6 +13562,7 @@ function renderCharacterEditorFields(item) {
   const stateEntries = characterStateEntries(item?.currentState ?? {});
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
+      `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP、GIF，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
       field("name", "标准名", "text", item?.name) +
       field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
       field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
@@ -13566,6 +13607,7 @@ function renderCharacterEditorFields(item) {
   const name = $("#character-editor-fields [name='name']");
   if (name) name.required = true;
   bindDynamicListControls($("#character-editor-fields"));
+  renderCharacterAvatar(item);
   renderCharacterEditorRelationships();
   renderCharacterMarkdownSections();
   activateCharacterEditorTab("basic");
@@ -13772,6 +13814,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
         characterEditorItem = saved;
         state.characters = upsertEntityCollection(state.characters, saved);
         entityEditorDirty = false;
+        renderCharacterAvatar(saved);
         $("#character-editor-title").textContent = saved.name;
         $("#character-editor-version").textContent = `v${saved.versionNo}`;
         $("#character-change-note").value = "";
@@ -13792,6 +13835,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
         return { buttonLabel: "保存新版本", message };
       }
     });
+    renderCharacterAvatar(characterEditorItem);
   };
   showEntityEditorPage("character", { readOnly });
   if (item) {
@@ -16276,7 +16320,10 @@ $("#account-settings-button").addEventListener("click", () => {
   });
 });
 $("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
-$("#avatar-upload-button").addEventListener("click", () => $("#avatar-file").click());
+$("#avatar-upload-button").addEventListener("click", () => {
+  configureAvatarCropTarget({ type: "user", characterId: null });
+  $("#avatar-file").click();
+});
 
 const avatarCropSession = {
   objectUrl: null,
@@ -16286,8 +16333,19 @@ const avatarCropSession = {
   display: { x: 0, y: 0, width: 0, height: 0, scale: 0 },
   drag: null,
   fileName: "",
+  target: { type: "user", characterId: null },
   uploading: false
 };
+
+function configureAvatarCropTarget(target) {
+  avatarCropSession.target = target;
+  const isCharacter = target.type === "character";
+  $("#avatar-crop-dialog-eyebrow").textContent = isCharacter ? "角色档案" : "个人账户";
+  $("#avatar-crop-dialog-title").textContent = isCharacter ? "设置角色头像" : "裁剪头像";
+  $("#avatar-crop-dialog-description").textContent = isCharacter
+    ? "拖动选区或四角手柄调整范围，圆形预览即最终显示效果。头像文件不超过 2 MB。"
+    : "拖动选区或四角手柄调整范围，圆形预览即最终显示效果。";
+}
 
 function releaseAvatarCropObjectUrl() {
   if (!avatarCropSession.objectUrl) return;
@@ -16307,6 +16365,7 @@ function resetAvatarCropDialog() {
   avatarCropSession.imageHeight = 0;
   avatarCropSession.crop = { x: 0, y: 0, size: 0 };
   avatarCropSession.fileName = "";
+  avatarCropSession.target = { type: "user", characterId: null };
   const image = $("#avatar-crop-image");
   if (image) image.removeAttribute("src");
   $("#avatar-crop-selection")?.setAttribute("hidden", "");
@@ -16482,8 +16541,11 @@ function renderAvatarUploadProgress(fileName, progress, visible = true) {
 $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  if (file.size > imageUploadLimits.avatarBytes) {
-    toast(`头像图片不能超过 ${formatUploadLimit(imageUploadLimits.avatarBytes)}`, "error");
+  const maximumBytes = avatarCropSession.target.type === "character"
+    ? characterAvatarImageMaxBytes
+    : imageUploadLimits.avatarBytes;
+  if (file.size > maximumBytes) {
+    toast(`头像图片不能超过 ${formatUploadLimit(maximumBytes)}`, "error");
     event.target.value = "";
     return;
   }
@@ -16571,22 +16633,46 @@ $("#avatar-crop-dialog").addEventListener("close", () => {
 
 $("#avatar-crop-confirm").addEventListener("click", async () => {
   if (avatarCropSession.uploading) return;
+  const target = avatarCropSession.target;
+  if (target.type === "character" && !target.characterId) {
+    toast("请先保存角色档案", "error");
+    return;
+  }
+  const isCharacter = target.type === "character";
   avatarCropSession.uploading = true;
   $("#avatar-crop-confirm").disabled = true;
   $("#avatar-crop-cancel").disabled = true;
   $("#avatar-upload-button").disabled = true;
   $("#avatar-remove-button").disabled = true;
+  $("#character-avatar-upload-button")?.setAttribute("disabled", "true");
+  $("#character-avatar-remove-button")?.setAttribute("disabled", "true");
   renderAvatarUploadProgress(avatarCropSession.fileName || "avatar.png", 0);
   try {
     const blob = await exportAvatarCropBlob();
+    const maximumBytes = isCharacter ? characterAvatarImageMaxBytes : imageUploadLimits.avatarBytes;
+    if (blob.size > maximumBytes) {
+      throw new Error(`头像图片不能超过 ${formatUploadLimit(maximumBytes)}`);
+    }
     const body = new FormData();
     body.append("file", blob, "avatar.png");
-    const updated = await uploadWithProgress("/api/auth/avatar", { method: "PUT", body }, (progress) => renderAvatarUploadProgress(avatarCropSession.fileName || "avatar.png", progress));
-    applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
-    renderProfileAvatar();
+    const progress = (value) => renderAvatarUploadProgress(avatarCropSession.fileName || "avatar.png", value);
+    const updated = isCharacter
+      ? await uploadWithProgress(`/api/characters/${encodeURIComponent(target.characterId)}/avatar`, { method: "PUT", body }, progress)
+      : await uploadWithProgress("/api/auth/avatar", { method: "PUT", body }, progress);
+    if (isCharacter) {
+      if (characterEditorItem?.id === target.characterId) {
+        characterEditorItem = updated;
+        state.characters = upsertEntityCollection(state.characters, updated);
+        renderCharacterAvatar(updated);
+      }
+      toast("角色头像已更新");
+    } else {
+      applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
+      renderProfileAvatar();
+      toast("头像已更新");
+    }
     avatarCropSession.uploading = false;
     closeAvatarCropDialog();
-    toast("头像已更新");
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -16595,6 +16681,8 @@ $("#avatar-crop-confirm").addEventListener("click", async () => {
     $("#avatar-crop-cancel").disabled = false;
     $("#avatar-upload-button").disabled = false;
     $("#avatar-remove-button").disabled = false;
+    $("#character-avatar-upload-button")?.removeAttribute("disabled");
+    $("#character-avatar-remove-button")?.removeAttribute("disabled");
     renderAvatarUploadProgress("", 0, false);
   }
 });
@@ -17025,6 +17113,37 @@ $("#knowledge-editor-form").addEventListener("input", markEntityEditorDirty);
 $("#knowledge-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#character-editor-fields").addEventListener("click", (event) => {
   if (event.target.closest("[data-item-list-add], [data-structured-list-add], [data-item-list-remove], [data-structured-list-remove]")) markEntityEditorDirty();
+  const uploadButton = event.target.closest("#character-avatar-upload-button");
+  if (uploadButton) {
+    if (!characterEditorItem?.id) {
+      toast("请先保存角色档案，再上传头像", "error");
+      return;
+    }
+    configureAvatarCropTarget({ type: "character", characterId: String(characterEditorItem.id) });
+    $("#avatar-file").click();
+    return;
+  }
+  const removeButton = event.target.closest("#character-avatar-remove-button");
+  if (!removeButton || removeButton.disabled || !characterEditorItem?.id) return;
+  const currentItem = characterEditorItem;
+  void (async () => {
+    if (!(await confirmToast(`确定移除“${currentItem.name}”的头像吗？`, { title: "移除角色头像", confirmLabel: "确认移除" }))) return;
+    removeButton.disabled = true;
+    const upload = $("#character-avatar-upload-button");
+    if (upload) upload.disabled = true;
+    try {
+      const updated = await api(`/api/characters/${encodeURIComponent(currentItem.id)}/avatar`, { method: "DELETE" });
+      if (characterEditorItem?.id !== currentItem.id) return;
+      characterEditorItem = updated;
+      state.characters = upsertEntityCollection(state.characters, updated);
+      renderCharacterAvatar(updated);
+      deleteToast("角色头像已移除");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      if (characterEditorItem?.id === currentItem.id) renderCharacterAvatar(characterEditorItem);
+    }
+  })();
 });
 $("#character-history-button").addEventListener("click", () => {
   if ($("#character-history-panel").classList.contains("hidden")) void showCharacterHistory();
