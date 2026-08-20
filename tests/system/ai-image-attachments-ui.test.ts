@@ -42,6 +42,7 @@ describe("AI 对话图片附件界面", () => {
     expect(styles).toContain(".ai-image-attachment-remove { display: grid; flex: 0 0 17px;");
     expect(styles).toContain(".ai-image-attachments { display: flex; gap: 5px; max-height: 38px; margin-bottom: 6px;");
     expect(styles).toContain(".ai-image-preview-dialog { width: min(900px, 94vw);");
+    expect(styles).toContain(".ai-image-preview-body { display: grid; place-items: center; min-height: 180px; max-height: calc(88vh - 106px); padding: 16px 20px 20px; overflow: auto; background: var(--paper);");
     expect(styles).toContain(".ai-message-image-preview { display: block; width: 68px; height: 68px;");
     expect(styles).toContain(".ai-image-button-icon { width: 17px; height: 17px;");
     expect(styles).toContain("border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));");
