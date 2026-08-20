@@ -5684,6 +5684,7 @@ function renderSettingsHub() {
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-usage-pricing-refresh").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#admin-ai-conversations-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
@@ -7061,6 +7062,7 @@ async function showPlatformUsage() {
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = "Token 用量";
   $("#settings-button").setAttribute("aria-current", "page");
+  $("#platform-usage-pricing-refresh").classList.toggle("hidden", state.user?.role !== "admin");
   setTopbarViewState("Token 用量");
   await renderPlatformTokenUsage();
   replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
@@ -17300,6 +17302,19 @@ $("#platform-usage-refresh").addEventListener("click", async () => {
   try {
     await renderPlatformTokenUsage();
     toast("Token 用量已刷新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#platform-usage-pricing-refresh").addEventListener("click", async () => {
+  const button = $("#platform-usage-pricing-refresh");
+  button.disabled = true;
+  try {
+    await api("/api/platform/ai/usage/pricing/refresh", { method: "POST", body: {}, skipOptimisticVersion: true });
+    await renderPlatformTokenUsage();
+    toast("模型价格已刷新");
   } catch (error) {
     toast(error.message, "error");
   } finally {

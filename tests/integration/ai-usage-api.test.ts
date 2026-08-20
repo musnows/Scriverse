@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiteLlmPriceCache } from "../../src/ai-model-pricing.js";
-import type { Runtime } from "../../src/app.js";
+import { createRuntime, type Runtime } from "../../src/app.js";
 import { createTestRuntime, createWork } from "../helpers.js";
 
 describe("AI Token 用量统计 API", () => {
@@ -159,6 +159,77 @@ describe("AI Token 用量统计 API", () => {
       });
     } finally {
       await emptyRuntime.close();
+    }
+  });
+});
+
+describe("平台模型价格主动刷新权限", () => {
+  const setupToken = "ai-usage-price-refresh-test-setup-token-with-length";
+
+  async function register(runtime: Runtime, username: string): Promise<{
+    agent: ReturnType<typeof request.agent>;
+    csrfToken: string;
+  }> {
+    const agent = request.agent(runtime.app);
+    const captcha = await request(runtime.app).get("/api/auth/captcha").expect(200);
+    const response = await agent.post("/api/auth/register").send({
+      username,
+      password: "secure-password-123",
+      passwordConfirmation: "secure-password-123",
+      setupToken,
+      captchaId: captcha.body.data.captchaId,
+      captchaAnswer: captcha.body.data.answer
+    }).expect(201);
+    return { agent, csrfToken: String(response.body.data.csrfToken) };
+  }
+
+  it("只有系统管理员可以手动刷新，失败时保留现有价格数据", async () => {
+    const fetchPrice = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      "deepseek-chat": {
+        input_cost_per_token: 2.8e-7,
+        output_cost_per_token: 4.2e-7
+      }
+    })));
+    const priceCache = new LiteLlmPriceCache({ schedule: false, fetchImpl: fetchPrice });
+    expect(await priceCache.refresh()).toBe(true);
+    const runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "ai-usage-price-refresh-master-secret-with-length",
+      serveUi: false,
+      revealCaptchaAnswer: true,
+      security: { allowRegistration: true, enforceSameOrigin: true, setupToken },
+      liteLlmPriceCache: priceCache
+    });
+    try {
+      const admin = await register(runtime, "price_refresh_admin");
+      const user = await register(runtime, "price_refresh_user");
+      await user.agent
+        .post("/api/platform/ai/usage/pricing/refresh")
+        .set("X-CSRF-Token", user.csrfToken)
+        .send({})
+        .expect(403)
+        .expect((response) => expect(response.body.error.code).toBe("ADMIN_REQUIRED"));
+      expect(fetchPrice).toHaveBeenCalledTimes(1);
+
+      const refreshed = await admin.agent
+        .post("/api/platform/ai/usage/pricing/refresh")
+        .set("X-CSRF-Token", admin.csrfToken)
+        .send({})
+        .expect(200);
+      expect(refreshed.body.data).toMatchObject({ refreshed: true, pricingAvailable: true, modelCount: 1 });
+      expect(fetchPrice).toHaveBeenCalledTimes(2);
+
+      fetchPrice.mockResolvedValueOnce(new Response("LiteLLM unavailable", { status: 503 }));
+      const failed = await admin.agent
+        .post("/api/platform/ai/usage/pricing/refresh")
+        .set("X-CSRF-Token", admin.csrfToken)
+        .send({})
+        .expect(502);
+      expect(failed.body.error.code).toBe("LITELLM_PRICE_REFRESH_FAILED");
+      expect(priceCache.hasData()).toBe(true);
+      expect(priceCache.getPriceTable().get("deepseek-chat")?.output_cost_per_token).toBe(4.2e-7);
+    } finally {
+      await runtime.close();
     }
   });
 });

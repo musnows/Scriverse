@@ -331,6 +331,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-view"');
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('id="platform-usage-view"');
+    expect(page.text).toContain('id="platform-usage-pricing-refresh"');
     expect(page.text).toContain('id="platform-usage-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
@@ -363,6 +364,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("pricingAvailable === true");
     expect(application.text).toContain("Cache Read");
     expect(application.text).toContain("Cache Write");
+    expect(application.text).toContain("/api/platform/ai/usage/pricing/refresh");
+    expect(application.text).toContain('state.user?.role !== "admin"');
     expect(application.text).toContain("有 ${unpricedModelCount.toLocaleString(\"zh-CN\")} 个模型在价格表中未找到对应价格");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");

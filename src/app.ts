@@ -2708,6 +2708,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
   });
+  app.post("/api/platform/ai/usage/pricing/refresh", async (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    parse(z.object({}).strict(), request.body ?? {});
+    const refreshed = await liteLlmPriceCache.refresh();
+    if (!refreshed) {
+      throw new AppError(502, "LITELLM_PRICE_REFRESH_FAILED", "LiteLLM 模型价格刷新失败，历史缓存未改变");
+    }
+    data(response, {
+      refreshed: true,
+      pricingAvailable: liteLlmPriceCache.hasData(),
+      modelCount: liteLlmPriceCache.getPriceTable().size
+    });
+  });
   app.get("/api/platform/ai-conversations", (request, response) => {
     const query = parse(adminAiConversationQuerySchema, request.query);
     const pagination = parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 };
