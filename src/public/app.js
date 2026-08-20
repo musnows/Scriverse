@@ -3844,7 +3844,7 @@ function renderAiImageAttachments() {
     label.className = "ai-image-attachment-label";
     label.textContent = `#${index + 1}`;
     preview.append(image, label);
-    preview.addEventListener("click", () => openAiImagePreview(attachment));
+    preview.addEventListener("click", () => openAiImagePreview(attachment, index + 1));
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ai-image-attachment-remove";
@@ -3867,12 +3867,13 @@ function renderAiImageAttachments() {
   }
 }
 
-function openAiImagePreview(attachment) {
+function openAiImagePreview(attachment, ordinal = null) {
   const dialog = $("#ai-image-preview-dialog");
   const image = $("#ai-image-preview-image");
   if (!dialog || !image) return;
   image.src = attachment.contentUrl;
   image.alt = attachment.originalName;
+  $("#ai-image-preview-title").textContent = Number.isInteger(ordinal) ? `#${ordinal} 图片预览` : "图片预览";
   $("#ai-image-preview-meta").textContent = attachment.originalName;
   if (!dialog.open) dialog.showModal();
 }
@@ -15788,13 +15789,13 @@ function appendAiMessageImageAttachments(message, attachments) {
   const host = document.createElement("div");
   host.className = "ai-message-images";
   host.setAttribute("aria-label", "消息中的图片附件");
-  for (const attachment of normalized) {
+  for (const [index, attachment] of normalized.entries()) {
     const preview = document.createElement("button");
     preview.type = "button";
     preview.className = "ai-message-image-preview";
     preview.setAttribute("aria-label", `查看图片附件：${attachment.originalName}`);
     preview.title = "点击查看大图";
-    preview.addEventListener("click", () => openAiImagePreview(attachment));
+    preview.addEventListener("click", () => openAiImagePreview(attachment, index + 1));
     const image = document.createElement("img");
     image.src = attachment.contentUrl;
     image.alt = attachment.originalName;

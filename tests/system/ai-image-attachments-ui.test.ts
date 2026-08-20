@@ -21,11 +21,12 @@ describe("AI 对话图片附件界面", () => {
     expect(page).toContain('accept="image/png,image/jpeg,.jpg,.jpeg"');
     expect(application).toContain("function aiModelSupportsImageInput()");
     expect(application).toContain("function addAiImageFiles(files)");
-    expect(application).toContain("function openAiImagePreview(attachment)");
+    expect(application).toContain("function openAiImagePreview(attachment, ordinal = null)");
     expect(application).toContain("function appendAiMessageImageAttachments(message, attachments)");
     expect(application).toContain('preview.className = "ai-message-image-preview"');
-    expect(application).toContain("openAiImagePreview(attachment)");
+    expect(application).toContain("openAiImagePreview(attachment, index + 1)");
     expect(application).toContain("label.textContent = `#${index + 1}`");
+    expect(application).toContain('$("#ai-image-preview-title").textContent = Number.isInteger(ordinal) ? `#${ordinal} 图片预览` : "图片预览";');
     expect(application).toContain("assertAiChatImageFileSize(file)");
     expect(application).toContain("clipboardImageFiles(event.clipboardData)");
     expect(application).toContain("event.stopImmediatePropagation();");
