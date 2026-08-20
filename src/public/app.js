@@ -3583,7 +3583,9 @@ function blockLockedAiConversationOptionKeydown(event) {
 
 function syncAiTaskOptions() {
   const roleplaySelected = $("#ai-task").value === "roleplay";
-  const relationshipRoleplaySelectable = roleplaySelected && Boolean(state.aiRoleplayCharacter);
+  const relationshipRoleplaySelectable = roleplaySelected
+    && Boolean(state.aiRoleplayCharacter)
+    && (!state.aiPromptSent || Boolean(state.aiRoleplayUserCharacter));
   const interactionBusy = aiInteractionBusy();
   $("#ai-scope").classList.toggle("hidden", roleplaySelected);
   $("#ai-scope").setAttribute("aria-hidden", String(roleplaySelected));

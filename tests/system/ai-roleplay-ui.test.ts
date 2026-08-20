@@ -23,6 +23,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("以 ${String(state.aiRoleplayUserCharacter.name)} 的身份与 ${String(state.aiRoleplayCharacter.name)} 对话……");
     expect(application).toContain("/roleplay`");
     expect(application).toContain("function renderAiRoleplayUserCharacterSelect()");
+    expect(application).toContain("const relationshipRoleplaySelectable = roleplaySelected\n    && Boolean(state.aiRoleplayCharacter)\n    && (!state.aiPromptSent || Boolean(state.aiRoleplayUserCharacter));");
     expect(application).toContain('body: { characterId: characterId || null, userCharacterId: userCharacterId || null }');
     expect(application).toContain('tab.roleplayUserCharacter = conversation.roleplayUserCharacter ?? null;');
     expect(application).toContain('return roleplayUserCharacter?.name || "作者";');
@@ -36,6 +37,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("if (state.aiPromptSent) {");
     expect(application).toContain("return toast(aiConversationOptionLockedMessage);");
     expect(application).toContain("角色扮演模式可以查询角色记忆、人物关系和故事正文");
+    expect(page).toContain("&feature=ai-roleplay-user-character-visibility-v1");
     expect(application).toContain("AI 会将每条用户消息视为该角色的发言或行动");
     expect(application).toContain("/task-type`");
     expect(application).toContain("/context-scope`");
