@@ -11680,6 +11680,10 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   const requestCount = Number(summary.requestCount) || 0;
   const cachedInputTokens = Number(summary.cachedInputTokens) || 0;
   const cacheEligibleInputTokens = Number(summary.cacheEligibleInputTokens) || 0;
+  const directInputTokens = Math.max(0, Math.round(Number(summary.directInputTokens) || 0));
+  const cacheReadInputTokens = Math.max(0, Math.round(Number(summary.cacheReadInputTokens ?? cachedInputTokens) || 0));
+  const cacheWriteInputTokens = Math.max(0, Math.round(Number(summary.cacheWriteInputTokens) || 0));
+  const inputDescription = `直接 Input ${directInputTokens.toLocaleString("zh-CN")} · Cache Read ${cacheReadInputTokens.toLocaleString("zh-CN")} · Cache Write ${cacheWriteInputTokens.toLocaleString("zh-CN")}`;
   const cacheDescription = summary.cacheHitRate === null || summary.cacheHitRate === undefined
     ? "供应商尚未返回可计算的缓存明细"
     : `${cachedInputTokens.toLocaleString("zh-CN")} / ${cacheEligibleInputTokens.toLocaleString("zh-CN")} 个可统计输入 Token 命中缓存`;
@@ -11702,7 +11706,7 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
     <div class="config-section-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div></div>
     <div class="usage-stat-grid">
       <article class="usage-stat is-primary"><div class="usage-stat-label"><span>总消耗</span><span class="usage-cost-bubble" title="${esc(pricingDescription)}">估价 ${esc(estimatedCost)}</span></div><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
-      <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small>${Number(summary.inputTokens || 0).toLocaleString("zh-CN")}</small></article>
+      <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small title="${esc(inputDescription)}">${esc(inputDescription)}</small></article>
       <article class="usage-stat"><span>输出 Token</span><strong>${esc(formatTokenCount(summary.outputTokens))}</strong><small>${Number(summary.outputTokens || 0).toLocaleString("zh-CN")}</small></article>
       <article class="usage-stat"><span>缓存命中率</span><strong>${esc(formatCacheHitRate(summary.cacheHitRate))}</strong><small>${esc(cacheDescription)}</small></article>
     </div>

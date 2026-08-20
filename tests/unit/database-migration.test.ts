@@ -184,6 +184,7 @@ describe("数据库版本化迁移", () => {
       "input_tokens",
       "output_tokens",
       "cached_input_tokens",
+      "cache_write_input_tokens",
       "cache_eligible_input_tokens",
       "cache_usage_available",
       "token_usage_source"

@@ -423,6 +423,7 @@ export type ResolvedAiTokenUsage = {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  cacheWriteInputTokens: number;
   cacheEligibleInputTokens: number;
   source: "reported" | "estimated" | "mixed";
 };
@@ -1290,7 +1291,7 @@ export function resolveOutputTokens(usage: unknown, content: string): number {
   return estimateAiTokens(content);
 }
 
-type InputCacheUsage = { inputTokens: number; cachedInputTokens: number };
+type InputCacheUsage = { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number };
 
 function reportedTokenCount(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)
@@ -1302,13 +1303,16 @@ function resolveInputCacheUsage(usage: unknown): InputCacheUsage | null {
   if (!usage || typeof usage !== "object") return null;
   const record = usage as Record<string, unknown>;
   const anthropicCacheRead = reportedTokenCount(record.cache_read_input_tokens);
-  const anthropicCacheCreation = reportedTokenCount(record.cache_creation_input_tokens);
+  const anthropicCacheCreation = reportedTokenCount(record.cache_creation_input_tokens)
+    ?? reportedTokenCount(record.cache_write_input_tokens)
+    ?? reportedTokenCount(record.cache_write_tokens);
   if (anthropicCacheRead !== null || anthropicCacheCreation !== null) {
     const uncachedInputTokens = reportedTokenCount(record.input_tokens) ?? 0;
     const cachedInputTokens = anthropicCacheRead ?? 0;
-    const inputTokens = uncachedInputTokens + cachedInputTokens + (anthropicCacheCreation ?? 0);
+    const cacheWriteInputTokens = anthropicCacheCreation ?? 0;
+    const inputTokens = uncachedInputTokens + cachedInputTokens + cacheWriteInputTokens;
     if (inputTokens <= 0) return null;
-    return { inputTokens, cachedInputTokens };
+    return { inputTokens, cachedInputTokens, cacheWriteInputTokens };
   }
   const promptDetails = record.prompt_tokens_details && typeof record.prompt_tokens_details === "object"
     ? record.prompt_tokens_details as Record<string, unknown>
@@ -1321,18 +1325,28 @@ function resolveInputCacheUsage(usage: unknown): InputCacheUsage | null {
     ?? record.prompt_cache_hit_tokens
     ?? record.cache_read_input_tokens
     ?? record.cached_input_tokens;
-  if (typeof cached !== "number" || !Number.isFinite(cached)) return null;
+  const cacheReadInputTokens = reportedTokenCount(cached);
+  const cacheWriteInputTokens = reportedTokenCount(
+    record.cache_creation_input_tokens
+      ?? record.cache_write_input_tokens
+      ?? record.cache_write_tokens
+  ) ?? 0;
+  if (cacheReadInputTokens === null && cacheWriteInputTokens <= 0) return null;
   const reportedInput = record.prompt_tokens ?? record.input_tokens;
   const missed = record.prompt_cache_miss_tokens;
   const inputTokens = typeof reportedInput === "number" && Number.isFinite(reportedInput)
     ? Math.max(0, Math.round(reportedInput))
     : typeof missed === "number" && Number.isFinite(missed)
-      ? Math.max(0, Math.round(cached)) + Math.max(0, Math.round(missed))
+      ? (cacheReadInputTokens ?? 0) + Math.max(0, Math.round(missed)) + cacheWriteInputTokens
       : 0;
   if (inputTokens <= 0) return null;
   return {
     inputTokens,
-    cachedInputTokens: Math.min(inputTokens, Math.max(0, Math.round(cached)))
+    cachedInputTokens: Math.min(inputTokens, cacheReadInputTokens ?? 0),
+    cacheWriteInputTokens: Math.min(
+      Math.max(0, inputTokens - Math.min(inputTokens, cacheReadInputTokens ?? 0)),
+      cacheWriteInputTokens
+    )
   };
 }
 
@@ -1379,6 +1393,7 @@ export function resolveAiTokenUsage(
     inputTokens,
     outputTokens,
     cachedInputTokens: cacheUsage?.cachedInputTokens ?? 0,
+    cacheWriteInputTokens: cacheUsage?.cacheWriteInputTokens ?? 0,
     cacheEligibleInputTokens: cacheUsage?.inputTokens ?? 0,
     source: reportedInputTokens !== null && reportedOutputTokens !== null
       ? "reported"
@@ -2876,6 +2891,7 @@ export class AiManager {
          COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
          COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
          COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens,
          COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
          COUNT(*) AS request_count,
          COALESCE(SUM(CASE WHEN call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count,
@@ -2892,6 +2908,7 @@ export class AiManager {
          COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
          COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
          COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens,
          COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
          COUNT(*) AS request_count,
          COALESCE(SUM(CASE WHEN call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count
@@ -2908,7 +2925,8 @@ export class AiManager {
          COALESCE(model.model_id, call.model_id) AS usage_model_id,
          COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
          COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
-         COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens
+         COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens
        FROM ai_calls call
        JOIN works work ON work.id = call.work_id
        LEFT JOIN models model ON model.id = call.model_id
@@ -2919,7 +2937,8 @@ export class AiManager {
       modelId: stringValue(row, "usage_model_id"),
       inputTokens: numberValue(row, "input_tokens"),
       outputTokens: numberValue(row, "output_tokens"),
-      cachedInputTokens: numberValue(row, "cached_input_tokens")
+      cachedInputTokens: numberValue(row, "cached_input_tokens"),
+      cacheWriteInputTokens: numberValue(row, "cache_write_input_tokens")
     }));
     const pricing = estimateLiteLlmUsageCost(modelUsages);
     const works = includeWorks
@@ -2930,6 +2949,7 @@ export class AiManager {
            COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
            COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
            COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+           COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens,
            COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
            COUNT(call.id) AS request_count,
            COALESCE(SUM(CASE WHEN call.id IS NULL OR call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count,
@@ -2962,7 +2982,11 @@ export class AiManager {
   private mapTokenUsageRow(row: Row, extra: Record<string, unknown>): Record<string, unknown> {
     const inputTokens = numberValue(row, "input_tokens");
     const outputTokens = numberValue(row, "output_tokens");
-    const cachedInputTokens = numberValue(row, "cached_input_tokens");
+    const cachedInputTokens = Math.min(inputTokens, numberValue(row, "cached_input_tokens"));
+    const cacheWriteInputTokens = Math.min(
+      Math.max(0, inputTokens - cachedInputTokens),
+      numberValue(row, "cache_write_input_tokens")
+    );
     const cacheEligibleInputTokens = numberValue(row, "cache_eligible_input_tokens");
     return {
       ...extra,
@@ -2970,6 +2994,9 @@ export class AiManager {
       inputTokens,
       outputTokens,
       cachedInputTokens,
+      directInputTokens: Math.max(0, inputTokens - cachedInputTokens - cacheWriteInputTokens),
+      cacheReadInputTokens: cachedInputTokens,
+      cacheWriteInputTokens,
       cacheEligibleInputTokens,
       cacheHitRate: cacheEligibleInputTokens > 0
         ? Math.round(cachedInputTokens / cacheEligibleInputTokens * 1_000) / 10
@@ -7229,12 +7256,14 @@ export class AiManager {
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
+    let trackedCacheWriteInputTokens = 0;
     let trackedCacheEligibleInputTokens = 0;
     const trackedUsageSources = new Set<ResolvedAiTokenUsage["source"]>();
     const trackUsage = (usage: ResolvedAiTokenUsage): void => {
       trackedInputTokens += usage.inputTokens;
       trackedOutputTokens += usage.outputTokens;
       trackedCachedInputTokens += usage.cachedInputTokens;
+      trackedCacheWriteInputTokens += usage.cacheWriteInputTokens;
       trackedCacheEligibleInputTokens += usage.cacheEligibleInputTokens;
       trackedUsageSources.add(usage.source);
     };
@@ -7781,13 +7810,14 @@ export class AiManager {
       this.store.db.run(
         `UPDATE ai_calls
          SET status = 'completed', output_chars = ?, input_tokens = ?, output_tokens = ?,
-             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
+             cached_input_tokens = ?, cache_write_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
              token_usage_source = ?, completed_at = ?
          WHERE id = ?`,
         content.length,
         trackedInputTokens,
         trackedOutputTokens,
         trackedCachedInputTokens,
+        trackedCacheWriteInputTokens,
         trackedCacheEligibleInputTokens,
         trackedCacheEligibleInputTokens > 0 ? 1 : 0,
         trackedUsageSource(),
@@ -7833,7 +7863,7 @@ export class AiManager {
       this.store.db.run(
         `UPDATE ai_calls
          SET status = 'failed', failure = ?, output_chars = ?, input_tokens = ?, output_tokens = ?,
-             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
+             cached_input_tokens = ?, cache_write_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
              token_usage_source = ?, completed_at = ?
          WHERE id = ?`,
         message,
@@ -7841,6 +7871,7 @@ export class AiManager {
         trackedInputTokens,
         trackedOutputTokens,
         trackedCachedInputTokens,
+        trackedCacheWriteInputTokens,
         trackedCacheEligibleInputTokens,
         trackedCacheEligibleInputTokens > 0 ? 1 : 0,
         trackedUsageSource(),
