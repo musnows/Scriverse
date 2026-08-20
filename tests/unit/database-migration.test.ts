@@ -945,7 +945,7 @@ describe("数据库版本化迁移", () => {
     repaired.close();
   });
 
-  it("迁移 103 以目录顺序回填独立的分卷剧情顺序", () => {
+  it("迁移 105 以目录顺序回填独立的分卷剧情顺序", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-volume-story-order-"));
     roots.push(root);
     const filename = join(root, "story-order.db");
@@ -967,7 +967,7 @@ describe("数据库版本化迁移", () => {
 
     const legacy = new DatabaseSync(filename);
     legacy.exec(`
-      DELETE FROM schema_migrations WHERE version = 103;
+      DELETE FROM schema_migrations WHERE version = 105;
       DROP INDEX idx_volumes_story_order;
       ALTER TABLE volumes DROP COLUMN story_order;
     `);
@@ -976,7 +976,7 @@ describe("数据库版本化迁移", () => {
     const migrated = new Database(filename);
     expect(migrated.get("SELECT sort_order, story_order FROM volumes WHERE id = 'volume-story-order'"))
       .toEqual({ sort_order: 6, story_order: 6 });
-    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 103")?.count).toBe(1);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 105")?.count).toBe(1);
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
