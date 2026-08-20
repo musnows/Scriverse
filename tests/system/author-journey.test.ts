@@ -430,7 +430,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-galaxy-icon {");
     expect(styles.text).toContain(".relationship-table .relationship-actions button");
     expect(page.text).toContain('id="avatar-file"');
-    expect(page.text).toContain('accept="image/png,image/jpeg,image/webp,image/gif"');
+    expect(page.text).toContain('accept="image/png,image/jpeg,image/webp"');
     expect(page.text).toContain("文件不超过 2 MB");
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');

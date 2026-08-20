@@ -20,6 +20,7 @@ import {
   normalizeAiStreamIdleTimeoutSeconds
 } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
 import { AiManager } from "./ai.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import {
@@ -96,6 +97,10 @@ const aiChatAttachmentIngestOptions = {
   allowedFormats: new Set(["png", "jpeg"]),
   preserveFormat: true,
   unsupportedMessage: "AI 对话图片附件仅支持 PNG、JPG、JPEG 图片"
+};
+const characterAvatarIngestOptions = {
+  allowedFormats: new Set(["png", "jpeg", "webp"]),
+  unsupportedMessage: "角色头像仅支持 PNG、JPEG 和 WebP 图片"
 };
 
 function stableJson(value: unknown): string {
@@ -2083,11 +2088,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, redactCharacterLinks(store.getCharacter(request.params.characterId), requestPermissions(request)));
   });
   app.put("/api/characters/:characterId/avatar", characterAvatarUpload.single("file"), async (request, response) => {
-    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 角色头像");
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 角色头像");
     const characterId = String(request.params.characterId);
     let stored: Awaited<ReturnType<AttachmentStorage["ingest"]>> | null = null;
     try {
-      stored = await characterAvatarStorage.ingest(request.file.path);
+      stored = await characterAvatarStorage.ingest(request.file.path, characterAvatarIngestOptions);
       const result = store.setCharacterAvatar(characterId, {
         mimeType: stored.storedMimeType,
         byteLength: stored.storedByteLength,
@@ -2272,8 +2277,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该附件所属资料模块的权限");
     }
     const content = await attachmentStorage.read(String(attachment.storageKey));
+    const fileName = attachmentDownloadFileName(
+      store.getAttachmentDownloadContextName(String(attachment.id)),
+      String(attachment.originalName)
+    );
     response.setHeader("Content-Type", String(attachment.storedMimeType));
     response.setHeader("Content-Length", String(attachment.storedByteLength));
+    response.setHeader("Content-Disposition", inlineContentDisposition(fileName));
     response.setHeader("ETag", `"${String(attachment.storedSha256)}"`);
     response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     response.setHeader("X-Content-Type-Options", "nosniff");

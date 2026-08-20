@@ -498,6 +498,8 @@ const defaultImageUploadLimits = {
   chatImageBytes: 5 * 1024 * 1024
 };
 const characterAvatarImageMaxBytes = 2 * 1024 * 1024;
+const userAvatarFileAccept = "image/png,image/jpeg,image/webp,image/gif";
+const characterAvatarFileAccept = "image/png,image/jpeg,image/webp";
 let imageUploadLimits = { ...defaultImageUploadLimits };
 
 function formatUploadLimit(bytes) {
@@ -13924,10 +13926,9 @@ function renderCharacterEditorFields(item) {
   const stateEntries = characterStateEntries(item?.currentState ?? {});
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
-      `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP、GIF，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
+      `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
       field("name", "标准名", "text", item?.name) +
       field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
-      field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("aliases", "别名", "item-list", item?.aliases ?? []) +
       (!canReadModule("races")
         ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
@@ -13951,6 +13952,7 @@ function renderCharacterEditorFields(item) {
       field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
       '<div id="character-markdown-sections" class="character-markdown-sections"></div>'),
     characterEditorSection("state", "状态与约束", "维护任意当前状态，并明确禁止 AI 自行覆盖的字段。",
+      field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("currentState", "当前状态", "key-value-list", stateEntries, {
         keyName: "stateKey",
         valueName: "stateValue",
@@ -16736,6 +16738,8 @@ const avatarCropSession = {
 function configureAvatarCropTarget(target) {
   avatarCropSession.target = target;
   const isCharacter = target.type === "character";
+  const fileInput = $("#avatar-file");
+  if (fileInput) fileInput.setAttribute("accept", isCharacter ? characterAvatarFileAccept : userAvatarFileAccept);
   $("#avatar-crop-dialog-eyebrow").textContent = isCharacter ? "角色档案" : "个人账户";
   $("#avatar-crop-dialog-title").textContent = isCharacter ? "设置角色头像" : "裁剪头像";
   $("#avatar-crop-dialog-description").textContent = isCharacter
@@ -16767,7 +16771,10 @@ function resetAvatarCropDialog() {
   $("#avatar-crop-selection")?.setAttribute("hidden", "");
   $("#avatar-crop-preview")?.replaceChildren();
   const fileInput = $("#avatar-file");
-  if (fileInput) fileInput.value = "";
+  if (fileInput) {
+    fileInput.value = "";
+    fileInput.setAttribute("accept", userAvatarFileAccept);
+  }
 }
 
 function stagePointFromEvent(event) {
@@ -16937,7 +16944,13 @@ function renderAvatarUploadProgress(fileName, progress, visible = true) {
 $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  const maximumBytes = avatarCropSession.target.type === "character"
+  const isCharacter = avatarCropSession.target.type === "character";
+  if (isCharacter && isGifImageFile(file)) {
+    toast("角色头像不支持 GIF 图片", "error");
+    event.target.value = "";
+    return;
+  }
+  const maximumBytes = isCharacter
     ? characterAvatarImageMaxBytes
     : imageUploadLimits.avatarBytes;
   if (file.size > maximumBytes) {

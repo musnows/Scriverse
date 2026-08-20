@@ -23,6 +23,7 @@ describe("实体存续状态界面", () => {
     ]);
 
     expect(application.text).toContain('field("isDead", "标记为已死亡", "checkbox"');
+    expect(application.text).toContain('characterEditorSection("state", "状态与约束", "维护任意当前状态，并明确禁止 AI 自行覆盖的字段。",\n      field("isDead", "标记为已死亡", "checkbox"');
     expect(application.text).toContain('field(isRace ? "isExtinct" : "isDissolved", isRace ? "标记为已灭绝" : "标记为已解散", "checkbox"');
     expect(application.text).toContain('entityLifecycleBadge(item.isDead, "已死亡")');
     expect(application.text).toContain('entityLifecycleBadge(item.isExtinct, "已灭绝")');
@@ -30,5 +31,6 @@ describe("实体存续状态界面", () => {
     expect(styles.text).toContain(".entity-lifecycle-badge");
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
+    expect(page.text).toContain("feature=character-death-position-v1");
   });
 });
