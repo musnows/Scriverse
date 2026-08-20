@@ -62,6 +62,9 @@ describe("系统重启认证清理", () => {
       application.text.indexOf("function observeSystemBootId(value)"),
       application.text.indexOf("async function checkSystemBoot(forceFresh = false)")
     );
+    expect(application.text).toContain("const systemRestartDialogDelay = 500;");
+    expect(observeSystemBootBlock).toContain("systemRestartDialogTimer = window.setTimeout(() => {");
+    expect(observeSystemBootBlock).toContain("}, systemRestartDialogDelay);");
     expect(observeSystemBootBlock).toContain("dialog.showModal();");
     expect(observeSystemBootBlock).not.toContain("clearAuthenticationOverlays();");
     expect(application.text).toContain('if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;');
