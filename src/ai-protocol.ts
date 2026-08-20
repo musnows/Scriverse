@@ -153,7 +153,7 @@ function textContent(value: CompletionMessageContent | null | undefined): Array<
 function anthropicContentBlocks(value: CompletionMessageContent | null | undefined): Array<Record<string, unknown>> {
   if (typeof value === "string") return textContent(value);
   if (!Array.isArray(value)) return [];
-  return value.flatMap((block) => {
+  const translated = value.flatMap((block) => {
     if (block.type === "text" && typeof block.text === "string") return [{ type: "text", text: block.text }];
     if (block.type === "image" && block.source && typeof block.source === "object" && !Array.isArray(block.source)) {
       return [structuredClone(block)];
@@ -169,6 +169,11 @@ function anthropicContentBlocks(value: CompletionMessageContent | null | undefin
         : { type: "url", url: imageUrl.url }
     }];
   });
+  // Anthropic 官方建议先放图片再放文本；保留各自的相对顺序，兼容对块顺序敏感的代理。
+  return [
+    ...translated.filter((block) => block.type === "image"),
+    ...translated.filter((block) => block.type !== "image")
+  ];
 }
 
 function responseInputContent(value: CompletionMessageContent | null | undefined): Array<Record<string, unknown>> {
@@ -248,8 +253,17 @@ function anthropicMessages(messages: CompletionMessage[]): {
   const append = (role: "user" | "assistant", content: Array<Record<string, unknown>>): void => {
     if (content.length === 0) return;
     const previous = output.at(-1);
-    if (previous?.role === role) previous.content.push(...content);
-    else output.push({ role, content });
+    if (previous?.role !== role) {
+      output.push({ role, content });
+      return;
+    }
+    const merged = [...previous.content, ...content];
+    previous.content = merged.some((block) => block.type === "image")
+      ? [
+        ...merged.filter((block) => block.type === "image"),
+        ...merged.filter((block) => block.type !== "image")
+      ]
+      : merged;
   };
   for (const message of messages) {
     if (message.role === "system") continue;

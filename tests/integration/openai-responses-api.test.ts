@@ -93,6 +93,68 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
     expect(new Headers(fetchMock.mock.calls.at(-1)?.[1]?.headers).get("x-api-key")).toBe("sk-anthropic-vision-test");
   });
 
+  it("Anthropic Messages 聊天请求把真实图片作为 base64 image block 发送", async () => {
+    let generationSeen = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "claude-chat-vision" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as {
+        max_tokens?: number;
+        messages?: Array<{ role?: string; content?: unknown }>;
+      };
+      if (body.max_tokens === 10) {
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "图片连接成功" }], stop_reason: "end_turn" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      const userMessage = body.messages?.find((message) => message.role === "user" && Array.isArray(message.content));
+      const userContent = Array.isArray(userMessage?.content)
+        ? userMessage.content as Array<{ type?: string; text?: string; source?: Record<string, unknown> }>
+        : [];
+      expect(userContent[0]).toEqual({
+        type: "image",
+        source: expect.objectContaining({ type: "base64", media_type: "image/png" })
+      });
+      expect(userContent.filter((block) => block.type === "text").map((block) => block.text).join("\n"))
+        .toContain("请描述这张图片");
+      generationSeen = true;
+      return new Response(JSON.stringify({
+        content: [{ type: "text", text: "我看到了图片中的深色背景和白色文字。" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 20, output_tokens: 8 }
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=", "base64");
+    const uploaded = await request(runtime.app)
+      .post(`/api/works/${workId}/attachments?module=ai-chat`)
+      .attach("file", png, { filename: "聊天图片.png", contentType: "image/png" })
+      .expect(201);
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "Anthropic 聊天图片服务",
+      protocol: "anthropic-messages",
+      baseUrl: "https://anthropic-chat-image.test",
+      apiKey: "sk-anthropic-chat-image-test",
+      status: "enabled"
+    }).expect(201);
+    const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "Anthropic 聊天图片模型",
+      modelId: "claude-chat-vision",
+      multimodalEnabled: true
+    }).expect(201);
+    await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+
+    const stream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请描述这张图片",
+      scope: { type: "none" },
+      modelId: model.body.data.id,
+      imageAttachmentIds: [uploaded.body.data.id]
+    }).expect(200);
+    expect(stream.text).toContain("我看到了图片中的深色背景和白色文字");
+    expect(generationSeen).toBe(true);
+  });
+
   it("OpenAI Responses 发送 input_image、reasoning.effort，并解析流式思考与正文", async () => {
     fetchMock.mockImplementation(async (input, init) => {
       const url = String(input);
@@ -245,6 +307,73 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
       imageAttachmentIds: [attachmentId]
     }).expect(400);
     expect(rejected.body.error).toMatchObject({ code: "MODEL_NOT_MULTIMODAL" });
+  });
+
+  it("多轮聊天会重新把历史图片放回 OpenAI Responses 请求", async () => {
+    const imageCounts: number[] = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "gpt-5-history-vision" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as {
+        input?: Array<Record<string, unknown>>;
+        max_output_tokens?: number;
+        stream?: boolean;
+      };
+      if (body.max_output_tokens === 10) {
+        return new Response(JSON.stringify({
+          status: "completed",
+          output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "连接成功" }] }]
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const imageCount = (body.input ?? [])
+        .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+        .filter((part) => (part as Record<string, unknown>).type === "input_image").length;
+      imageCounts.push(imageCount);
+      expect(body.stream).toBe(true);
+      return new Response([
+        'data: {"type":"response.output_text.delta","delta":"我能看到这张图片。"}',
+        'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":18,"output_tokens":5}}}'
+      ].join("\n\n") + "\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=", "base64");
+    const uploaded = await request(runtime.app)
+      .post(`/api/works/${workId}/attachments?module=ai-chat`)
+      .attach("file", png, { filename: "历史图片.png", contentType: "image/png" })
+      .expect(201);
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "Responses 历史图片服务",
+      protocol: "openai-responses",
+      baseUrl: "https://responses-history-image.test/v1",
+      apiKey: "sk-responses-history-image-test",
+      status: "enabled"
+    }).expect(201);
+    const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "Responses 历史图片模型",
+      modelId: "gpt-5-history-vision",
+      multimodalEnabled: true
+    }).expect(201);
+    await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+
+    const first = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请看这张图片",
+      scope: { type: "none" },
+      modelId: model.body.data.id,
+      imageAttachmentIds: [uploaded.body.data.id]
+    }).expect(200);
+    const firstComplete = JSON.parse(first.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}");
+    const conversationId = String(firstComplete.conversationId);
+    expect(conversationId).not.toBe("");
+
+    const second = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "上一张图片里写了什么？",
+      scope: { type: "none" },
+      modelId: model.body.data.id,
+      conversationId
+    }).expect(200);
+    expect(second.text).toContain("我能看到这张图片");
+    expect(imageCounts).toEqual([1, 1]);
   });
 
   it("多模态聊天首轮不按图片 base64 估算上下文，并用服务端 usage 更新上下文", async () => {

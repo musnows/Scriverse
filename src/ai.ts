@@ -390,6 +390,7 @@ type GenerateInput = {
   agentToolIds?: AgentToolId[];
   agentToolCallLimit?: number;
   imageAttachments?: ChatImageAttachment[];
+  conversationImageAttachments?: ReadonlyMap<string, ChatImageAttachment[]>;
 };
 
 type GenerateResult = {
@@ -5373,6 +5374,32 @@ export class AiManager {
     return prepared;
   }
 
+  private async prepareConversationImageAttachments(
+    workId: string,
+    modelId: string,
+    conversation: AiConversationContext | null
+  ): Promise<ReadonlyMap<string, ChatImageAttachment[]>> {
+    const preparedByMessage = new Map<string, ChatImageAttachment[]>();
+    if (!conversation) return preparedByMessage;
+    const { model, provider } = this.resolveModel(workId, "chat", modelId);
+    if (!boolValue(model, "multimodal_enabled") || !supportsMultimodalProviderProtocol(provider)) {
+      return preparedByMessage;
+    }
+    const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
+    for (const message of conversation.messages) {
+      if (message.role !== "user") continue;
+      const ids = Array.isArray(message.metadata.chatImageAttachmentIds)
+        ? message.metadata.chatImageAttachmentIds.filter((attachmentId): attachmentId is string => typeof attachmentId === "string")
+        : [];
+      if (ids.length === 0) continue;
+      preparedByMessage.set(
+        message.id,
+        await this.prepareChatImageAttachments(workId, modelId, ids, permissions)
+      );
+    }
+    return preparedByMessage;
+  }
+
   async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "excludeConversationMessageId"> & { conversationId: string }): Promise<Record<string, unknown>> {
     const conversation = this.store.getAiConversationContext(
       input.conversationId,
@@ -5440,7 +5467,7 @@ export class AiManager {
   }
 
   private buildMessages(
-    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds" | "imageAttachments">,
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds" | "imageAttachments" | "conversationImageAttachments">,
     context: string,
     existingConversation?: AiConversationContext | null
   ): CompletionMessage[] {
@@ -5588,7 +5615,21 @@ export class AiManager {
     // 本轮 user 侧 XML 注入：普通任务使用 story_context / author_instruction；角色扮演使用 scene_context / user_message。
     // 已有 message list 里的历史 user/assistant content 必须原样上行，禁止改写，否则破坏 prompt cache。
     const conversationMessages: CompletionMessage[] = conversation?.messages.map((message) => {
-      if (message.role === "user") return { role: "user", content: message.content };
+      if (message.role === "user") {
+        const imageAttachments = input.conversationImageAttachments?.get(message.id) ?? [];
+        return {
+          role: "user",
+          content: imageAttachments.length > 0
+            ? [
+              { type: "text", text: message.content },
+              ...imageAttachments.map((attachment) => ({
+                type: "image_url",
+                image_url: { url: attachment.dataUrl, detail: "auto" }
+              }))
+            ]
+            : message.content
+        };
+      }
       const reasoningContent = typeof message.metadata.reasoningContent === "string" && message.metadata.reasoningContent.length > 0
         ? message.metadata.reasoningContent
         : undefined;
@@ -6830,6 +6871,11 @@ export class AiManager {
       : null;
     const generationRoleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
+    const conversationImageAttachments = await this.prepareConversationImageAttachments(
+      input.workId,
+      String(model.id),
+      conversation
+    );
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const requestedParameters = {
       ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
@@ -6837,7 +6883,7 @@ export class AiManager {
     };
     const configuredOutputTokens = Number(requestedParameters.max_tokens) || DEFAULT_MAX_TOKENS;
     const contextCompactThreshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
-    let effectiveInput = input;
+    let effectiveInput: GenerateInput = { ...input, conversationImageAttachments };
     let effectiveBudget = this.contextBudget(effectiveInput, model, conversation);
     let context = this.buildContext(effectiveInput, model, effectiveBudget);
     let messages = this.buildMessages(effectiveInput, context, conversation);
@@ -6853,7 +6899,7 @@ export class AiManager {
     } catch (error) {
       if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
       if (tools.length === 0) throw initialContextWindowError(error, provider, model);
-      effectiveInput = { ...input, agentToolIds: [] };
+      effectiveInput = { ...input, agentToolIds: [], conversationImageAttachments };
       effectiveBudget = this.contextBudget(effectiveInput, model, conversation);
       context = this.buildContext(effectiveInput, model, effectiveBudget);
       messages = this.buildMessages(effectiveInput, context, conversation);

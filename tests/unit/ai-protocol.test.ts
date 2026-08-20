@@ -111,8 +111,8 @@ describe("AI 供应商协议适配", () => {
     expect(body.messages).toEqual([{
       role: "user",
       content: [
-        { type: "text", text: "理解这张图片" },
-        { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
+        { type: "text", text: "理解这张图片" }
       ]
     }]);
   });
