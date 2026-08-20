@@ -2304,7 +2304,12 @@ export class AiManager {
   async searchWork(
     workId: string,
     query: string,
-    options: { type?: HybridSearchType; limit?: number; allowedTypes?: readonly HybridSearchType[] } = {}
+    options: {
+      type?: HybridSearchType;
+      limit?: number;
+      allowedTypes?: readonly HybridSearchType[];
+      conversationOwnerUserId?: string;
+    } = {}
   ): Promise<Record<string, unknown>[]> {
     this.store.getWork(workId);
     const normalizedQuery = normalizeWorkSearchQuery(query);
@@ -2349,7 +2354,9 @@ export class AiManager {
         ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit, chapterLineRangeFallbackState)
         : []),
       ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "exact", requestedTypes, channelLimit) : []),
-      ...(requestedTypes.has("agent-history") ? this.hybridAgentHistoryMatches(workId, normalizedQuery, channelLimit) : [])
+      ...(requestedTypes.has("agent-history")
+        ? this.hybridAgentHistoryMatches(workId, normalizedQuery, channelLimit, options.conversationOwnerUserId)
+        : [])
     ];
     const phoneticCandidates = [
       ...(requestedTypes.has("chapter")
@@ -2368,7 +2375,12 @@ export class AiManager {
     }));
   }
 
-  private hybridAgentHistoryMatches(workId: string, query: string, limit: number): HybridSearchCandidate[] {
+  private hybridAgentHistoryMatches(
+    workId: string,
+    query: string,
+    limit: number,
+    conversationOwnerUserId?: string
+  ): HybridSearchCandidate[] {
     const columns = `SELECT history.source_type, history.source_id, history.conversation_id, history.message_id,
                             history.role, history.content, conversation.title AS conversation_title
                      FROM ai_history_search history
@@ -2378,20 +2390,26 @@ export class AiManager {
         `${columns}
          JOIN ai_history_search_short_terms term ON term.search_id = history.id
          WHERE history.work_id = ? AND term.term = ?
+           AND (? IS NULL OR conversation.created_by_user_id = ?)
          ORDER BY history.created_at DESC, history.id DESC
          LIMIT ?`,
         workId,
         query,
+        conversationOwnerUserId ?? null,
+        conversationOwnerUserId ?? null,
         limit
       )
       : this.store.db.all(
         `${columns}
          JOIN ai_history_search_fts fts ON fts.rowid = history.id
          WHERE history.work_id = ? AND ai_history_search_fts MATCH ?
+           AND (? IS NULL OR conversation.created_by_user_id = ?)
          ORDER BY bm25(ai_history_search_fts), history.created_at DESC, history.id DESC
          LIMIT ?`,
         workId,
         `"${query.replaceAll('"', '""')}"`,
+        conversationOwnerUserId ?? null,
+        conversationOwnerUserId ?? null,
         limit
       );
     return rows.map((row): HybridSearchCandidate => {

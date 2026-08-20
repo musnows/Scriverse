@@ -1669,4 +1669,38 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT COUNT(*) AS count FROM ai_connectivity_test_states WHERE object_id = 'model-extended-thinking-effort'")).toEqual({ count: 0 });
     migrated.close();
   });
+
+  it("迁移 103 将无归属历史对话回填给作品创建者并建立列表索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-conversation-owner-"));
+    roots.push(root);
+    const filename = join(root, "conversation-owner.db");
+    const timestamp = "2026-08-20T00:00:00.000Z";
+    const current = new Database(filename);
+    const store = new Store(current);
+    current.run(
+      `INSERT INTO users (
+        id, username, normalized_username, display_name, password_hash, password_salt,
+        role, status, created_at, updated_at
+      ) VALUES ('migration-owner', 'migration_owner', 'migration_owner', '迁移创建者', 'hash', 'salt', 'admin', 'active', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    const work = store.createWork({ title: "历史对话迁移作品" });
+    current.run("UPDATE works SET owner_user_id = 'migration-owner' WHERE id = ?", String(work.id));
+    const conversation = store.createAiConversation(String(work.id), "待回填对话");
+    expect(current.get("SELECT created_by_user_id FROM ai_conversations WHERE id = ?", String(conversation.id))).toEqual({
+      created_by_user_id: null
+    });
+    current.run("DELETE FROM schema_migrations WHERE version = 103");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT created_by_user_id FROM ai_conversations WHERE id = ?", String(conversation.id))).toEqual({
+      created_by_user_id: "migration-owner"
+    });
+    expect(migrated.all("PRAGMA index_list(ai_conversations)").some((index) => index.name === "idx_ai_conversations_work_creator")).toBe(true);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
 });
