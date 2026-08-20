@@ -51,7 +51,7 @@ import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { S3BackupManager, type S3BackupManagerOptions } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
 import { ReleaseUpdateChecker } from "./release-update.js";
-import { DEFAULT_IMAGE_UPLOAD_LIMITS, formatUploadLimit, type ImageUploadLimits } from "./upload-limits.js";
+import { CHARACTER_AVATAR_IMAGE_MAX_BYTES, DEFAULT_IMAGE_UPLOAD_LIMITS, formatUploadLimit, type ImageUploadLimits } from "./upload-limits.js";
 import { canReadWorkModule, canWriteWorkModule, chapterAnnotationPermissionModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
@@ -112,6 +112,9 @@ function assertImageUploadSize(byteLength: number, maximumBytes: number, message
 
 function uploadSizeError(pathname: string, limits: ImageUploadLimits): { code: string; message: string } | null {
   if (pathname === "/api/auth/avatar") return { code: "IMAGE_TOO_LARGE", message: `头像图片不能超过 ${formatUploadLimit(limits.avatarBytes)}` };
+  if (/^\/api\/characters\/[^/]+\/avatar$/u.test(pathname)) {
+    return { code: "CHARACTER_AVATAR_TOO_LARGE", message: `角色头像不能超过 ${formatUploadLimit(CHARACTER_AVATAR_IMAGE_MAX_BYTES)}` };
+  }
   if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) {
     return { code: "IMAGE_TOO_LARGE", message: `封面图片不能超过 ${formatUploadLimit(limits.coverBytes)}` };
   }
@@ -810,6 +813,7 @@ export type RuntimeOptions = {
   databasePath: string;
   masterSecret: string;
   attachmentDirectory?: string;
+  characterAvatarDirectory?: string;
   fetchImpl?: typeof fetch;
   /** 测试用：覆盖 GitHub Release 探测请求。 */
   releaseFetchImpl?: typeof fetch;
@@ -853,6 +857,7 @@ export type Runtime = {
   backups: S3BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  characterAvatarStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
   close: () => Promise<void>;
 };
@@ -1211,14 +1216,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   const database = new Database(options.databasePath);
   const bootId = randomUUID();
-  const temporaryAttachmentRoot = options.databasePath === ":memory:" && !options.attachmentDirectory
-    ? mkdtempSync(join(tmpdir(), "scriverse-attachments-"))
+  const temporaryStorageRoot = options.databasePath === ":memory:" && (!options.attachmentDirectory || !options.characterAvatarDirectory)
+    ? mkdtempSync(join(tmpdir(), "scriverse-storage-"))
     : null;
   const attachmentStorage = new AttachmentStorage(
-    options.attachmentDirectory ?? temporaryAttachmentRoot ?? join(dirname(options.databasePath), "attachments"),
+    options.attachmentDirectory ?? temporaryStorageRoot ?? join(dirname(options.databasePath), "attachments"),
     uploadLimits.attachmentBytes
   );
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
+  const characterAvatarStorage = new AttachmentStorage(
+    options.characterAvatarDirectory
+      ?? (temporaryStorageRoot ? join(temporaryStorageRoot, "character-avatars") : join(dirname(options.databasePath), "character-avatars")),
+    CHARACTER_AVATAR_IMAGE_MAX_BYTES
+  );
+  mkdirSync(characterAvatarStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
   const collaborationPresence = new CollaborationPresence(
     45_000,
@@ -1290,6 +1301,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     attachmentCleanupChain = cleanup.catch(() => undefined);
     return cleanup;
   };
+  const cleanupCharacterAvatarFiles = async (storageKeys: string[]): Promise<void> => {
+    for (const storageKey of new Set(storageKeys)) {
+      if (store.characterAvatarStorageKeyInUse(storageKey)) continue;
+      await characterAvatarStorage.remove(storageKey);
+    }
+  };
   const requestPermissions = (request: Request, workId?: string): WorkModulePermissions => {
     if (!request.authUser) return fullWorkModulePermissions();
     const resolvedWorkId = workId ?? auth.resolveWorkId(request.path) ?? undefined;
@@ -1308,6 +1325,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const credentialVault = new CredentialVault(options.masterSecret);
   const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
     ...options.backupOptions,
+    characterAvatarStorage,
     masterKey: options.masterSecret,
     validateEndpoint: options.backupOptions?.validateEndpoint
       ?? (options.security ? (url) => assertSafeS3Endpoint(url, options.security?.allowPrivateAiEndpoints) : undefined)
@@ -1363,6 +1381,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const avatarUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: uploadLimits.avatarBytes + 1, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
+  });
+  const characterAvatarUpload = multer({
+    storage: multer.diskStorage({
+      destination: characterAvatarStorage.temporaryDirectory,
+      filename: (_request, _file, callback) => callback(null, randomUUID())
+    }),
+    limits: { fileSize: CHARACTER_AVATAR_IMAGE_MAX_BYTES + 1, files: 1, fields: 0, fieldSize: 1024, parts: 2, headerPairs: 50 }
   });
   const attachmentUpload = multer({
     storage: multer.diskStorage({
@@ -1570,7 +1595,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.delete("/api/recycle-bin/works/:workId/permanent", async (request, response) => {
     if (request.authUser) auth.assertDeletedWorkAccess(request.authUser, request.params.workId, request.authMethod !== "api-key");
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    const characterAvatarStorageKeys = store.listCharacterAvatarStorageKeysForWork(request.params.workId);
     store.permanentlyDeleteWork(request.params.workId, input.expectedVersionNo);
+    await cleanupCharacterAvatarFiles(characterAvatarStorageKeys);
     await cleanupAttachments();
     noContent(response);
   });
@@ -2031,6 +2058,56 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/characters/:characterId", (request, response) => {
     data(response, redactCharacterLinks(store.getCharacter(request.params.characterId), requestPermissions(request)));
   });
+  app.put("/api/characters/:characterId/avatar", characterAvatarUpload.single("file"), async (request, response) => {
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 角色头像");
+    const characterId = String(request.params.characterId);
+    let stored: Awaited<ReturnType<AttachmentStorage["ingest"]>> | null = null;
+    try {
+      stored = await characterAvatarStorage.ingest(request.file.path);
+      const result = store.setCharacterAvatar(characterId, {
+        mimeType: stored.storedMimeType,
+        byteLength: stored.storedByteLength,
+        sha256: stored.storedSha256,
+        storageKey: stored.storageKey,
+        width: stored.width,
+        height: stored.height
+      });
+      if (result.previousStorageKey
+        && result.previousStorageKey !== stored.storageKey
+        && !store.characterAvatarStorageKeyInUse(result.previousStorageKey)) {
+        await characterAvatarStorage.remove(result.previousStorageKey);
+      }
+      data(response, redactCharacterLinks(result.character, requestPermissions(request)));
+    } catch (error) {
+      if (error instanceof AppError && error.code === "ATTACHMENT_TOO_LARGE") {
+        throw new AppError(413, "CHARACTER_AVATAR_TOO_LARGE", `角色头像不能超过 ${formatUploadLimit(CHARACTER_AVATAR_IMAGE_MAX_BYTES)}`);
+      }
+      if (stored && !store.characterAvatarStorageKeyInUse(stored.storageKey)) {
+        await characterAvatarStorage.remove(stored.storageKey);
+      }
+      throw error;
+    } finally {
+      await rm(request.file.path, { force: true });
+    }
+  });
+  app.get("/api/characters/:characterId/avatar", async (request, response) => {
+    const avatar = store.getCharacterAvatar(request.params.characterId);
+    if (!avatar) throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "角色头像不存在");
+    const content = await characterAvatarStorage.read(avatar.storageKey);
+    response.setHeader("Content-Type", avatar.mimeType);
+    response.setHeader("Content-Length", String(content.byteLength));
+    response.setHeader("ETag", `\"${avatar.sha256}\"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(content);
+  });
+  app.delete("/api/characters/:characterId/avatar", async (request, response) => {
+    const result = store.deleteCharacterAvatar(request.params.characterId);
+    if (result.storageKey && !store.characterAvatarStorageKeyInUse(result.storageKey)) {
+      await characterAvatarStorage.remove(result.storageKey);
+    }
+    data(response, redactCharacterLinks(result.character, requestPermissions(request)));
+  });
   app.patch("/api/characters/:characterId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(characterUpdateSchema.extend({ expectedVersionNo: expectedVersionNoSchema }), request.body);
     const character = store.updateCharacter(request.params.characterId, input, "manual", null, changeNote, expectedVersionNo);
@@ -2048,10 +2125,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const character = store.restoreCharacter(request.params.characterId, input.versionNo, input.expectedVersionNo);
     data(response, redactCharacterLinks(character, requestPermissions(request)));
   });
-  app.delete("/api/characters/:characterId", (request, response) => {
+  app.delete("/api/characters/:characterId", async (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     const character = store.getCharacter(request.params.characterId);
+    const avatar = store.getCharacterAvatar(request.params.characterId);
     store.deleteCharacter(request.params.characterId, input.expectedVersionNo);
+    if (avatar && !store.characterAvatarStorageKeyInUse(avatar.storageKey)) {
+      await characterAvatarStorage.remove(avatar.storageKey);
+    }
     publishEntityChange(String(character.workId), "character", String(character.id), deletedPageChange);
     noContent(response);
   });
@@ -3340,7 +3421,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         await backups.waitForIdle(RUNTIME_BACKUP_IDLE_TIMEOUT_MS);
         collaborationPresence.close();
         database.close();
-        if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
+        if (temporaryStorageRoot) rmSync(temporaryStorageRoot, { recursive: true, force: true });
         closed = true;
         logger.info("runtime.closed");
       } catch (error) {
@@ -3352,5 +3433,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     })();
     return closePromise;
   };
-  return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close };
+  return { app, database, store, ai, backups, auth, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
 }
