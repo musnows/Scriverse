@@ -682,15 +682,15 @@ function userAvatarHtml(user, extraClass = "") {
   return `<span class="user-avatar ${esc(extraClass)}" aria-hidden="true"><span class="user-avatar-fallback">${esc(userAvatarInitial(user))}</span>${image}</span>`;
 }
 
-function characterAvatarPlaceholderIcon() {
-  return '<svg class="character-avatar-placeholder-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
+function characterAvatarInitial(character) {
+  return Array.from(String(character?.name || "角"))[0] ?? "角";
 }
 
 function characterAvatarHtml(character, extraClass = "") {
   const image = character?.avatarUrl
     ? `<img src="${esc(character.avatarUrl)}" alt="" loading="lazy" decoding="async">`
     : "";
-  return `<span class="character-avatar ${esc(extraClass)}" aria-hidden="true"><span class="character-avatar-fallback">${characterAvatarPlaceholderIcon()}</span>${image}</span>`;
+  return `<span class="character-avatar ${esc(extraClass)}" aria-hidden="true"><span class="character-avatar-fallback">${esc(characterAvatarInitial(character))}</span>${image}</span>`;
 }
 
 function bindUserAvatarFallbacks(root) {
@@ -13533,7 +13533,7 @@ function renderCharacterAvatar(item) {
   preview.replaceChildren();
   const fallback = document.createElement("span");
   fallback.className = "character-avatar-fallback";
-  fallback.innerHTML = characterAvatarPlaceholderIcon();
+  fallback.textContent = characterAvatarInitial(item);
   preview.append(fallback);
   if (item?.avatarUrl) {
     const image = document.createElement("img");
