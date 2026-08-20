@@ -6805,6 +6805,55 @@ export class Store {
     return this.mapAttachment(row);
   }
 
+  getAttachmentDownloadContextName(attachmentId: string): string | null {
+    const reference = this.db.get<{ context_name?: unknown }>(
+      `SELECT CASE reference.entity_type
+         WHEN 'setting' THEN (SELECT title FROM settings WHERE id = reference.entity_id AND work_id = reference.work_id)
+         WHEN 'character-section' THEN (
+           SELECT character.name
+           FROM character_profile_sections section
+           JOIN characters character ON character.id = section.character_id
+           WHERE section.id = reference.entity_id AND section.work_id = reference.work_id
+         )
+         WHEN 'race' THEN (SELECT name FROM races WHERE id = reference.entity_id AND work_id = reference.work_id)
+         WHEN 'organization' THEN (SELECT name FROM organizations WHERE id = reference.entity_id AND work_id = reference.work_id)
+         WHEN 'chapter' THEN (SELECT title FROM chapters WHERE id = reference.entity_id AND work_id = reference.work_id)
+         WHEN 'draft' THEN (SELECT title FROM drafts WHERE id = reference.entity_id AND work_id = reference.work_id)
+         ELSE NULL
+       END AS context_name
+       FROM attachment_references reference
+       WHERE reference.attachment_id = ?
+       ORDER BY CASE reference.entity_type
+         WHEN 'setting' THEN 0
+         WHEN 'character-section' THEN 1
+         WHEN 'race' THEN 2
+         WHEN 'organization' THEN 3
+         WHEN 'chapter' THEN 4
+         WHEN 'draft' THEN 5
+         ELSE 6
+       END, reference.created_at DESC, reference.entity_id
+       LIMIT 1`,
+      attachmentId
+    );
+    const contextName = optionalString(reference ?? {}, "context_name")?.trim();
+    if (contextName) return contextName;
+
+    const access = this.db.get<{ module?: unknown }>(
+      "SELECT module FROM attachment_access_modules WHERE attachment_id = ? ORDER BY module LIMIT 1",
+      attachmentId
+    );
+    const moduleLabels: Record<string, string> = {
+      settings: "设定库",
+      characters: "角色",
+      races: "种族",
+      organizations: "组织",
+      drafts: "想法",
+      prose: "正文",
+      "ai-chat": "AI对话"
+    };
+    return moduleLabels[String(access?.module ?? "")] ?? null;
+  }
+
   getSettingAttachment(workId: string, attachmentId: string): Record<string, unknown> {
     const row = this.db.get(
       `SELECT attachment.*

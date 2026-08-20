@@ -139,6 +139,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "daily_token_quota", "monthly_token_quota", "max_tokens"].includes(String(column.name)))).toHaveLength(5);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
+    expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "thinking_type" && column.dflt_value === "'enabled'")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_connectivity_test_states)").map((column) => column.name)).toEqual([
       "object_type",
       "object_id",
@@ -183,6 +184,7 @@ describe("数据库版本化迁移", () => {
       "input_tokens",
       "output_tokens",
       "cached_input_tokens",
+      "cache_write_input_tokens",
       "cache_eligible_input_tokens",
       "cache_usage_available",
       "token_usage_source"
@@ -983,7 +985,7 @@ describe("数据库版本化迁移", () => {
     migrated.close();
   });
 
-  it("迁移 107 为已有供应商增加日、月 Token 额度", () => {
+  it("迁移 109 为已有供应商增加日、月 Token 额度", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-provider-quota-"));
     roots.push(root);
     const filename = join(root, "provider-quota.db");
@@ -996,7 +998,7 @@ describe("数据库版本化迁移", () => {
 
     const legacy = new DatabaseSync(filename);
     legacy.exec(`
-      DELETE FROM schema_migrations WHERE version = 107;
+      DELETE FROM schema_migrations WHERE version = 109;
       ALTER TABLE providers DROP COLUMN daily_token_quota;
       ALTER TABLE providers DROP COLUMN monthly_token_quota;
     `);
@@ -1007,13 +1009,13 @@ describe("数据库版本化迁移", () => {
       "daily_token_quota",
       "monthly_token_quota"
     ]));
-    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 107")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 109")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
   });
 
-  it("迁移 108 将日、月 Token 额度约束调整为正整数并保留数据", () => {
+  it("迁移 110 将日、月 Token 额度约束调整为正整数并保留数据", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-positive-quota-"));
     roots.push(root);
     const filename = join(root, "positive-quota.db");
@@ -1041,7 +1043,7 @@ describe("数据库版本化迁移", () => {
     const legacy = new DatabaseSync(filename);
     legacy.exec(`
       PRAGMA foreign_keys = OFF;
-      DELETE FROM schema_migrations WHERE version = 108;
+      DELETE FROM schema_migrations WHERE version = 110;
       CREATE TABLE work_ai_settings_v107 AS SELECT * FROM work_ai_settings;
       DROP TABLE work_ai_settings;
       ALTER TABLE work_ai_settings_v107 RENAME TO work_ai_settings;
@@ -1064,7 +1066,7 @@ describe("数据库版本化迁移", () => {
     migrated.run("UPDATE providers SET daily_token_quota = 1, monthly_token_quota = 1 WHERE id = 'provider-positive-quota'");
     expect(() => migrated.run("UPDATE work_ai_settings SET daily_token_quota = 0 WHERE work_id = 'work-positive-quota'")).toThrow();
     expect(() => migrated.run("UPDATE providers SET monthly_token_quota = -1 WHERE id = 'provider-positive-quota'")).toThrow();
-    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 108")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 110")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
@@ -1707,6 +1709,37 @@ describe("数据库版本化迁移", () => {
       protocol: "openai-chat-completions",
       max_tokens_parameter: "max_tokens"
     });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 106 为既有供应商补充默认思考类型并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-provider-thinking-type-"));
+    roots.push(root);
+    const filename = join(root, "provider-thinking-type.db");
+    const timestamp = "2026-08-21T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, thinking_type, created_at, updated_at
+      ) VALUES (
+        'provider-thinking-type', '__scriverse_platform_ai__', '思考类型迁移供应商', 'https://thinking-type.test/v1',
+        'openai-chat-completions', 'encrypted', 'iv', 'tag', '***', 'disabled', 'adaptive', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.raw.exec("ALTER TABLE providers DROP COLUMN thinking_type");
+    current.run("DELETE FROM schema_migrations WHERE version = 106");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT name, thinking_type FROM providers WHERE id = 'provider-thinking-type'")).toEqual({
+      name: "思考类型迁移供应商",
+      thinking_type: "enabled"
+    });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 106")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();

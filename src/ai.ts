@@ -9,6 +9,7 @@ import {
 } from "./domain.js";
 import {
   buildCompletionRequestBody,
+  AI_THINKING_TYPES,
   isAiProviderProtocol,
   normalizeProviderBaseUrl,
   parseCompletionPayload,
@@ -17,12 +18,14 @@ import {
   providerProtocolLabelText,
   providerRequestHeaders,
   type AiProviderProtocol,
+  type AiThinkingType,
   type CompletionMessage,
   type CompletionMessageContent,
   type CompletionPayload,
   type CompletionToolCall,
   type MaxTokensParameter
 } from "./ai-protocol.js";
+import { estimateLiteLlmUsageCost, type LiteLlmPriceCache, type ModelTokenUsage } from "./ai-model-pricing.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
@@ -109,6 +112,7 @@ type ProviderInput = {
   baseUrl: string;
   apiKey: string;
   protocol?: AiProviderProtocol;
+  thinkingType?: AiThinkingType;
   maxTokensParameter?: MaxTokensParameter;
   status?: "enabled" | "disabled";
   note?: string;
@@ -178,6 +182,7 @@ type InteractiveStreamWaitPhase = "first_event" | "between_events";
 type AiManagerOptions = {
   interactiveStreamIdleTimeoutMs?: number;
   aiChatImageMaxBytes?: number;
+  liteLlmPriceCache?: LiteLlmPriceCache;
   retryPolicy?: Partial<AiRetryPolicy>;
   retrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 };
@@ -431,6 +436,7 @@ export type ResolvedAiTokenUsage = {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  cacheWriteInputTokens: number;
   cacheEligibleInputTokens: number;
   source: "reported" | "estimated" | "mixed";
 };
@@ -567,6 +573,11 @@ function providerProtocol(provider: Row): AiProviderProtocol {
   throw new AppError(500, "INVALID_PROVIDER_PROTOCOL", `不支持的供应商协议：${value || "(empty)"}`);
 }
 
+function providerThinkingType(provider: Row): AiThinkingType {
+  const value = stringValue(provider, "thinking_type");
+  return (AI_THINKING_TYPES as readonly string[]).includes(value) ? value as AiThinkingType : "enabled";
+}
+
 function supportsMultimodalProviderProtocol(provider: Row): boolean {
   return ["openai-chat-completions", "openai-responses", "anthropic-messages", "google-vertex"].includes(providerProtocol(provider));
 }
@@ -604,6 +615,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   const thinkingEnabled = boolValue(model, "thinking_enabled");
   const thinkingEffort = stringValue(model, "thinking_effort");
   const protocol = providerProtocol(provider);
+  const thinkingType = providerThinkingType(provider);
   if (protocol === "openai-responses" && !thinkingEnabled) return { reasoning_effort: "none" };
   const effortParameters = thinkingEnabled && ["low", "medium", "high", "xhigh", "max"].includes(thinkingEffort)
     ? protocol === "anthropic-messages"
@@ -612,10 +624,10 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
     : {};
   if (isGeminiProviderOrModel(provider, model)) return effortParameters;
   if (protocol === "anthropic-messages" && isZhipuProvider(provider)) {
-    return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
+    return { thinking: { type: thinkingEnabled ? thinkingType : "disabled" }, ...effortParameters };
   }
   if (protocol === "anthropic-messages" && !isLongCatProvider(provider)) return effortParameters;
-  return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
+  return { thinking: { type: thinkingEnabled ? thinkingType : "disabled" }, ...effortParameters };
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
@@ -1292,7 +1304,7 @@ export function resolveOutputTokens(usage: unknown, content: string): number {
   return estimateAiTokens(content);
 }
 
-type InputCacheUsage = { inputTokens: number; cachedInputTokens: number };
+type InputCacheUsage = { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number };
 
 function reportedTokenCount(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)
@@ -1304,13 +1316,16 @@ function resolveInputCacheUsage(usage: unknown): InputCacheUsage | null {
   if (!usage || typeof usage !== "object") return null;
   const record = usage as Record<string, unknown>;
   const anthropicCacheRead = reportedTokenCount(record.cache_read_input_tokens);
-  const anthropicCacheCreation = reportedTokenCount(record.cache_creation_input_tokens);
+  const anthropicCacheCreation = reportedTokenCount(record.cache_creation_input_tokens)
+    ?? reportedTokenCount(record.cache_write_input_tokens)
+    ?? reportedTokenCount(record.cache_write_tokens);
   if (anthropicCacheRead !== null || anthropicCacheCreation !== null) {
     const uncachedInputTokens = reportedTokenCount(record.input_tokens) ?? 0;
     const cachedInputTokens = anthropicCacheRead ?? 0;
-    const inputTokens = uncachedInputTokens + cachedInputTokens + (anthropicCacheCreation ?? 0);
+    const cacheWriteInputTokens = anthropicCacheCreation ?? 0;
+    const inputTokens = uncachedInputTokens + cachedInputTokens + cacheWriteInputTokens;
     if (inputTokens <= 0) return null;
-    return { inputTokens, cachedInputTokens };
+    return { inputTokens, cachedInputTokens, cacheWriteInputTokens };
   }
   const promptDetails = record.prompt_tokens_details && typeof record.prompt_tokens_details === "object"
     ? record.prompt_tokens_details as Record<string, unknown>
@@ -1323,18 +1338,28 @@ function resolveInputCacheUsage(usage: unknown): InputCacheUsage | null {
     ?? record.prompt_cache_hit_tokens
     ?? record.cache_read_input_tokens
     ?? record.cached_input_tokens;
-  if (typeof cached !== "number" || !Number.isFinite(cached)) return null;
+  const cacheReadInputTokens = reportedTokenCount(cached);
+  const cacheWriteInputTokens = reportedTokenCount(
+    record.cache_creation_input_tokens
+      ?? record.cache_write_input_tokens
+      ?? record.cache_write_tokens
+  ) ?? 0;
+  if (cacheReadInputTokens === null && cacheWriteInputTokens <= 0) return null;
   const reportedInput = record.prompt_tokens ?? record.input_tokens;
   const missed = record.prompt_cache_miss_tokens;
   const inputTokens = typeof reportedInput === "number" && Number.isFinite(reportedInput)
     ? Math.max(0, Math.round(reportedInput))
     : typeof missed === "number" && Number.isFinite(missed)
-      ? Math.max(0, Math.round(cached)) + Math.max(0, Math.round(missed))
+      ? (cacheReadInputTokens ?? 0) + Math.max(0, Math.round(missed)) + cacheWriteInputTokens
       : 0;
   if (inputTokens <= 0) return null;
   return {
     inputTokens,
-    cachedInputTokens: Math.min(inputTokens, Math.max(0, Math.round(cached)))
+    cachedInputTokens: Math.min(inputTokens, cacheReadInputTokens ?? 0),
+    cacheWriteInputTokens: Math.min(
+      Math.max(0, inputTokens - Math.min(inputTokens, cacheReadInputTokens ?? 0)),
+      cacheWriteInputTokens
+    )
   };
 }
 
@@ -1381,6 +1406,7 @@ export function resolveAiTokenUsage(
     inputTokens,
     outputTokens,
     cachedInputTokens: cacheUsage?.cachedInputTokens ?? 0,
+    cacheWriteInputTokens: cacheUsage?.cacheWriteInputTokens ?? 0,
     cacheEligibleInputTokens: cacheUsage?.inputTokens ?? 0,
     source: reportedInputTokens !== null && reportedOutputTokens !== null
       ? "reported"
@@ -1469,6 +1495,7 @@ const providerConnectivityConfigurationFields = [
   "rpm_limit",
   "max_tokens",
   "max_tokens_parameter",
+  "thinking_type",
   "default_model_id",
   "note"
 ] as const;
@@ -2298,6 +2325,7 @@ export class AiManager {
   private readonly aiChatImageMaxBytes: number;
   private readonly retryPolicy: AiRetryPolicy;
   private readonly retrySleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  private readonly liteLlmPriceCache?: LiteLlmPriceCache;
   private readonly taskControllers = new Map<string, AbortController>();
   private readonly autoRunStarting = new Map<string, Set<string>>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2350,6 +2378,7 @@ export class AiManager {
       && Number(options.aiChatImageMaxBytes) > 0
       ? Number(options.aiChatImageMaxBytes)
       : DEFAULT_AI_CHAT_IMAGE_MAX_BYTES;
+    this.liteLlmPriceCache = options.liteLlmPriceCache;
     this.retryPolicy = normalizeAiRetryPolicy(options.retryPolicy);
     this.retrySleep = options.retrySleep ?? waitForAiRetry;
     this.contextBuilder = new ContextBuilder(store);
@@ -2984,6 +3013,7 @@ export class AiManager {
          COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
          COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
          COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens,
          COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
          COUNT(*) AS request_count,
          COALESCE(SUM(CASE WHEN call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count,
@@ -3000,6 +3030,7 @@ export class AiManager {
          COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
          COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
          COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens,
          COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
          COUNT(*) AS request_count,
          COALESCE(SUM(CASE WHEN call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count
@@ -3011,6 +3042,27 @@ export class AiManager {
       timezoneOffset,
       ...scopeParams
     ).map((row) => this.mapTokenUsageRow(row, { date: stringValue(row, "usage_date") }));
+    const modelUsages: ModelTokenUsage[] = this.store.db.all(
+      `SELECT
+         COALESCE(model.model_id, call.model_id) AS usage_model_id,
+         COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
+         COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
+         COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens
+       FROM ai_calls call
+       JOIN works work ON work.id = call.work_id
+       LEFT JOIN models model ON model.id = call.model_id
+       WHERE COALESCE(work.is_internal, 0) = 0 AND ${usageFilter}${scopeSql}
+       GROUP BY COALESCE(model.model_id, call.model_id)`,
+      ...scopeParams
+    ).map((row) => ({
+      modelId: stringValue(row, "usage_model_id"),
+      inputTokens: numberValue(row, "input_tokens"),
+      outputTokens: numberValue(row, "output_tokens"),
+      cachedInputTokens: numberValue(row, "cached_input_tokens"),
+      cacheWriteInputTokens: numberValue(row, "cache_write_input_tokens")
+    }));
+    const pricing = estimateLiteLlmUsageCost(modelUsages, this.liteLlmPriceCache?.getPriceTable() ?? new Map());
     const works = includeWorks
       ? this.store.db.all(
         `SELECT
@@ -3019,6 +3071,7 @@ export class AiManager {
            COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
            COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
            COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+           COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens,
            COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
            COUNT(call.id) AS request_count,
            COALESCE(SUM(CASE WHEN call.id IS NULL OR call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count,
@@ -3039,7 +3092,8 @@ export class AiManager {
     return {
       summary: this.mapTokenUsageRow(summary, {
         firstUsedAt: summary.first_used_at === null || summary.first_used_at === undefined ? null : stringValue(summary, "first_used_at"),
-        lastUsedAt: summary.last_used_at === null || summary.last_used_at === undefined ? null : stringValue(summary, "last_used_at")
+        lastUsedAt: summary.last_used_at === null || summary.last_used_at === undefined ? null : stringValue(summary, "last_used_at"),
+        ...pricing
       }),
       daily,
       ...(works ? { works } : {}),
@@ -3050,7 +3104,11 @@ export class AiManager {
   private mapTokenUsageRow(row: Row, extra: Record<string, unknown>): Record<string, unknown> {
     const inputTokens = numberValue(row, "input_tokens");
     const outputTokens = numberValue(row, "output_tokens");
-    const cachedInputTokens = numberValue(row, "cached_input_tokens");
+    const cachedInputTokens = Math.min(inputTokens, numberValue(row, "cached_input_tokens"));
+    const cacheWriteInputTokens = Math.min(
+      Math.max(0, inputTokens - cachedInputTokens),
+      numberValue(row, "cache_write_input_tokens")
+    );
     const cacheEligibleInputTokens = numberValue(row, "cache_eligible_input_tokens");
     return {
       ...extra,
@@ -3058,6 +3116,9 @@ export class AiManager {
       inputTokens,
       outputTokens,
       cachedInputTokens,
+      directInputTokens: Math.max(0, inputTokens - cachedInputTokens - cacheWriteInputTokens),
+      cacheReadInputTokens: cachedInputTokens,
+      cacheWriteInputTokens,
       cacheEligibleInputTokens,
       cacheHitRate: cacheEligibleInputTokens > 0
         ? Math.round(cachedInputTokens / cacheEligibleInputTokens * 1_000) / 10
@@ -3401,8 +3462,8 @@ export class AiManager {
     if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, daily_token_quota, monthly_token_quota, max_tokens_parameter, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, daily_token_quota, monthly_token_quota, max_tokens_parameter, thinking_type, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -3418,11 +3479,12 @@ export class AiManager {
       input.dailyTokenQuota ?? null,
       input.monthlyTokenQuota ?? null,
       maxTokensParameter,
+      input.thinkingType ?? "enabled",
       input.note ?? "",
       timestamp,
       timestamp
     );
-    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol, maxTokensParameter });
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol, maxTokensParameter, thinkingType: input.thinkingType ?? "enabled" });
     return this.getProvider(providerId);
   }
 
@@ -3444,6 +3506,8 @@ export class AiManager {
     const row = this.getProviderRow(providerId);
     const nextProtocol = input.protocol ?? providerProtocol(row);
     const currentMaxTokensParameter = providerMaxTokensParameter(row);
+    const currentThinkingType = providerThinkingType(row);
+    const nextThinkingType = input.thinkingType ?? currentThinkingType;
     if (nextProtocol === "anthropic-messages" && input.maxTokensParameter === "max_completion_tokens") {
       throw new AppError(400, "INVALID_MAX_TOKENS_PARAMETER", "Anthropic Messages 协议仅支持 max_tokens");
     }
@@ -3472,6 +3536,7 @@ export class AiManager {
       this.vertexTokenCache.clear(providerId);
     }
     if (nextMaxTokensParameter !== currentMaxTokensParameter) connectionStatus = "unchecked";
+    if (nextThinkingType !== currentThinkingType) connectionStatus = "unchecked";
     const nextDailyTokenQuota = input.dailyTokenQuota === undefined
       ? nullableNumberValue(row, "daily_token_quota")
       : input.dailyTokenQuota;
@@ -3481,7 +3546,7 @@ export class AiManager {
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
        status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, daily_token_quota = ?, monthly_token_quota = ?,
-       max_tokens_parameter = ?, note = ?, updated_at = ? WHERE id = ?`,
+       max_tokens_parameter = ?, thinking_type = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       nextBaseUrl,
       nextProtocol,
@@ -3496,6 +3561,7 @@ export class AiManager {
       nextDailyTokenQuota,
       nextMonthlyTokenQuota,
       nextMaxTokensParameter,
+      nextThinkingType,
       input.note ?? stringValue(row, "note"),
       now(),
       providerId
@@ -7423,12 +7489,14 @@ export class AiManager {
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
+    let trackedCacheWriteInputTokens = 0;
     let trackedCacheEligibleInputTokens = 0;
     const trackedUsageSources = new Set<ResolvedAiTokenUsage["source"]>();
     const trackUsage = (usage: ResolvedAiTokenUsage): void => {
       trackedInputTokens += usage.inputTokens;
       trackedOutputTokens += usage.outputTokens;
       trackedCachedInputTokens += usage.cachedInputTokens;
+      trackedCacheWriteInputTokens += usage.cacheWriteInputTokens;
       trackedCacheEligibleInputTokens += usage.cacheEligibleInputTokens;
       trackedUsageSources.add(usage.source);
     };
@@ -7976,13 +8044,14 @@ export class AiManager {
       this.store.db.run(
         `UPDATE ai_calls
          SET status = 'completed', output_chars = ?, input_tokens = ?, output_tokens = ?,
-             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
+             cached_input_tokens = ?, cache_write_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
              token_usage_source = ?, completed_at = ?
          WHERE id = ?`,
         content.length,
         trackedInputTokens,
         trackedOutputTokens,
         trackedCachedInputTokens,
+        trackedCacheWriteInputTokens,
         trackedCacheEligibleInputTokens,
         trackedCacheEligibleInputTokens > 0 ? 1 : 0,
         trackedUsageSource(),
@@ -8028,7 +8097,7 @@ export class AiManager {
       this.store.db.run(
         `UPDATE ai_calls
          SET status = 'failed', failure = ?, output_chars = ?, input_tokens = ?, output_tokens = ?,
-             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
+             cached_input_tokens = ?, cache_write_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
              token_usage_source = ?, completed_at = ?
          WHERE id = ?`,
         message,
@@ -8036,6 +8105,7 @@ export class AiManager {
         trackedInputTokens,
         trackedOutputTokens,
         trackedCachedInputTokens,
+        trackedCacheWriteInputTokens,
         trackedCacheEligibleInputTokens,
         trackedCacheEligibleInputTokens > 0 ? 1 : 0,
         trackedUsageSource(),
@@ -12362,6 +12432,7 @@ export class AiManager {
       baseUrl: stringValue(row, "base_url"),
       protocol: providerProtocol(row),
       maxTokensParameter: providerMaxTokensParameter(row),
+      thinkingType: providerThinkingType(row),
       apiKey: apiKeyHint,
       status: stringValue(row, "status"),
       connectionStatus: stringValue(row, "connection_status"),

@@ -22,7 +22,7 @@ import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-s
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
-import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
+import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260819-context-percent-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
@@ -498,6 +498,8 @@ const defaultImageUploadLimits = {
   chatImageBytes: 5 * 1024 * 1024
 };
 const characterAvatarImageMaxBytes = 2 * 1024 * 1024;
+const userAvatarFileAccept = "image/png,image/jpeg,image/webp,image/gif";
+const characterAvatarFileAccept = "image/png,image/jpeg,image/webp";
 let imageUploadLimits = { ...defaultImageUploadLimits };
 
 function formatUploadLimit(bytes) {
@@ -3581,7 +3583,9 @@ function blockLockedAiConversationOptionKeydown(event) {
 
 function syncAiTaskOptions() {
   const roleplaySelected = $("#ai-task").value === "roleplay";
-  const relationshipRoleplaySelectable = roleplaySelected && Boolean(state.aiRoleplayCharacter);
+  const relationshipRoleplaySelectable = roleplaySelected
+    && Boolean(state.aiRoleplayCharacter)
+    && (!state.aiPromptSent || Boolean(state.aiRoleplayUserCharacter));
   const interactionBusy = aiInteractionBusy();
   $("#ai-scope").classList.toggle("hidden", roleplaySelected);
   $("#ai-scope").setAttribute("aria-hidden", String(roleplaySelected));
@@ -5686,6 +5690,7 @@ function renderSettingsHub() {
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-usage-pricing-refresh").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#admin-ai-conversations-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
@@ -7063,6 +7068,7 @@ async function showPlatformUsage() {
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = "Token 用量";
   $("#settings-button").setAttribute("aria-current", "page");
+  $("#platform-usage-pricing-refresh").classList.toggle("hidden", state.user?.role !== "admin");
   setTopbarViewState("Token 用量");
   await renderPlatformTokenUsage();
   replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
@@ -11101,7 +11107,7 @@ function renderProviderCards(providers, models, protocolOptions) {
       : "";
     return `
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol, protocolOptions))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
-    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}\n每日 Token 额度：${provider.dailyTokenQuota === null || provider.dailyTokenQuota === undefined ? "未限制" : Number(provider.dailyTokenQuota).toLocaleString("zh-CN")} · 每月 Token 额度：${provider.monthlyTokenQuota === null || provider.monthlyTokenQuota === undefined ? "未限制" : Number(provider.monthlyTokenQuota).toLocaleString("zh-CN")}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n思考类型：${esc(provider.thinkingType ?? "enabled")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}\n每日 Token 额度：${provider.dailyTokenQuota === null || provider.dailyTokenQuota === undefined ? "未限制" : Number(provider.dailyTokenQuota).toLocaleString("zh-CN")} · 每月 Token 额度：${provider.monthlyTokenQuota === null || provider.monthlyTokenQuota === undefined ? "未限制" : Number(provider.monthlyTokenQuota).toLocaleString("zh-CN")}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
@@ -11682,9 +11688,19 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   const requestCount = Number(summary.requestCount) || 0;
   const cachedInputTokens = Number(summary.cachedInputTokens) || 0;
   const cacheEligibleInputTokens = Number(summary.cacheEligibleInputTokens) || 0;
+  const directInputTokens = Math.max(0, Math.round(Number(summary.directInputTokens) || 0));
+  const cacheReadInputTokens = Math.max(0, Math.round(Number(summary.cacheReadInputTokens ?? cachedInputTokens) || 0));
+  const cacheWriteInputTokens = Math.max(0, Math.round(Number(summary.cacheWriteInputTokens) || 0));
+  const inputDescription = `直接 Input ${directInputTokens.toLocaleString("zh-CN")} · Cache Read ${cacheReadInputTokens.toLocaleString("zh-CN")} · Cache Write ${cacheWriteInputTokens.toLocaleString("zh-CN")}`;
   const cacheDescription = summary.cacheHitRate === null || summary.cacheHitRate === undefined
     ? "供应商尚未返回可计算的缓存明细"
     : `${cachedInputTokens.toLocaleString("zh-CN")} / ${cacheEligibleInputTokens.toLocaleString("zh-CN")} 个可统计输入 Token 命中缓存`;
+  const estimatedCost = formatEstimatedCost(summary.estimatedCost);
+  const pricingDescription = "根据 LiteLLM 模型 ID 价格表估算，价格单位为美元；未匹配模型不计入。";
+  const pricingBadge = summary.pricingAvailable === true && summary.estimatedCost !== null && summary.estimatedCost !== undefined
+    ? `<span class="usage-cost-bubble" title="${esc(pricingDescription)}">估价 ${esc(estimatedCost)}</span>`
+    : "";
+  const unpricedModelCount = Math.max(0, Math.round(Number(summary.unpricedModelCount) || 0));
   const estimateNote = estimatedRequests > 0
     ? `其中 ${estimatedRequests.toLocaleString("zh-CN")} 次调用包含历史或供应商缺失用量时的估算。`
     : "全部用量均来自供应商返回的 Token 统计。";
@@ -11700,12 +11716,12 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
     <div class="config-section-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div></div>
     <div class="usage-stat-grid">
-      <article class="usage-stat is-primary"><span>总消耗</span><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
-      <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small>${Number(summary.inputTokens || 0).toLocaleString("zh-CN")}</small></article>
+      <article class="usage-stat is-primary"><div class="usage-stat-label"><span>总消耗</span>${pricingBadge}</div><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
+      <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small title="${esc(inputDescription)}">${esc(inputDescription)}</small></article>
       <article class="usage-stat"><span>输出 Token</span><strong>${esc(formatTokenCount(summary.outputTokens))}</strong><small>${Number(summary.outputTokens || 0).toLocaleString("zh-CN")}</small></article>
       <article class="usage-stat"><span>缓存命中率</span><strong>${esc(formatCacheHitRate(summary.cacheHitRate))}</strong><small>${esc(cacheDescription)}</small></article>
     </div>
-    <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)}</p>
+    <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)} 有 ${unpricedModelCount.toLocaleString("zh-CN")} 个模型在价格表中未找到对应价格</p>
     <section class="usage-calendar-section" aria-labelledby="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">
       <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格展示过去 53 周；颜色越深，当天消耗越高。</p></div></header>
       ${tokenUsageCalendarMarkup(usage?.daily)}
@@ -13994,10 +14010,9 @@ function renderCharacterEditorFields(item) {
   const stateEntries = characterStateEntries(item?.currentState ?? {});
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
-      `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP、GIF，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
+      `<div class="avatar-settings character-avatar-settings"><div id="character-avatar-preview" class="character-avatar character-avatar-editor-preview" role="img" aria-label="角色头像"></div><div class="avatar-settings-copy"><strong>角色头像</strong><small>支持 PNG、JPEG、WebP，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div><div class="avatar-settings-actions"><button id="character-avatar-upload-button" class="ghost-button" type="button">${item?.avatarUrl ? "更换头像" : "上传头像"}</button><button id="character-avatar-remove-button" class="ghost-button${item?.avatarUrl ? "" : " hidden"}" type="button">移除头像</button></div></div>` +
       field("name", "标准名", "text", item?.name) +
       field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
-      field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("aliases", "别名", "item-list", item?.aliases ?? []) +
       (!canReadModule("races")
         ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
@@ -14021,6 +14036,7 @@ function renderCharacterEditorFields(item) {
       field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
       '<div id="character-markdown-sections" class="character-markdown-sections"></div>'),
     characterEditorSection("state", "状态与约束", "维护任意当前状态，并明确禁止 AI 自行覆盖的字段。",
+      field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("currentState", "当前状态", "key-value-list", stateEntries, {
         keyName: "stateKey",
         valueName: "stateValue",
@@ -15305,11 +15321,13 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
   const defaultBaseUrl = item?.baseUrl ?? defaultBaseUrlForProtocol(protocol);
   const useMaxCompletionTokens = item?.maxTokensParameter === "max_completion_tokens"
     && protocolOptions.find((option) => option.value === protocol)?.supportsMaxCompletionTokens !== false;
+  const useAdaptiveThinking = item?.thinkingType === "adaptive";
   const providerProtocolFieldOptions = protocolOptions.map((option) => [option.value, option.label]);
   const maxTokensParameterField = `<div class="form-field provider-max-tokens-parameter-field" data-provider-max-tokens-parameter-field><span>最大输出令牌参数</span><label class="checkbox-field"><input name="useMaxCompletionTokens" type="checkbox" ${useMaxCompletionTokens ? "checked" : ""} aria-describedby="provider-max-tokens-parameter-hint"><span>使用 max_completion_tokens</span></label><small id="provider-max-tokens-parameter-hint" data-provider-max-tokens-parameter-hint>默认使用 max_tokens；OpenAI 新版模型可按需切换。</small></div>`;
   const dailyTokenQuota = item?.dailyTokenQuota ?? null;
   const monthlyTokenQuota = item?.monthlyTokenQuota ?? null;
   const providerTokenQuotaFields = `<div class="form-field provider-token-quota-fields" data-provider-token-quota-fields><span>供应商 Token 额度</span><small>按服务器部署时区统计该供应商跨所有小说的输入与输出 Token；与单个小说额度独立。额度必须设置为大于 0；低于每日 10,000 或每月 1,000,000 时仅提示风险。</small><div class="provider-token-quota-row"><label class="checkbox-field provider-token-quota-toggle"><input name="dailyTokenQuotaEnabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}><span>启用每日额度</span></label><label class="provider-token-quota-input">每日额度<input name="dailyTokenQuota" type="number" min="1" max="2000000000" step="1" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="供应商每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label></div><div class="provider-token-quota-row"><label class="checkbox-field provider-token-quota-toggle"><input name="monthlyTokenQuotaEnabled" type="checkbox" ${monthlyTokenQuota === null ? "" : "checked"}><span>启用每月额度</span></label><label class="provider-token-quota-input">每月额度<input name="monthlyTokenQuota" type="number" min="1" max="2000000000" step="1" value="${esc(String(monthlyTokenQuota ?? 10000))}" aria-label="供应商每月 Token 额度" ${monthlyTokenQuota === null ? "disabled" : ""}></label></div></div>`;
+  const thinkingTypeField = `<div class="form-field provider-thinking-type-field" data-provider-thinking-type-field><span>思考类型（开启时）</span><label class="checkbox-field"><input name="useAdaptiveThinking" type="checkbox" ${useAdaptiveThinking ? "checked" : ""} aria-describedby="provider-thinking-type-hint"><span>使用 adaptive（关闭时发送 enabled）</span></label><small id="provider-thinking-type-hint">关闭模型思考时仍发送 disabled；请只在供应商支持 adaptive 时开启。</small></div>`;
   openDialog(
     item ? "编辑 AI 供应商" : "新建 AI 供应商",
     field("name", "显示名称", "text", item?.name)
@@ -15317,6 +15335,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
       + field("baseUrl", "API 基础地址", "url", defaultBaseUrl)
       + `<div data-provider-credential-field>${credentialFieldForProtocol(protocol)}</div>`
       + maxTokensParameterField
+      + thinkingTypeField
       + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
       + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
       + providerTokenQuotaFields
@@ -15328,6 +15347,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
         protocol: form.get("protocol"),
         baseUrl: form.get("baseUrl"),
         maxTokensParameter: form.get("useMaxCompletionTokens") === "on" ? "max_completion_tokens" : "max_tokens",
+        thinkingType: form.get("useAdaptiveThinking") === "on" ? "adaptive" : "enabled",
         concurrencyLimit: Number(form.get("concurrencyLimit")),
         rpmLimit: Number(form.get("rpmLimit")),
         dailyTokenQuota: form.get("dailyTokenQuotaEnabled") === "on" ? Number(form.get("dailyTokenQuota")) : null,
@@ -16849,6 +16869,8 @@ const avatarCropSession = {
 function configureAvatarCropTarget(target) {
   avatarCropSession.target = target;
   const isCharacter = target.type === "character";
+  const fileInput = $("#avatar-file");
+  if (fileInput) fileInput.setAttribute("accept", isCharacter ? characterAvatarFileAccept : userAvatarFileAccept);
   $("#avatar-crop-dialog-eyebrow").textContent = isCharacter ? "角色档案" : "个人账户";
   $("#avatar-crop-dialog-title").textContent = isCharacter ? "设置角色头像" : "裁剪头像";
   $("#avatar-crop-dialog-description").textContent = isCharacter
@@ -16880,7 +16902,10 @@ function resetAvatarCropDialog() {
   $("#avatar-crop-selection")?.setAttribute("hidden", "");
   $("#avatar-crop-preview")?.replaceChildren();
   const fileInput = $("#avatar-file");
-  if (fileInput) fileInput.value = "";
+  if (fileInput) {
+    fileInput.value = "";
+    fileInput.setAttribute("accept", userAvatarFileAccept);
+  }
 }
 
 function stagePointFromEvent(event) {
@@ -17050,7 +17075,13 @@ function renderAvatarUploadProgress(fileName, progress, visible = true) {
 $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  const maximumBytes = avatarCropSession.target.type === "character"
+  const isCharacter = avatarCropSession.target.type === "character";
+  if (isCharacter && isGifImageFile(file)) {
+    toast("角色头像不支持 GIF 图片", "error");
+    event.target.value = "";
+    return;
+  }
+  const maximumBytes = isCharacter
     ? characterAvatarImageMaxBytes
     : imageUploadLimits.avatarBytes;
   if (file.size > maximumBytes) {
@@ -17384,6 +17415,19 @@ $("#platform-usage-refresh").addEventListener("click", async () => {
   try {
     await renderPlatformTokenUsage();
     toast("Token 用量已刷新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#platform-usage-pricing-refresh").addEventListener("click", async () => {
+  const button = $("#platform-usage-pricing-refresh");
+  button.disabled = true;
+  try {
+    await api("/api/platform/ai/usage/pricing/refresh", { method: "POST", body: {}, skipOptimisticVersion: true });
+    await renderPlatformTokenUsage();
+    toast("模型价格已刷新");
   } catch (error) {
     toast(error.message, "error");
   } finally {

@@ -28,6 +28,7 @@ describe("AI 输入缓存命中率", () => {
       inputTokens: 35,
       outputTokens: 6,
       cachedInputTokens: 10,
+      cacheWriteInputTokens: 5,
       cacheEligibleInputTokens: 35,
       source: "reported"
     });
@@ -57,17 +58,20 @@ describe("AI 输入缓存命中率", () => {
       inputTokens: 800,
       outputTokens: 120,
       cachedInputTokens: 600,
+      cacheWriteInputTokens: 0,
       cacheEligibleInputTokens: 800,
       source: "reported"
     });
     expect(resolveAiTokenUsage({ prompt_tokens: 800 }, 700, 100)).toMatchObject({
       inputTokens: 800,
       outputTokens: 100,
+      cacheWriteInputTokens: 0,
       source: "mixed"
     });
     expect(resolveAiTokenUsage(undefined, 700, 100)).toMatchObject({
       inputTokens: 700,
       outputTokens: 100,
+      cacheWriteInputTokens: 0,
       source: "estimated"
     });
   });

@@ -331,6 +331,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-view"');
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('id="platform-usage-view"');
+    expect(page.text).toContain('id="platform-usage-pricing-refresh"');
     expect(page.text).toContain('id="platform-usage-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
@@ -340,6 +341,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
+    expect(page.text).toContain('feature=ai-provider-thinking-type-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -364,6 +366,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('body: { monthlyTokenQuota: enabled ? quota : null }');
     expect(application.text).toContain('/page-route.js?v=20260812-reader-preview-v1');
     expect(application.text).toContain("本书 Token 用量");
+    expect(application.text).toContain("formatEstimatedCost");
+    expect(application.text).toContain("估价");
+    expect(application.text).toContain("pricingAvailable === true");
+    expect(application.text).toContain("Cache Read");
+    expect(application.text).toContain("Cache Write");
+    expect(application.text).toContain("/api/platform/ai/usage/pricing/refresh");
+    expect(application.text).toContain('state.user?.role !== "admin"');
+    expect(application.text).toContain("有 ${unpricedModelCount.toLocaleString(\"zh-CN\")} 个模型在价格表中未找到对应价格");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
     expect(application.text).toContain('class="usage-calendar-tooltip" role="tooltip" hidden');
@@ -397,6 +407,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".settings-hub-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }");
     expect(styles.text).toContain(".usage-calendar-grid {");
     expect(styles.text).toContain(".usage-stat-grid {");
+    expect(styles.text).toContain(".usage-cost-bubble {");
     expect(styles.text).toContain("@container usage-overview (max-width: 760px)");
     expect(page.text).toContain('id="platform-ai-return"');
     expect(page.text).toContain('id="users-settings-return"');
@@ -437,7 +448,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-galaxy-icon {");
     expect(styles.text).toContain(".relationship-table .relationship-actions button");
     expect(page.text).toContain('id="avatar-file"');
-    expect(page.text).toContain('accept="image/png,image/jpeg,image/webp,image/gif"');
+    expect(page.text).toContain('accept="image/png,image/jpeg,image/webp"');
     expect(page.text).toContain("文件不超过 2 MB");
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');
@@ -947,10 +958,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('const providerProtocolFieldOptions = protocolOptions.map((option) => [option.value, option.label])');
     expect(application.text).toContain('name="useMaxCompletionTokens"');
     expect(application.text).toContain('maxTokensParameter: form.get("useMaxCompletionTokens") === "on" ? "max_completion_tokens" : "max_tokens"');
+    expect(application.text).toContain('name="useAdaptiveThinking"');
+    expect(application.text).toContain('thinkingType: form.get("useAdaptiveThinking") === "on" ? "adaptive" : "enabled"');
+    expect(application.text).toContain("思考类型（开启时）");
     expect(application.text).toContain('const supportsMaxCompletionTokens = selectedProtocolOption(protocolSelect.value)?.supportsMaxCompletionTokens !== false');
     expect(application.text).toContain('maxTokensParameterFieldElement.hidden = !supportsMaxCompletionTokens');
     expect(application.text).toContain('maxTokensParameterFieldElement.classList.toggle("hidden", !supportsMaxCompletionTokens)');
     expect(application.text).toContain('最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}');
+    expect(application.text).toContain('思考类型：${esc(provider.thinkingType ?? "enabled")}');
     expect(application.text).not.toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain('item && item.providerStatus === "enabled"');
     expect(application.text).toContain('class="model-connection-test"');

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
-import { AI_PROVIDER_PROTOCOL_OPTIONS, AI_PROVIDER_PROTOCOLS, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
+import { AI_PROVIDER_PROTOCOL_OPTIONS, AI_PROVIDER_PROTOCOLS, AI_THINKING_TYPES, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
 import { DEFAULT_AI_CHAT_TAB_LIMIT } from "./ai-chat-tab-limit.js";
 import type { AiRetryPolicy } from "./ai-retry.js";
@@ -20,7 +20,9 @@ import {
   normalizeAiStreamIdleTimeoutSeconds
 } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
 import { AiManager } from "./ai.js";
+import { LiteLlmPriceCache } from "./ai-model-pricing.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import {
   CHARACTER_EXTRACTION_MAX_ALIASES,
@@ -96,6 +98,10 @@ const aiChatAttachmentIngestOptions = {
   allowedFormats: new Set(["png", "jpeg"]),
   preserveFormat: true,
   unsupportedMessage: "AI 对话图片附件仅支持 PNG、JPG、JPEG 图片"
+};
+const characterAvatarIngestOptions = {
+  allowedFormats: new Set(["png", "jpeg", "webp"]),
+  unsupportedMessage: "角色头像仅支持 PNG、JPEG 和 WebP 图片"
 };
 
 function stableJson(value: unknown): string {
@@ -428,6 +434,7 @@ const providerBaseSchema = z.object({
   baseUrl: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "接口地址必须使用 HTTP 或 HTTPS"),
   apiKey: z.string().trim().min(1).max(50_000),
   protocol: z.enum(AI_PROVIDER_PROTOCOLS).optional(),
+  thinkingType: z.enum(AI_THINKING_TYPES).optional(),
   maxTokensParameter: z.enum(MAX_TOKENS_PARAMETERS).optional(),
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),
@@ -862,6 +869,10 @@ export type RuntimeOptions = {
   aiRetryPolicy?: Partial<AiRetryPolicy>;
   /** 测试用：替换 AI HTTP 重试等待。 */
   aiRetrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  /** 价格缓存文件路径；生产服务使用数据目录下的 JSON 文件。 */
+  liteLlmPriceCachePath?: string;
+  /** 测试用：注入价格缓存实例，避免测试访问外部 LiteLLM 服务。 */
+  liteLlmPriceCache?: LiteLlmPriceCache;
   /** 同一浏览器工作区允许同时打开的 Agent 对话数量。 */
   aiChatTabLimit?: number;
   /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
@@ -873,6 +884,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  liteLlmPriceCache: LiteLlmPriceCache;
   backups: S3BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
@@ -1386,6 +1398,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       retries: options.releaseCheckRetries
     }
   );
+  const liteLlmPriceCache = options.liteLlmPriceCache ?? new LiteLlmPriceCache({
+    ...(options.liteLlmPriceCachePath ? { cachePath: options.liteLlmPriceCachePath } : {})
+  });
+  if (!options.liteLlmPriceCache && options.liteLlmPriceCachePath) liteLlmPriceCache.start();
   const ai = new AiManager(
     store,
     credentialVault,
@@ -1413,7 +1429,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? platformAiStreamIdleTimeoutMs,
       retryPolicy: options.aiRetryPolicy,
       retrySleep: options.aiRetrySleep,
-      aiChatImageMaxBytes: uploadLimits.chatImageBytes
+      aiChatImageMaxBytes: uploadLimits.chatImageBytes,
+      liteLlmPriceCache
     }
   );
   const app = express();
@@ -2107,11 +2124,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, redactCharacterLinks(store.getCharacter(request.params.characterId), requestPermissions(request)));
   });
   app.put("/api/characters/:characterId/avatar", characterAvatarUpload.single("file"), async (request, response) => {
-    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 角色头像");
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 角色头像");
     const characterId = String(request.params.characterId);
     let stored: Awaited<ReturnType<AttachmentStorage["ingest"]>> | null = null;
     try {
-      stored = await characterAvatarStorage.ingest(request.file.path);
+      stored = await characterAvatarStorage.ingest(request.file.path, characterAvatarIngestOptions);
       const result = store.setCharacterAvatar(characterId, {
         mimeType: stored.storedMimeType,
         byteLength: stored.storedByteLength,
@@ -2296,8 +2313,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该附件所属资料模块的权限");
     }
     const content = await attachmentStorage.read(String(attachment.storageKey));
+    const fileName = attachmentDownloadFileName(
+      store.getAttachmentDownloadContextName(String(attachment.id)),
+      String(attachment.originalName)
+    );
     response.setHeader("Content-Type", String(attachment.storedMimeType));
     response.setHeader("Content-Length", String(attachment.storedByteLength));
+    response.setHeader("Content-Disposition", inlineContentDisposition(fileName));
     response.setHeader("ETag", `"${String(attachment.storedSha256)}"`);
     response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     response.setHeader("X-Content-Type-Options", "nosniff");
@@ -2709,6 +2731,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/platform/ai/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
+  });
+  app.post("/api/platform/ai/usage/pricing/refresh", async (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    parse(z.object({}).strict(), request.body ?? {});
+    const refreshed = await liteLlmPriceCache.refresh();
+    if (!refreshed) {
+      throw new AppError(502, "LITELLM_PRICE_REFRESH_FAILED", "LiteLLM 模型价格刷新失败，历史缓存未改变");
+    }
+    data(response, {
+      refreshed: true,
+      pricingAvailable: liteLlmPriceCache.hasData(),
+      modelCount: liteLlmPriceCache.getPriceTable().size
+    });
   });
   app.get("/api/platform/ai-conversations", (request, response) => {
     const query = parse(adminAiConversationQuerySchema, request.query);
@@ -3503,6 +3539,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       stopping = true;
       logger.info("runtime.closing");
       backups.dispose();
+      liteLlmPriceCache.dispose();
       ai.dispose();
       const cancelledStreamRequests = store.cancelActiveAiConversationStreamRequests();
       if (cancelledStreamRequests > 0) logger.info("ai.stream.requests_cancelled", { count: cancelledStreamRequests });
@@ -3524,5 +3561,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     })();
     return closePromise;
   };
-  return { app, database, store, ai, backups, auth, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
+  return { app, database, store, ai, liteLlmPriceCache, backups, auth, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
 }
