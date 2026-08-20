@@ -97,6 +97,10 @@ const aiChatAttachmentIngestOptions = {
   preserveFormat: true,
   unsupportedMessage: "AI 对话图片附件仅支持 PNG、JPG、JPEG 图片"
 };
+const characterAvatarIngestOptions = {
+  allowedFormats: new Set(["png", "jpeg", "webp"]),
+  unsupportedMessage: "角色头像仅支持 PNG、JPEG 和 WebP 图片"
+};
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
@@ -2083,11 +2087,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, redactCharacterLinks(store.getCharacter(request.params.characterId), requestPermissions(request)));
   });
   app.put("/api/characters/:characterId/avatar", characterAvatarUpload.single("file"), async (request, response) => {
-    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 角色头像");
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 角色头像");
     const characterId = String(request.params.characterId);
     let stored: Awaited<ReturnType<AttachmentStorage["ingest"]>> | null = null;
     try {
-      stored = await characterAvatarStorage.ingest(request.file.path);
+      stored = await characterAvatarStorage.ingest(request.file.path, characterAvatarIngestOptions);
       const result = store.setCharacterAvatar(characterId, {
         mimeType: stored.storedMimeType,
         byteLength: stored.storedByteLength,

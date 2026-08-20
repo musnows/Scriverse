@@ -59,6 +59,22 @@ describe("角色头像 API", () => {
     expect(runtime.database.get("SELECT character_id FROM character_avatars WHERE character_id = ?", String(character.id))).toBeUndefined();
   });
 
+  it("拒绝 GIF 角色头像", async () => {
+    runtime = createTestRuntime();
+    const work = await createWork(runtime);
+    const character = runtime.store.createCharacter(String(work.id), { name: "GIF角色" });
+
+    const response = await request(runtime.app)
+      .put(`/api/characters/${String(character.id)}/avatar`)
+      .attach("file", onePixelGif, { filename: "avatar.gif", contentType: "image/gif" })
+      .expect(415);
+    expect(response.body.error).toEqual({
+      code: "UNSUPPORTED_ATTACHMENT",
+      message: "角色头像仅支持 PNG、JPEG 和 WebP 图片"
+    });
+    expect(runtime.database.get("SELECT character_id FROM character_avatars WHERE character_id = ?", String(character.id))).toBeUndefined();
+  });
+
   it("拒绝超过 2 MB 的角色头像", async () => {
     runtime = createTestRuntime();
     const work = await createWork(runtime);
