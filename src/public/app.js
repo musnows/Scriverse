@@ -11779,7 +11779,7 @@ async function renderBookAiSettings() {
     warning.setAttribute("role", "alert");
     warning.dataset.threshold = String(threshold);
     warning.textContent = "ai 小说用量巨大，低用量基本等于不可用";
-    input.insertAdjacentElement("afterend", warning);
+    input.closest(".config-inline-save")?.querySelector(".config-save-button")?.insertAdjacentElement("afterend", warning);
   };
   configureTokenQuotaInput(host.querySelector("#daily-token-quota"), "daily-token-quota-warning", 10_000);
   configureTokenQuotaInput(host.querySelector("#monthly-token-quota"), "monthly-token-quota-warning", 1_000_000);
