@@ -219,6 +219,7 @@ try { presenceSessionStorage = window.sessionStorage; } catch { /* 浏览器禁�
 const presenceClientId = createPresenceClientId(presenceSessionStorage);
 const presenceHeartbeatInterval = 12_000;
 const systemBootCheckInterval = 8_000;
+const systemRestartDialogDelay = 500;
 let presenceParticipants = [];
 let presenceHeartbeatTimer = null;
 let presenceHeartbeatQueued = null;
@@ -230,6 +231,7 @@ let collaborationAutoSaveDisabled = false;
 let systemBootId = null;
 let systemBootCheckTimer = null;
 let systemBootCheckPromise = null;
+let systemRestartDialogTimer = null;
 let systemRestartDetected = false;
 let chapterAnnotations = [];
 let chapterAnnotationCounts = new Map();
@@ -4592,9 +4594,14 @@ function observeSystemBootId(value) {
   systemRestartDetected = true;
   if (systemBootCheckTimer !== null) clearTimeout(systemBootCheckTimer);
   systemBootCheckTimer = null;
-  const dialog = $("#system-restart-dialog");
-  if (!dialog.open) dialog.showModal();
-  window.requestAnimationFrame(() => $("#system-restart-dialog-title").focus());
+  if (systemRestartDialogTimer !== null) clearTimeout(systemRestartDialogTimer);
+  systemRestartDialogTimer = window.setTimeout(() => {
+    systemRestartDialogTimer = null;
+    if (!systemRestartDetected) return;
+    const dialog = $("#system-restart-dialog");
+    if (!dialog.open) dialog.showModal();
+    window.requestAnimationFrame(() => $("#system-restart-dialog-title").focus());
+  }, systemRestartDialogDelay);
   return true;
 }
 
