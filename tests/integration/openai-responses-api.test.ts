@@ -191,7 +191,8 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
       const imagePart = (userMessage?.content as Array<Record<string, unknown>> | undefined)
         ?.find((part) => part.type === "input_image");
       expect(imagePart?.image_url).toMatch(/^data:image\/(?:png|webp);base64,/u);
-      expect(body.tools?.some((tool) => tool.name === "image")).not.toBe(true);
+      expect(body.tools?.some((tool) => tool.name === "image")).toBe(true);
+      expect(JSON.stringify(body.input)).toContain("本轮作者消息已经直接附带原生图片内容");
       imageRequestSeen = true;
       if (!body.stream) throw new Error("聊天请求必须使用流式模式");
       return new Response([
@@ -391,6 +392,8 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
         const imagePart = inputItems.flatMap((item) => Array.isArray(item.content) ? item.content : [])
           .find((part) => (part as Record<string, unknown>).type === "input_image") as Record<string, unknown> | undefined;
         expect(imagePart?.image_url).toMatch(/^data:image\/png;base64,/u);
+        expect(inputItems.some((item) => item.type === "function_call_output")).toBe(true);
+        expect(JSON.stringify(inputItems)).toContain("native_multimodal");
         return new Response(JSON.stringify({
           status: "completed",
           output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "图片显示一座蓝色行星。" }] }]
@@ -455,7 +458,11 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
       scope: { type: "none" },
       modelId
     }).expect(201);
-    expect(result.body.data.content).toContain("已读取设定图片");
-    expect(result.body.data.toolCalls).toEqual([expect.objectContaining({ name: "image", status: "completed" })]);
+    expect(result.body.data.content).toContain("图片显示一座蓝色行星");
+    expect(result.body.data.toolCalls).toEqual([expect.objectContaining({
+      name: "image",
+      status: "completed",
+      result: { ok: true, data: expect.objectContaining({ delivery: "native_multimodal" }) }
+    })]);
   });
 });
