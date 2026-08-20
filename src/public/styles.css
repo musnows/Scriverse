@@ -2617,7 +2617,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .assistant-message.is-search-target, .user-message.is-search-target { outline: 2px solid var(--accent); outline-offset: 3px; }
 .assistant-message.is-error { border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--paper-deep)); }
 .assistant-message.has-message-actions, .user-message.has-message-actions { margin-bottom: 42px; }
-.user-message { margin-left: 24px; background: var(--accent); color: #fff; }
+.user-message { width: fit-content; max-width: 60%; margin-left: auto; background: var(--accent); color: #fff; }
 .assistant-message > .message-heading, .user-message > .message-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; opacity: .65; font-size: 9px; }
 .message-heading > span { letter-spacing: .12em; }.message-heading time { flex: 0 0 auto; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
 .assistant-message.is-error > .message-heading { color: var(--accent-dark); opacity: 1; }
@@ -2732,7 +2732,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-mention-option small { color: var(--accent); font-size: 8px; }
 .ai-mention-option strong { overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .ai-mention-empty { margin: 0; padding: 10px; color: var(--muted); font-size: 10px; text-align: center; }
-.ai-prompt { display: block; width: 100%; min-height: 104px; max-height: 50dvh; margin: 0; padding: 10px 10px 44px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; cursor: text; }
+.ai-prompt { display: block; width: 100%; min-height: 104px; margin: 0; padding: 10px 10px 44px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; cursor: text; }
 .ai-prompt:empty::before { color: var(--muted); content: attr(data-placeholder); pointer-events: none; }
 .ai-prompt:focus { border-color: #a77768; box-shadow: 0 0 0 3px rgba(167,119,104,.12); outline: 0; }
 .ai-prompt-reference { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin: 0 2px; padding: 2px 4px 2px 7px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 13%, var(--paper)); color: var(--accent-dark); font-size: 10px; line-height: 1.25; vertical-align: baseline; }
