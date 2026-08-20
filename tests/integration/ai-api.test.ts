@@ -2022,6 +2022,40 @@ describe("AI 供应商、模型与建议 API", () => {
       .toBe(sourceModelId);
   });
 
+  it("包含图片的对话及其分支始终锁定原模型", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "chat" }).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    const userMessage = runtime.store.addAiConversationMessage(conversationId, {
+      role: "user",
+      content: "请描述这张图片",
+      metadata: { modelId: "image-model-a", chatImageAttachmentIds: ["chat-image-1"] }
+    });
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data).toMatchObject({ modelId: "image-model-a", hasImageAttachments: true, modelLockedByImage: true });
+
+    const forked = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/fork`).send({
+      messageId: userMessage.id
+    }).expect(201);
+    expect(forked.body.data).toMatchObject({ modelId: "image-model-a", hasImageAttachments: true, modelLockedByImage: true });
+    expect(forked.body.data.messages[0].metadata).toMatchObject({
+      modelId: "image-model-a",
+      chatImageAttachmentIds: ["chat-image-1"]
+    });
+
+    const changed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "尝试切换图片对话模型",
+      scope: { type: "none" },
+      modelId: "image-model-b",
+      conversationId: forked.body.data.id
+    }).expect(409);
+    expect(changed.body.error.code).toBe("AI_CONVERSATION_MODEL_LOCKED");
+
+    const reforked = await request(runtime.app).post(`/api/ai-conversations/${forked.body.data.id}/fork`).send({
+      messageId: forked.body.data.messages[0].id
+    }).expect(201);
+    expect(reforked.body.data).toMatchObject({ modelId: "image-model-a", hasImageAttachments: true, modelLockedByImage: true });
+  });
+
   it("对话开始后锁定实际上下文引用并在分支中保留", async () => {
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
       taskType: "chat"

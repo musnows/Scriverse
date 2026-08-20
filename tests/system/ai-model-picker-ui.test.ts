@@ -26,6 +26,9 @@ describe("AI 模型选择收纳界面", () => {
 
     expect(application).toContain("function selectedAiModelLabel()");
     expect(application).toContain("function aiConversationModelLocked()");
+    expect(application).toContain("aiConversationHasImages");
+    expect(application).toContain("hasImageAttachments");
+    expect(application).toContain("modelLockedByImage");
     expect(application).toContain("function syncAiModelPicker()");
     expect(application).toContain("const modelLocked = aiConversationModelLocked();");
     expect(application).toContain('button.setAttribute("aria-label", label);');

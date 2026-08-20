@@ -1307,8 +1307,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const resolveConversationModelId = (workId: string, conversationId: string | undefined, requestedModelId: string | undefined): string | undefined => {
     if (!conversationId) return requestedModelId;
     const lockedModelId = store.getAiConversationLockedModelId(conversationId, workId);
+    const hasImageAttachments = store.getAiConversationHasImageAttachments(conversationId, workId);
     if (lockedModelId && requestedModelId && lockedModelId !== requestedModelId) {
       throw new AppError(409, "AI_CONVERSATION_MODEL_LOCKED", "当前对话已经锁定模型，请新建对话后再切换模型");
+    }
+    if (hasImageAttachments && !lockedModelId && requestedModelId) {
+      throw new AppError(409, "AI_CONVERSATION_IMAGE_MODEL_LOCKED", "当前对话链路包含图片但没有可继承的模型，请新建对话后再选择模型");
     }
     return lockedModelId ?? requestedModelId;
   };

@@ -180,6 +180,7 @@ const state = {
   aiContextScope: { type: "none" },
   aiConversationId: null,
   aiConversationModelId: null,
+  aiConversationHasImages: false,
   aiConversations: [],
   aiRoleplayCharacter: null,
   aiRoleplayUserCharacter: null,
@@ -2054,6 +2055,7 @@ function createAiChatTabState(input = {}) {
     title: input.title ?? "新对话",
     modelId: input.modelId ?? null,
     selectedModelId: input.selectedModelId ?? null,
+    hasImageAttachments: input.hasImageAttachments === true,
     promptSent: input.promptSent === true,
     taskType: input.taskType ?? "chat",
     contextScope: input.contextScope ?? { type: "none" },
@@ -2081,6 +2083,7 @@ function persistActiveAiChatTab() {
   tab.conversationId = state.aiConversationId;
   tab.title = $("#ai-conversation-title").textContent || tab.title || "新对话";
   tab.modelId = state.aiConversationModelId;
+  tab.hasImageAttachments = state.aiConversationHasImages === true;
   tab.selectedModelId = $("#ai-model").value || tab.selectedModelId || null;
   tab.promptSent = state.aiPromptSent;
   tab.taskType = state.aiTaskType;
@@ -2113,6 +2116,7 @@ function clearAiChatTabComposer(tab) {
 function applyAiChatTabState(tab) {
   state.aiConversationId = tab.conversationId;
   state.aiConversationModelId = tab.modelId;
+  state.aiConversationHasImages = tab.hasImageAttachments === true;
   state.aiPromptSent = tab.promptSent;
   state.aiCitations = tab.citations.map((citation) => ({ ...citation }));
   state.aiReferences = tab.references.map((reference) => ({ ...reference }));
@@ -3174,6 +3178,7 @@ function updateAiConversationSummaryFromMessage(message) {
     title: current.title === "新对话" && message.role === "user" ? defaultAiConversationTitle(message.content) : current.title,
     messageCount: Number(current.messageCount ?? 0) + 1,
     preview: message.content,
+    ...(aiConversationMessageHasImages(message) ? { hasImageAttachments: true, modelLockedByImage: true } : {}),
     updatedAt: message.createdAt ?? current.updatedAt
   });
 }
@@ -3287,11 +3292,18 @@ function focusAiConversationMessage(messageId) {
   window.setTimeout(() => message.classList.remove("is-search-target"), 1800);
 }
 
+function aiConversationMessageHasImages(message) {
+  return Array.isArray(message?.metadata?.chatImageAttachmentIds)
+    && message.metadata.chatImageAttachmentIds.some((attachmentId) => String(attachmentId ?? "").trim().length > 0);
+}
+
 function applyConversationToAiChatTab(tab, conversation) {
   tab.workId = String(conversation.workId ?? state.work?.id ?? "");
   tab.conversationId = conversation.id;
   tab.title = conversation.title || "新对话";
   tab.modelId = typeof conversation.modelId === "string" ? conversation.modelId : null;
+  tab.hasImageAttachments = conversation.hasImageAttachments === true
+    || (Array.isArray(conversation.messages) && conversation.messages.some(aiConversationMessageHasImages));
   tab.selectedModelId = tab.modelId ?? tab.selectedModelId;
   tab.promptSent = Array.isArray(conversation.messages) && conversation.messages.some((message) => message.role === "user");
   tab.taskType = conversation.taskType ?? "chat";
@@ -3418,7 +3430,8 @@ function renderAiRoleplayUserCharacterSelect() {
 const aiConversationOptionLockedMessage = "会话选项在会话开始后不支持修改，若需要修改，请新建会话";
 
 function aiConversationModelLocked() {
-  return typeof state.aiConversationModelId === "string" && state.aiConversationModelId.trim().length > 0;
+  return state.aiConversationHasImages === true
+    || (typeof state.aiConversationModelId === "string" && state.aiConversationModelId.trim().length > 0);
 }
 
 function selectedAiModelLabel() {
@@ -15596,6 +15609,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
             ? persistedUserMessage.metadata.modelId
             : typeof body.modelId === "string" ? body.modelId : null;
           tab.modelId = lockedModelId;
+          tab.hasImageAttachments = tab.hasImageAttachments === true || aiConversationMessageHasImages(persistedUserMessage);
           tab.selectedModelId = lockedModelId;
           tab.promptSent = true;
           clearAiChatTabComposer(tab);
@@ -15606,6 +15620,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
           }
           if (isActiveAiChatTab(tab)) {
             state.aiConversationModelId = lockedModelId;
+            state.aiConversationHasImages = tab.hasImageAttachments === true;
             state.aiPromptSent = true;
             syncAiTaskOptions();
             renderAiRoleplayCharacterSelect();
