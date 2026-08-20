@@ -26,7 +26,7 @@ describe("AI 对话图片附件界面", () => {
     expect(application).toContain('preview.className = "ai-message-image-preview"');
     expect(application).toContain("openAiImagePreview(attachment, index + 1)");
     expect(application).toContain("label.textContent = `#${index + 1}`");
-    expect(application).toContain('$("#ai-image-preview-title").textContent = Number.isInteger(ordinal) ? `#${ordinal}` : "图片附件";');
+    expect(application).toContain('$("#ai-image-preview-title").textContent = Number.isInteger(ordinal) ? `图片附件 #${ordinal}` : "图片附件";');
     expect(application).toContain("assertAiChatImageFileSize(file)");
     expect(application).toContain("clipboardImageFiles(event.clipboardData)");
     expect(application).toContain("event.stopImmediatePropagation();");
@@ -43,7 +43,8 @@ describe("AI 对话图片附件界面", () => {
     expect(styles).toContain(".ai-image-attachments { display: flex; gap: 5px; max-height: 38px; margin-bottom: 6px;");
     expect(styles).toContain(".ai-image-preview-dialog { width: min(900px, 94vw);");
     expect(styles).toContain(".ai-image-preview-dialog .dialog-header { padding: 12px 16px 9px; }");
-    expect(styles).toContain(".ai-image-preview-dialog .dialog-header h2 { font-size: 18px; }");
+    expect(styles).toContain(".ai-image-preview-dialog .dialog-header .eyebrow { font-size: 9px; }");
+    expect(styles).toContain(".ai-image-preview-dialog .dialog-header-meta { margin-top: 4px; font-size: 10px; }");
     expect(styles).toContain(".ai-image-preview-body { display: grid; place-items: center; min-height: 180px; max-height: calc(88vh - 106px); padding: 16px 20px 20px; overflow: auto; background: var(--paper);");
     expect(styles).toContain(".ai-message-image-preview { display: block; width: 68px; height: 68px;");
     expect(styles).toContain(".ai-image-button-icon { width: 17px; height: 17px;");

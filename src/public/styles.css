@@ -2739,9 +2739,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-image-attachment-remove:hover, .ai-image-attachment-remove:focus-visible { color: var(--accent); outline: 0; }
 .ai-image-preview-dialog { width: min(900px, 94vw); max-width: calc(100vw - 24px); }
 .ai-image-preview-dialog .dialog-header { padding: 12px 16px 9px; }
-.ai-image-preview-dialog .dialog-header h2 { font-size: 18px; }
-.ai-image-preview-dialog .dialog-header .eyebrow { font-size: 8px; }
-.ai-image-preview-dialog .dialog-header-meta { margin-top: 4px; font-size: 9px; }
+.ai-image-preview-dialog .dialog-header .eyebrow { font-size: 9px; }
+.ai-image-preview-dialog .dialog-header-meta { margin-top: 4px; font-size: 10px; }
 .ai-image-preview-body { display: grid; place-items: center; min-height: 180px; max-height: calc(88vh - 106px); padding: 16px 20px 20px; overflow: auto; background: var(--paper); }
 .ai-image-preview-body img { display: block; max-width: 100%; max-height: calc(88vh - 150px); width: auto; height: auto; object-fit: contain; border-radius: 3px; }
 .ai-attachment-input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
