@@ -25,12 +25,14 @@ describe("角色头像界面", () => {
     expect(application.text).toContain("const characterAvatarImageMaxBytes = 2 * 1024 * 1024;");
     expect(application.text).toContain('id="character-avatar-upload-button"');
     expect(application.text).toContain('id="character-avatar-remove-button"');
+    expect(application.text).toContain("character-avatar-placeholder-icon");
     expect(application.text).toContain("const maximumBytes = isCharacter ? characterAvatarImageMaxBytes : imageUploadLimits.avatarBytes;");
     expect(application.text).toContain("if (blob.size > maximumBytes)");
     expect(application.text).toContain("/api/characters/${encodeURIComponent(target.characterId)}/avatar");
     expect(application.text).toContain('toast("角色头像已更新")');
     expect(styles.text).toContain(".character-avatar {");
+    expect(styles.text).toContain(".character-avatar-placeholder-icon {");
     expect(styles.text).toContain(".character-avatar-settings {");
-    expect(page.text).toContain("feature=character-avatar-v2");
+    expect(page.text).toContain("feature=character-avatar-v3");
   });
 });
