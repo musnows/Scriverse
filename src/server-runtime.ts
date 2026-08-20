@@ -226,6 +226,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
     }
     runtime = createRuntime({
       databasePath: options.databasePath,
+      liteLlmPriceCachePath: join(options.dataDirectory, "litellm-model-prices.json"),
       attachmentDirectory: join(options.dataDirectory, "attachments"),
       characterAvatarDirectory: join(options.dataDirectory, "character-avatars"),
       masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),

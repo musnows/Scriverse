@@ -22,6 +22,7 @@ import {
 import { AttachmentStorage } from "./attachment-storage.js";
 import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
 import { AiManager } from "./ai.js";
+import { LiteLlmPriceCache } from "./ai-model-pricing.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import {
   CHARACTER_EXTRACTION_MAX_ALIASES,
@@ -865,6 +866,10 @@ export type RuntimeOptions = {
   aiRetryPolicy?: Partial<AiRetryPolicy>;
   /** 测试用：替换 AI HTTP 重试等待。 */
   aiRetrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  /** 价格缓存文件路径；生产服务使用数据目录下的 JSON 文件。 */
+  liteLlmPriceCachePath?: string;
+  /** 测试用：注入价格缓存实例，避免测试访问外部 LiteLLM 服务。 */
+  liteLlmPriceCache?: LiteLlmPriceCache;
   /** 同一浏览器工作区允许同时打开的 Agent 对话数量。 */
   aiChatTabLimit?: number;
   /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
@@ -876,6 +881,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  liteLlmPriceCache: LiteLlmPriceCache;
   backups: S3BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
@@ -1368,6 +1374,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       retries: options.releaseCheckRetries
     }
   );
+  const liteLlmPriceCache = options.liteLlmPriceCache ?? new LiteLlmPriceCache({
+    ...(options.liteLlmPriceCachePath ? { cachePath: options.liteLlmPriceCachePath } : {})
+  });
+  if (!options.liteLlmPriceCache && options.liteLlmPriceCachePath) liteLlmPriceCache.start();
   const ai = new AiManager(
     store,
     credentialVault,
@@ -1395,7 +1405,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? platformAiStreamIdleTimeoutMs,
       retryPolicy: options.aiRetryPolicy,
       retrySleep: options.aiRetrySleep,
-      aiChatImageMaxBytes: uploadLimits.chatImageBytes
+      aiChatImageMaxBytes: uploadLimits.chatImageBytes,
+      liteLlmPriceCache
     }
   );
   const app = express();
@@ -2697,6 +2708,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
   });
+  app.post("/api/platform/ai/usage/pricing/refresh", async (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    parse(z.object({}).strict(), request.body ?? {});
+    const refreshed = await liteLlmPriceCache.refresh();
+    if (!refreshed) {
+      throw new AppError(502, "LITELLM_PRICE_REFRESH_FAILED", "LiteLLM 模型价格刷新失败，历史缓存未改变");
+    }
+    data(response, {
+      refreshed: true,
+      pricingAvailable: liteLlmPriceCache.hasData(),
+      modelCount: liteLlmPriceCache.getPriceTable().size
+    });
+  });
   app.get("/api/platform/ai-conversations", (request, response) => {
     const query = parse(adminAiConversationQuerySchema, request.query);
     const pagination = parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 };
@@ -3490,6 +3515,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       stopping = true;
       logger.info("runtime.closing");
       backups.dispose();
+      liteLlmPriceCache.dispose();
       ai.dispose();
       const cancelledStreamRequests = store.cancelActiveAiConversationStreamRequests();
       if (cancelledStreamRequests > 0) logger.info("ai.stream.requests_cancelled", { count: cancelledStreamRequests });
@@ -3511,5 +3537,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     })();
     return closePromise;
   };
-  return { app, database, store, ai, backups, auth, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
+  return { app, database, store, ai, liteLlmPriceCache, backups, auth, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
 }

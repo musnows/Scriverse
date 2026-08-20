@@ -22,7 +22,7 @@ import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-s
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
-import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
+import { buildUsageCalendar, formatCacheHitRate, formatEstimatedCost, formatTokenCount } from "/ai-usage.js?v=20260821-ai-usage-pricing-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260819-context-percent-v1";
 import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
@@ -5684,6 +5684,7 @@ function renderSettingsHub() {
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-usage-pricing-refresh").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#admin-ai-conversations-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
@@ -7061,6 +7062,7 @@ async function showPlatformUsage() {
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = "Token 用量";
   $("#settings-button").setAttribute("aria-current", "page");
+  $("#platform-usage-pricing-refresh").classList.toggle("hidden", state.user?.role !== "admin");
   setTopbarViewState("Token 用量");
   await renderPlatformTokenUsage();
   replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
@@ -11680,9 +11682,19 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   const requestCount = Number(summary.requestCount) || 0;
   const cachedInputTokens = Number(summary.cachedInputTokens) || 0;
   const cacheEligibleInputTokens = Number(summary.cacheEligibleInputTokens) || 0;
+  const directInputTokens = Math.max(0, Math.round(Number(summary.directInputTokens) || 0));
+  const cacheReadInputTokens = Math.max(0, Math.round(Number(summary.cacheReadInputTokens ?? cachedInputTokens) || 0));
+  const cacheWriteInputTokens = Math.max(0, Math.round(Number(summary.cacheWriteInputTokens) || 0));
+  const inputDescription = `直接 Input ${directInputTokens.toLocaleString("zh-CN")} · Cache Read ${cacheReadInputTokens.toLocaleString("zh-CN")} · Cache Write ${cacheWriteInputTokens.toLocaleString("zh-CN")}`;
   const cacheDescription = summary.cacheHitRate === null || summary.cacheHitRate === undefined
     ? "供应商尚未返回可计算的缓存明细"
     : `${cachedInputTokens.toLocaleString("zh-CN")} / ${cacheEligibleInputTokens.toLocaleString("zh-CN")} 个可统计输入 Token 命中缓存`;
+  const estimatedCost = formatEstimatedCost(summary.estimatedCost);
+  const pricingDescription = "根据 LiteLLM 模型 ID 价格表估算，价格单位为美元；未匹配模型不计入。";
+  const pricingBadge = summary.pricingAvailable === true && summary.estimatedCost !== null && summary.estimatedCost !== undefined
+    ? `<span class="usage-cost-bubble" title="${esc(pricingDescription)}">估价 ${esc(estimatedCost)}</span>`
+    : "";
+  const unpricedModelCount = Math.max(0, Math.round(Number(summary.unpricedModelCount) || 0));
   const estimateNote = estimatedRequests > 0
     ? `其中 ${estimatedRequests.toLocaleString("zh-CN")} 次调用包含历史或供应商缺失用量时的估算。`
     : "全部用量均来自供应商返回的 Token 统计。";
@@ -11698,12 +11710,12 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
   return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
     <div class="config-section-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div></div>
     <div class="usage-stat-grid">
-      <article class="usage-stat is-primary"><span>总消耗</span><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
-      <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small>${Number(summary.inputTokens || 0).toLocaleString("zh-CN")}</small></article>
+      <article class="usage-stat is-primary"><div class="usage-stat-label"><span>总消耗</span>${pricingBadge}</div><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
+      <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small title="${esc(inputDescription)}">${esc(inputDescription)}</small></article>
       <article class="usage-stat"><span>输出 Token</span><strong>${esc(formatTokenCount(summary.outputTokens))}</strong><small>${Number(summary.outputTokens || 0).toLocaleString("zh-CN")}</small></article>
       <article class="usage-stat"><span>缓存命中率</span><strong>${esc(formatCacheHitRate(summary.cacheHitRate))}</strong><small>${esc(cacheDescription)}</small></article>
     </div>
-    <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)}</p>
+    <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)} 有 ${unpricedModelCount.toLocaleString("zh-CN")} 个模型在价格表中未找到对应价格</p>
     <section class="usage-calendar-section" aria-labelledby="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">
       <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格展示过去 53 周；颜色越深，当天消耗越高。</p></div></header>
       ${tokenUsageCalendarMarkup(usage?.daily)}
@@ -17290,6 +17302,19 @@ $("#platform-usage-refresh").addEventListener("click", async () => {
   try {
     await renderPlatformTokenUsage();
     toast("Token 用量已刷新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#platform-usage-pricing-refresh").addEventListener("click", async () => {
+  const button = $("#platform-usage-pricing-refresh");
+  button.disabled = true;
+  try {
+    await api("/api/platform/ai/usage/pricing/refresh", { method: "POST", body: {}, skipOptimisticVersion: true });
+    await renderPlatformTokenUsage();
+    toast("模型价格已刷新");
   } catch (error) {
     toast(error.message, "error");
   } finally {

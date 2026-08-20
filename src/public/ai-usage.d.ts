@@ -9,6 +9,7 @@ export type AiUsageCalendarCell = {
 
 export function formatTokenCount(value: unknown): string;
 export function formatCacheHitRate(value: unknown): string;
+export function formatEstimatedCost(value: unknown): string;
 export function buildUsageCalendar(
   daily: Array<{ date: string; totalTokens: number }> | unknown,
   today?: Date,

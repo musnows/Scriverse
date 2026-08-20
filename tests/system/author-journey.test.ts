@@ -331,6 +331,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-view"');
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('id="platform-usage-view"');
+    expect(page.text).toContain('id="platform-usage-pricing-refresh"');
     expect(page.text).toContain('id="platform-usage-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
@@ -358,6 +359,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');
     expect(application.text).toContain('/page-route.js?v=20260812-reader-preview-v1');
     expect(application.text).toContain("本书 Token 用量");
+    expect(application.text).toContain("formatEstimatedCost");
+    expect(application.text).toContain("估价");
+    expect(application.text).toContain("pricingAvailable === true");
+    expect(application.text).toContain("Cache Read");
+    expect(application.text).toContain("Cache Write");
+    expect(application.text).toContain("/api/platform/ai/usage/pricing/refresh");
+    expect(application.text).toContain('state.user?.role !== "admin"');
+    expect(application.text).toContain("有 ${unpricedModelCount.toLocaleString(\"zh-CN\")} 个模型在价格表中未找到对应价格");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
     expect(application.text).toContain('class="usage-calendar-tooltip" role="tooltip" hidden');
@@ -391,6 +400,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".settings-hub-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }");
     expect(styles.text).toContain(".usage-calendar-grid {");
     expect(styles.text).toContain(".usage-stat-grid {");
+    expect(styles.text).toContain(".usage-cost-bubble {");
     expect(styles.text).toContain("@container usage-overview (max-width: 760px)");
     expect(page.text).toContain('id="platform-ai-return"');
     expect(page.text).toContain('id="users-settings-return"');
