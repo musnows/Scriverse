@@ -708,23 +708,27 @@ describe("作品、导入和章节版本 API", () => {
       title: "第二卷 暗潮",
       kind: "main",
       description: "双面间谍进入敌方组织。",
-      keywords: ["谍战", "身份危机", "谍战"]
+      keywords: ["谍战", "身份危机", "谍战"],
+      storyOrder: 9
     }).expect(201);
     expect(volume.body.data).toMatchObject({
       description: "双面间谍进入敌方组织。",
-      keywords: ["谍战", "身份危机"]
+      keywords: ["谍战", "身份危机"],
+      storyOrder: 9
     });
 
     const updated = await request(runtime.app).patch(`/api/volumes/${volume.body.data.id}`).send({
       description: "间谍身份开始暴露。",
-      keywords: ["身份暴露", "阵营冲突"]
+      keywords: ["身份暴露", "阵营冲突"],
+      storyOrder: 3
     }).expect(200);
     expect(updated.body.data).toMatchObject({
       description: "间谍身份开始暴露。",
-      keywords: ["身份暴露", "阵营冲突"]
+      keywords: ["身份暴露", "阵营冲突"],
+      storyOrder: 3
     });
     const tree = await request(runtime.app).get(`/api/works/${work.body.data.id}`).expect(200);
-    expect(tree.body.data.volumes[0]).toMatchObject({ description: "间谍身份开始暴露。", keywords: ["身份暴露", "阵营冲突"] });
+    expect(tree.body.data.volumes[0]).toMatchObject({ description: "间谍身份开始暴露。", keywords: ["身份暴露", "阵营冲突"], storyOrder: 3 });
   });
 
   it("支持四种章节类型且只修改类型时不增加正文版本", async () => {
@@ -1110,6 +1114,7 @@ describe("作品、导入和章节版本 API", () => {
     for (const legacyVolume of snapshot.volumes) {
       delete legacyVolume.description;
       delete legacyVolume.keywords;
+      delete legacyVolume.storyOrder;
     }
     const fileVersionId = "file_legacy_snapshot";
     runtime.database.run(
@@ -1133,6 +1138,6 @@ describe("作品、导入和章节版本 API", () => {
     const restoredChapterId = restored.body.data.tree.volumes[0].chapters[0].id;
     const restoredChapter = await request(runtime.app).get(`/api/chapters/${restoredChapterId}`).expect(200);
     expect(restoredChapter.body.data.content).toBe("旧版正文。");
-    expect(restored.body.data.tree.volumes[0]).toMatchObject({ description: "", keywords: [] });
+    expect(restored.body.data.tree.volumes[0]).toMatchObject({ description: "", keywords: [], storyOrder: 0 });
   });
 });

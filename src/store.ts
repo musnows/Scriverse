@@ -83,6 +83,16 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ChapterAnnotationKind = "note" | "todo";
 type ImportMode = "append" | "overwrite";
 
+type VolumeInput = {
+  title: string;
+  kind?: string;
+  source?: string;
+  description?: string;
+  keywords?: string[];
+  sortOrder?: number;
+  storyOrder?: number;
+};
+
 export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations", "ai-chat"] as const satisfies readonly WorkPermissionModule[];
 export const WORK_AGENT_TOOL_IDS = [
   "story_index",
@@ -684,6 +694,7 @@ type RestorableFileSnapshotVolume = {
   description: string;
   keywords: string[];
   sortOrder: number;
+  storyOrder: number;
   chapters: RestorableFileSnapshotChapter[];
 };
 
@@ -721,7 +732,11 @@ function parseRestorableFileSnapshot(value: string, workId: string): { volumes: 
     }
     const description = volumeValue.description === undefined ? "" : volumeValue.description;
     const keywords = volumeValue.keywords === undefined ? [] : volumeValue.keywords;
+    const storyOrder = volumeValue.storyOrder === undefined ? volumeValue.sortOrder : volumeValue.storyOrder;
     if (typeof description !== "string" || !Array.isArray(keywords) || !keywords.every((keyword) => typeof keyword === "string")) {
+      return invalidFileSnapshot();
+    }
+    if (typeof storyOrder !== "number" || !Number.isInteger(storyOrder) || storyOrder < 0 || storyOrder > 1_000_000) {
       return invalidFileSnapshot();
     }
     const chapters = volumeValue.chapters.map((chapterValue) => {
@@ -747,6 +762,7 @@ function parseRestorableFileSnapshot(value: string, workId: string): { volumes: 
       description,
       keywords: [...keywords] as string[],
       sortOrder: volumeValue.sortOrder,
+      storyOrder,
       chapters
     };
   });
@@ -954,7 +970,8 @@ export class Store {
       source: entity.source,
       description: entity.description,
       keywords: entity.keywords,
-      sortOrder: entity.sortOrder
+      sortOrder: entity.sortOrder,
+      storyOrder: entity.storyOrder
     };
     if (type === "draft") return {
       draftType: entity.draftType,
@@ -1207,7 +1224,7 @@ export class Store {
     if (!existing) {
       restored = this.recreateEntityFromSnapshot(type, workId, entityId, snapshot, sourceRef, changeNote);
     } else if (type === "work") restored = this.updateWork(entityId, snapshot as Partial<WorkInput>, expectedVersionNo, "restore", sourceRef, changeNote);
-    else if (type === "volume") restored = this.updateVolume(entityId, snapshot as Partial<{ title: string; kind?: string; description?: string; keywords?: string[]; sortOrder?: number }>, expectedVersionNo, "restore", sourceRef, changeNote);
+    else if (type === "volume") restored = this.updateVolume(entityId, snapshot as Partial<VolumeInput>, expectedVersionNo, "restore", sourceRef, changeNote);
     else if (type === "draft") restored = this.updateDraft(entityId, snapshot as Partial<DraftInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "setting") restored = this.updateSetting(entityId, snapshot as Partial<SettingInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "race") restored = this.updateRace(entityId, { isExtinct: false, ...snapshot } as Partial<RaceInput>, "restore", sourceRef, changeNote, expectedVersionNo);
@@ -1268,7 +1285,7 @@ export class Store {
       });
     }
     if (type === "volume") {
-      return this.db.transaction(() => this.insertVolumeWithId(workId, entityId, snapshot as { title: string; kind?: string; source?: string; description?: string; keywords?: string[]; sortOrder?: number }, "restore", sourceRef, changeNote));
+      return this.db.transaction(() => this.insertVolumeWithId(workId, entityId, snapshot as VolumeInput, "restore", sourceRef, changeNote));
     }
     if (type === "draft") {
       return this.insertDraftWithId(workId, entityId, snapshot as DraftInput, "restore", sourceRef, changeNote);
@@ -2219,7 +2236,8 @@ export class Store {
           source: volume.source,
           description: volume.description,
           keywords: volume.keywords,
-          sortOrder: volume.sortOrder
+          sortOrder: volume.sortOrder,
+          storyOrder: volume.storyOrder
         }, "restore", fileVersionId, `恢复文件版本 ${fileVersionId}`);
         for (const chapter of volume.chapters) {
           this.insertChapter(
@@ -2281,6 +2299,7 @@ export class Store {
       currentRequestActor()?.userId ?? null
     );
     let volumeOrderOffset = 0;
+    let volumeStoryOrderOffset = 0;
     if (mode === "overwrite") {
       const activeVolumeIds = this.db.all("SELECT id FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId)
         .map((row) => requiredString(row, "id"));
@@ -2291,7 +2310,9 @@ export class Store {
       this.db.run("DELETE FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
     } else {
       const lastVolume = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
+      const lastStoryVolume = this.db.get("SELECT COALESCE(MAX(story_order), -1) AS value FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
       volumeOrderOffset = numberValue(lastVolume ?? {}, "value") + 1;
+      volumeStoryOrderOffset = numberValue(lastStoryVolume ?? {}, "value") + 1;
     }
     let firstImportedChapterId: string | null = null;
     for (const volume of parsed.volumes) {
@@ -2300,7 +2321,8 @@ export class Store {
         title: volume.title,
         kind: volume.kind,
         source: volume.source,
-        sortOrder: volumeOrderOffset + volume.order
+        sortOrder: volumeOrderOffset + volume.order,
+        storyOrder: volumeStoryOrderOffset + volume.order
       }, "import", fileVersionId, "导入分卷");
       for (const chapter of volume.chapters) {
         const chapterId = this.insertChapter(workId, volumeId, chapter.title, chapter.content, chapter.order, "import", fileVersionId, chapter.chapterType);
@@ -2327,14 +2349,14 @@ export class Store {
     };
   }
 
-  createVolume(workId: string, input: { title: string; kind?: string; description?: string; keywords?: string[] }): Record<string, unknown> {
+  createVolume(workId: string, input: VolumeInput): Record<string, unknown> {
     return this.db.transaction(() => this.insertVolumeWithId(workId, id("volume"), input, "create", null, "建立分卷"));
   }
 
   private insertVolumeWithId(
     workId: string,
     volumeId: string,
-    input: { title: string; kind?: string; source?: string; description?: string; keywords?: string[]; sortOrder?: number },
+    input: VolumeInput,
     source = "create",
     sourceRef: string | null = null,
     changeNote = ""
@@ -2342,9 +2364,10 @@ export class Store {
     this.getWork(workId);
     const timestamp = now();
     const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
+    const lastStory = this.db.get("SELECT COALESCE(MAX(story_order), -1) AS value FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
     this.db.run(
-      `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, version_no, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, story_order, version_no, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       volumeId,
       workId,
       input.title,
@@ -2353,6 +2376,7 @@ export class Store {
       input.description?.trim() ?? "",
       JSON.stringify(this.normalizeVolumeKeywords(input.keywords ?? [])),
       input.sortOrder ?? numberValue(last ?? {}, "value") + 1,
+      input.storyOrder ?? numberValue(lastStory ?? {}, "value") + 1,
       timestamp,
       timestamp
     );
@@ -2372,18 +2396,19 @@ export class Store {
     return this.mapVolume(row);
   }
 
-  updateVolume(volumeId: string, input: { title?: string; kind?: string; description?: string; keywords?: string[]; sortOrder?: number }, expectedVersionNo?: number, source = "manual", sourceRef: string | null = null, changeNote = ""): Record<string, unknown> {
+  updateVolume(volumeId: string, input: Partial<VolumeInput>, expectedVersionNo?: number, source = "manual", sourceRef: string | null = null, changeNote = ""): Record<string, unknown> {
     this.db.transaction(() => {
       const current = this.getVolume(volumeId);
       this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", Number(current.versionNo));
       const timestamp = now();
       this.db.run(
-        "UPDATE volumes SET title = ?, kind = ?, description = ?, keywords_json = ?, sort_order = ?, source = ?, version_no = version_no + 1, updated_at = ? WHERE id = ?",
+        "UPDATE volumes SET title = ?, kind = ?, description = ?, keywords_json = ?, sort_order = ?, story_order = ?, source = ?, version_no = version_no + 1, updated_at = ? WHERE id = ?",
         input.title ?? String(current.title),
         input.kind ?? String(current.kind),
         input.description?.trim() ?? String(current.description),
         JSON.stringify(input.keywords === undefined ? current.keywords : this.normalizeVolumeKeywords(input.keywords)),
         input.sortOrder ?? Number(current.sortOrder),
+        input.storyOrder ?? Number(current.storyOrder),
         source === "restore" ? String(current.source) : "manual",
         timestamp,
         volumeId
@@ -3855,6 +3880,7 @@ export class Store {
       description: optionalString(row, "description") ?? "",
       keywords: json<string[]>(optionalString(row, "keywords_json"), []),
       sortOrder: numberValue(row, "sort_order"),
+      storyOrder: numberValue(row, "story_order"),
       versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("volume", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
