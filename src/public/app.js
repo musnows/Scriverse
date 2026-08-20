@@ -238,6 +238,9 @@ let chapterAnnotationCounts = new Map();
 let chapterAnnotationsLineIndex = null;
 let workAuditRecords = [];
 let workAuditNextPage = null;
+let adminAiConversationRecords = [];
+let adminAiConversationNextPage = null;
+let adminAiConversationFiltersOpen = false;
 const chapterBatchSelectedIds = new Set();
 let chapterMovePending = false;
 const readingRequestGate = createReadingRequestGate();
@@ -5413,6 +5416,7 @@ function renderSettingsHub() {
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
+  $("#admin-ai-conversations-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#s3-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
@@ -5766,6 +5770,86 @@ async function openUsersDialog() {
   $("#users-dialog").showModal();
   try { renderUsers((await apiPage("/api/users")).items); }
   catch (error) { $("#users-dialog").close(); toast(error.message, "error"); }
+}
+
+function renderAdminAiConversationFilterOptions(works, users) {
+  const workSelect = $("#admin-ai-conversations-work");
+  const userSelect = $("#admin-ai-conversations-user");
+  const selectedWorkId = workSelect.value;
+  const selectedUserId = userSelect.value;
+  workSelect.innerHTML = `<option value="">全部作品</option>${works
+    .map((work) => `<option value="${esc(work.id)}">${esc(work.title)}</option>`).join("")}`;
+  userSelect.innerHTML = `<option value="">全部用户</option>${users
+    .map((user) => `<option value="${esc(user.userId)}">${esc(user.displayName)} · @${esc(user.username)}</option>`).join("")}`;
+  if ([...workSelect.options].some((option) => option.value === selectedWorkId)) workSelect.value = selectedWorkId;
+  if ([...userSelect.options].some((option) => option.value === selectedUserId)) userSelect.value = selectedUserId;
+}
+
+function renderAdminAiConversations() {
+  const host = $("#admin-ai-conversations-list");
+  host.innerHTML = adminAiConversationRecords.length ? adminAiConversationRecords.map((conversation) => {
+    const creator = conversation.creator
+      ? `${esc(conversation.creator.displayName)} · @${esc(conversation.creator.username)}`
+      : "未归属历史对话";
+    const work = conversation.work ?? { id: conversation.workId, title: "作品已删除", deleted: true };
+    const preview = String(conversation.preview || "").trim() || "暂无对话消息";
+    return `<article class="admin-ai-conversation-row" data-admin-ai-conversation="${esc(conversation.id)}">
+      <div class="admin-ai-conversation-heading"><div><strong>${esc(conversation.title || "新对话")}</strong><small>${creator}</small></div><span>${Number(conversation.messageCount ?? 0)} 条消息</span></div>
+      <dl class="admin-ai-conversation-meta">
+        <div><dt>作品</dt><dd>${esc(work.title)}${work.deleted ? "（回收站）" : ""}</dd></div>
+        <div><dt>任务类型</dt><dd>${esc(aiConversationTaskTypeLabel(conversation.taskType || "chat"))}</dd></div>
+        <div><dt>最后更新</dt><dd>${esc(formatDateTime(conversation.updatedAt))}</dd></div>
+      </dl>
+      <p>${esc(preview)}</p>
+    </article>`;
+  }).join("") : '<p class="empty-state">没有符合当前筛选条件的对话。</p>';
+  $("#admin-ai-conversations-summary").textContent = adminAiConversationRecords.length
+    ? `已显示 ${adminAiConversationRecords.length} 条对话${adminAiConversationNextPage === null ? "，已加载全部记录" : "，还有更多记录可继续加载"}`
+    : "当前筛选条件下没有对话记录。";
+  $("#admin-ai-conversations-load-more").classList.toggle("hidden", adminAiConversationNextPage === null);
+}
+
+function adminAiConversationListPath() {
+  const parameters = new URLSearchParams();
+  const query = $("#admin-ai-conversations-query").value.trim();
+  const workId = $("#admin-ai-conversations-work").value;
+  const userId = $("#admin-ai-conversations-user").value;
+  if (query) parameters.set("q", query);
+  if (workId) parameters.set("workId", workId);
+  if (userId) parameters.set("userId", userId);
+  const serialized = parameters.toString();
+  return `/api/platform/ai-conversations${serialized ? `?${serialized}` : ""}`;
+}
+
+async function loadAdminAiConversationPage(page = 1, append = false) {
+  const result = await apiPage(adminAiConversationListPath(), page, 30);
+  adminAiConversationRecords = append ? [...adminAiConversationRecords, ...result.items] : result.items;
+  adminAiConversationNextPage = result.nextPage;
+  renderAdminAiConversations();
+}
+
+async function openAdminAiConversationsDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  adminAiConversationRecords = [];
+  adminAiConversationNextPage = null;
+  adminAiConversationFiltersOpen = false;
+  $("#admin-ai-conversations-filter-panel").classList.add("hidden");
+  $("#admin-ai-conversations-filter-toggle").setAttribute("aria-expanded", "false");
+  $("#admin-ai-conversations-filter-panel").reset();
+  $("#admin-ai-conversations-list").innerHTML = '<p class="empty-state">正在读取对话……</p>';
+  $("#admin-ai-conversations-summary").textContent = "正在读取对话……";
+  $("#admin-ai-conversations-dialog").showModal();
+  try {
+    const [works, users] = await Promise.all([apiAllPages("/api/works", 100), apiAllPages("/api/users", 100)]);
+    renderAdminAiConversationFilterOptions(works, users);
+    await loadAdminAiConversationPage();
+  } catch (error) {
+    $("#admin-ai-conversations-dialog").close();
+    toast(error.message, "error");
+  }
 }
 
 async function openPlatformUiSettingsDialog() {
@@ -16882,6 +16966,7 @@ $("#platform-usage-refresh").addEventListener("click", async () => {
   }
 });
 $("#user-management-button").addEventListener("click", openUsersDialog);
+$("#admin-ai-conversations-button").addEventListener("click", () => openAdminAiConversationsDialog().catch((error) => toast(error.message, "error")));
 $("#writing-progress-button").addEventListener("click", () => openWritingProgressDialog().catch((error) => toast(error.message, "error")));
 $("#writing-progress-close").addEventListener("click", () => $("#writing-progress-dialog").close());
 $("#writing-progress-refresh").addEventListener("click", () => loadWritingProgress().catch((error) => toast(error.message, "error")));
@@ -16913,6 +16998,34 @@ $("#presence-button").addEventListener("click", () => {
 });
 $("#users-dialog-close").addEventListener("click", () => $("#users-dialog").close());
 $("#users-settings-return").addEventListener("click", () => returnToSettingsHub("#user-management-button", "#users-dialog").catch((error) => toast(error.message, "error")));
+$("#admin-ai-conversations-close").addEventListener("click", () => $("#admin-ai-conversations-dialog").close());
+$("#admin-ai-conversations-settings-return").addEventListener("click", () => returnToSettingsHub("#admin-ai-conversations-button", "#admin-ai-conversations-dialog").catch((error) => toast(error.message, "error")));
+$("#admin-ai-conversations-filter-toggle").addEventListener("click", () => {
+  adminAiConversationFiltersOpen = !adminAiConversationFiltersOpen;
+  $("#admin-ai-conversations-filter-panel").classList.toggle("hidden", !adminAiConversationFiltersOpen);
+  $("#admin-ai-conversations-filter-toggle").setAttribute("aria-expanded", String(adminAiConversationFiltersOpen));
+  if (adminAiConversationFiltersOpen) $("#admin-ai-conversations-query").focus();
+});
+$("#admin-ai-conversations-filter-panel").addEventListener("submit", (event) => {
+  event.preventDefault();
+  loadAdminAiConversationPage().catch((error) => toast(error.message, "error"));
+});
+$("#admin-ai-conversations-reset").addEventListener("click", () => {
+  $("#admin-ai-conversations-filter-panel").reset();
+  loadAdminAiConversationPage().catch((error) => toast(error.message, "error"));
+});
+$("#admin-ai-conversations-refresh").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  loadAdminAiConversationPage()
+    .catch((error) => toast(error.message, "error"))
+    .finally(() => { button.disabled = false; });
+});
+$("#admin-ai-conversations-load-more").addEventListener("click", () => {
+  if (adminAiConversationNextPage !== null) {
+    loadAdminAiConversationPage(adminAiConversationNextPage, true).catch((error) => toast(error.message, "error"));
+  }
+});
 $("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#platform-ui-settings-return").addEventListener("click", () => returnToSettingsHub("#platform-ui-settings-button", "#platform-ui-settings-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
