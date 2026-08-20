@@ -29,6 +29,8 @@ import { isPhoneClient } from "/phone-client.js?v=20260819-phone-client-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
+import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
+import { AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT, aiChatImageAttachmentIds, isAiChatImageFile, normalizeAiChatImageAttachments } from "/ai-image-attachments.js?v=20260820-ai-chat-image-attachments-v1";
 import { findTextMatches, replaceTextMatches } from "/chapter-search.js?v=20260818-chapter-search-replace-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -172,6 +174,7 @@ const state = {
   timelineTracks: [],
   aiCitations: [],
   aiReferences: [],
+  aiImageAttachments: [],
   aiPromptSent: false,
   aiTaskType: "chat",
   aiContextScope: { type: "none" },
@@ -609,6 +612,7 @@ function syncAiRequestControls() {
   button.innerHTML = aiSendButtonIconMarkup(stateName);
   syncAiTaskOptions();
   renderAiRoleplayCharacterSelect();
+  syncAiImageAttachmentControl();
 }
 
 function cancelActiveAiRequest(reason) {
@@ -2051,7 +2055,7 @@ function createAiChatTabState(input = {}) {
     roleplayUserCharacter: input.roleplayUserCharacter ?? null,
     citations: input.citations ?? [],
     references: input.references ?? [],
-    composer: input.composer ?? { text: "", citations: [], references: [] },
+    composer: input.composer ?? { text: "", citations: [], references: [], images: [] },
     contextUsage: input.contextUsage ?? null,
     contextWarning: input.contextWarning === true,
     lastMessageAt: input.lastMessageAt ?? null,
@@ -2091,12 +2095,13 @@ function setAiChatTabComposerSnapshot(tab, snapshot) {
   tab.composer = {
     text: snapshot.text,
     citations: tab.citations.map((citation) => ({ ...citation })),
-    references: tab.references.map((reference) => ({ ...reference }))
+    references: tab.references.map((reference) => ({ ...reference })),
+    images: normalizeAiChatImageAttachments(snapshot.images)
   };
 }
 
 function clearAiChatTabComposer(tab) {
-  setAiChatTabComposerSnapshot(tab, { text: "", citations: [], references: [] });
+  setAiChatTabComposerSnapshot(tab, { text: "", citations: [], references: [], images: [] });
 }
 
 function applyAiChatTabState(tab) {
@@ -2105,6 +2110,7 @@ function applyAiChatTabState(tab) {
   state.aiPromptSent = tab.promptSent;
   state.aiCitations = tab.citations.map((citation) => ({ ...citation }));
   state.aiReferences = tab.references.map((reference) => ({ ...reference }));
+  state.aiImageAttachments = normalizeAiChatImageAttachments(tab.composer?.images);
   state.aiLastMessageAt = tab.lastMessageAt;
   $("#ai-conversation-title").textContent = tab.title || "新对话";
   applyAiConversationTaskType(tab.taskType);
@@ -2116,6 +2122,7 @@ function applyAiChatTabState(tab) {
   setAiPromptText(tab.composer.text);
   renderAiCitations();
   renderAiReferences();
+  renderAiImageAttachments();
   latestAiContextUsage = null;
   setAiContextMeter(tab.contextUsage);
   if (tab.contextWarning) showAiContextWarning();
@@ -2133,7 +2140,8 @@ function aiChatTabIsReplaceable(tab = activeAiChatTab()) {
     && !aiRequestManager.hasActive(tab.id)
     && !(tab.composer?.text || "").trim()
     && !(tab.composer?.citations?.length)
-    && !(tab.composer?.references?.length));
+    && !(tab.composer?.references?.length)
+    && !(tab.composer?.images?.length));
 }
 
 function aiChatTabOpeningSlot() {
@@ -2471,6 +2479,15 @@ function aiMessageCitations(message) {
   }
 }
 
+function aiMessageImageAttachments(message) {
+  try {
+    const ids = JSON.parse(message.dataset.aiImageAttachmentIds ?? "[]");
+    return normalizeAiChatImageAttachments(Array.isArray(ids) ? ids.map((id) => ({ id })) : []);
+  } catch {
+    return [];
+  }
+}
+
 async function retryAiMessage(message) {
   const sourceTab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
   const userMessage = findAiRetryUserMessage(message);
@@ -2490,6 +2507,7 @@ async function retryAiMessage(message) {
       message,
       prompt,
       citations: aiMessageCitations(userMessage),
+      images: aiMessageImageAttachments(userMessage),
       userMessageId
     }
   });
@@ -3257,7 +3275,7 @@ function applyConversationToAiChatTab(tab, conversation) {
   tab.roleplayUserCharacter = conversation.roleplayUserCharacter ?? null;
   tab.citations = [];
   tab.references = [];
-  tab.composer = { text: "", citations: [], references: [] };
+  tab.composer = { text: "", citations: [], references: [], images: [] };
   tab.contextUsage = null;
   tab.contextWarning = conversation.contextWarningPending === true;
   resetAiFeed(tab.feed, tab.roleplayCharacter, tab.roleplayUserCharacter);
@@ -3382,6 +3400,65 @@ function selectedAiModelLabel() {
   return $("#ai-model").selectedOptions[0]?.textContent?.trim() || "尚未选择模型";
 }
 
+function aiModelImageIconMarkup() {
+  return '<svg class="ai-model-option-image-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect><circle cx="9" cy="10" r="1.5"></circle><path d="m5.5 17 4.4-4.4 3.3 3.1 2.2-2.2 3.1 3.5"></path></svg>';
+}
+
+function renderAiModelOptions() {
+  const host = $("#ai-model-options");
+  if (!host) return;
+  const select = $("#ai-model");
+  const selectedId = select.value;
+  host.replaceChildren();
+  if (state.models.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "ai-model-options-empty";
+    empty.textContent = "请先配置模型";
+    host.append(empty);
+    return;
+  }
+  for (const model of state.models) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "ai-model-option";
+    option.dataset.modelId = model.id;
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(model.id === selectedId));
+    option.tabIndex = model.id === selectedId ? 0 : -1;
+    option.disabled = aiInteractionBusy();
+    option.title = model.multimodalEnabled === true ? "支持图片输入" : "不支持图片输入";
+    const copy = document.createElement("span");
+    copy.className = "ai-model-option-copy";
+    const name = document.createElement("strong");
+    name.textContent = String(model.displayName ?? model.modelId ?? "模型");
+    const provider = document.createElement("small");
+    provider.textContent = String(model.providerName ?? "");
+    copy.append(name, provider);
+    option.append(copy);
+    if (model.multimodalEnabled === true) {
+      const icon = document.createElement("span");
+      icon.className = "ai-model-option-image";
+      icon.setAttribute("aria-label", "支持图片输入");
+      icon.innerHTML = aiModelImageIconMarkup();
+      option.append(icon);
+    }
+    option.addEventListener("click", () => {
+      if (notifyAiConversationModelLocked(option)) return;
+      select.value = model.id;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    host.append(option);
+  }
+}
+
+function focusAiModelOption() {
+  const host = $("#ai-model-options");
+  if (!host) return;
+  const selected = host.querySelector('[role="option"][aria-selected="true"]')
+    ?? host.querySelector('[role="option"]');
+  selected?.focus();
+}
+
 function syncAiModelPicker() {
   const select = $("#ai-model");
   const button = $("#ai-model-picker");
@@ -3396,6 +3473,8 @@ function syncAiModelPicker() {
   button.disabled = interactionBusy;
   button.title = label;
   button.setAttribute("aria-label", label);
+  renderAiModelOptions();
+  syncAiImageAttachmentControl();
   if (interactionBusy) setAiModelPickerVisible(false);
 }
 
@@ -3660,11 +3739,118 @@ function setAiPromptText(value) {
   renderAiReferences();
 }
 
+function activeAiModel() {
+  const tab = activeAiChatTab();
+  const selectedId = (isActiveAiChatTab(tab) ? $("#ai-model").value : "")
+    || tab?.selectedModelId
+    || state.aiConversationModelId
+    || "";
+  return state.models.find((model) => model.id === selectedId) ?? null;
+}
+
+function aiModelSupportsImageInput() {
+  return activeAiModel()?.multimodalEnabled === true;
+}
+
+function syncAiImageAttachmentControl() {
+  const button = $("#ai-attachment-button");
+  if (!button) return;
+  const enabled = aiModelSupportsImageInput();
+  button.classList.toggle("hidden", !enabled);
+  button.disabled = !enabled || aiInteractionBusy();
+  button.setAttribute("aria-hidden", String(!enabled));
+  button.title = enabled ? "添加图片附件" : "当前模型不支持图片输入";
+}
+
+function renderAiImageAttachments() {
+  const host = $("#ai-image-attachments");
+  if (!host) return;
+  const attachments = normalizeAiChatImageAttachments(state.aiImageAttachments);
+  state.aiImageAttachments = attachments;
+  host.replaceChildren();
+  host.classList.toggle("hidden", attachments.length === 0);
+  host.setAttribute("aria-hidden", String(attachments.length === 0));
+  for (const attachment of attachments) {
+    const card = document.createElement("figure");
+    card.className = "ai-image-attachment";
+    card.dataset.attachmentId = attachment.id;
+    const image = document.createElement("img");
+    image.src = attachment.contentUrl;
+    image.alt = attachment.originalName;
+    image.loading = "lazy";
+    image.decoding = "async";
+    const caption = document.createElement("figcaption");
+    caption.textContent = attachment.originalName;
+    caption.title = attachment.originalName;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ai-image-attachment-remove";
+    remove.setAttribute("aria-label", `移除图片附件：${attachment.originalName}`);
+    remove.title = "移除图片附件";
+    remove.textContent = "×";
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      state.aiImageAttachments = state.aiImageAttachments.filter((item) => item.id !== attachment.id);
+      renderAiImageAttachments();
+      persistActiveAiChatTab();
+      try {
+        await api(`/api/attachments/${encodeURIComponent(attachment.id)}`, { method: "DELETE" });
+      } catch {
+        /* 待发送附件从当前输入移除即可，未被历史消息引用的文件会由服务端回收。 */
+      }
+    });
+    card.append(image, caption, remove);
+    host.append(card);
+  }
+}
+
+async function discardAiImageAttachments(attachments) {
+  const ids = aiChatImageAttachmentIds(attachments);
+  await Promise.all(ids.map((attachmentId) => api(`/api/attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE" }).catch(() => null)));
+}
+
+async function addAiImageFiles(files) {
+  if (!aiModelSupportsImageInput()) {
+    toast("当前选择的模型不是多模态模型，无法添加图片附件", "error");
+    return;
+  }
+  const candidates = Array.from(files ?? []).filter(isAiChatImageFile);
+  if (candidates.length === 0) {
+    toast("图片附件仅支持 PNG、JPEG、WebP 和 GIF", "error");
+    return;
+  }
+  const remaining = AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT - state.aiImageAttachments.length;
+  if (remaining <= 0) {
+    toast(`一次最多添加 ${AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT} 张图片附件`, "error");
+    return;
+  }
+  if (candidates.length > remaining) toast(`一次最多添加 ${AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT} 张图片附件`, "error");
+  for (const file of candidates.slice(0, remaining)) {
+    try {
+      assertAttachmentFileSize(file);
+      const body = new FormData();
+      body.append("file", file, file.name || "pasted-image.png");
+      const uploaded = await uploadWithProgress(
+        `/api/works/${encodeURIComponent(state.work.id)}/attachments?module=ai-chat`,
+        { method: "POST", body }
+      );
+      const attachment = normalizeAiChatImageAttachments([uploaded])[0];
+      if (attachment) state.aiImageAttachments = normalizeAiChatImageAttachments([...state.aiImageAttachments, attachment]);
+      renderAiImageAttachments();
+    } catch (error) {
+      toast(`图片附件上传失败：${error.message}`, "error");
+    }
+  }
+  persistActiveAiChatTab();
+}
+
 function clearAiPromptComposer() {
   state.aiCitations = [];
   state.aiReferences = [];
+  state.aiImageAttachments = [];
   setAiPromptText("");
   renderAiCitations();
+  renderAiImageAttachments();
   hideAiMentionMenu();
 }
 
@@ -3672,15 +3858,18 @@ function captureAiPromptComposer() {
   return {
     text: aiPromptText(),
     citations: state.aiCitations.map((citation) => ({ ...citation })),
-    references: state.aiReferences.map((reference) => ({ ...reference }))
+    references: state.aiReferences.map((reference) => ({ ...reference })),
+    images: normalizeAiChatImageAttachments(state.aiImageAttachments)
   };
 }
 
 function restoreAiPromptComposer(snapshot) {
   state.aiCitations = snapshot.citations.map((citation) => ({ ...citation }));
   state.aiReferences = snapshot.references.map((reference) => ({ ...reference }));
+  state.aiImageAttachments = normalizeAiChatImageAttachments(snapshot.images);
   setAiPromptText(snapshot.text);
   renderAiCitations();
+  renderAiImageAttachments();
   hideAiMentionMenu();
 }
 
@@ -11667,6 +11856,7 @@ function applyAiModels(models) {
   }
   setAiContextMeter(null);
   syncAiTaskOptions();
+  syncAiModelPicker();
 }
 
 async function ensureAiModelsLoaded() {
@@ -11824,7 +12014,8 @@ function setAiModelPickerVisible(visible) {
   const popover = $("#ai-model-popover");
   popover.classList.toggle("hidden", !visible);
   button.setAttribute("aria-expanded", String(visible));
-  if (!visible && document.activeElement === $("#ai-model")) button.focus();
+  if (!visible && (document.activeElement === $("#ai-model") || document.activeElement?.closest("#ai-model-options"))) button.focus();
+  if (visible) focusAiModelOption();
 }
 
 function showAiContextWarning(usage = null) {
@@ -14978,7 +15169,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
   if (aiRequestManager.hasActive(tab.id)) return;
   const composerSnapshot = captureAiPromptComposer();
   const requestComposerSnapshot = retry
-    ? { text: retry.prompt, citations: retry.citations ?? [], references: [] }
+    ? { text: retry.prompt, citations: retry.citations ?? [], references: [], images: retry.images ?? [] }
     : composerSnapshot;
   const instruction = requestComposerSnapshot.text.trim();
   if (!instruction) return toast("请输入指令", "error");
@@ -15016,6 +15207,13 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
     const modelId = tab.selectedModelId || state.models[0]?.id || (isActiveAiChatTab(tab) ? $("#ai-model").value : "");
     if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
     tab.selectedModelId = modelId;
+    const imageAttachmentIds = aiChatImageAttachmentIds(requestComposerSnapshot.images);
+    if (imageAttachmentIds.length > 0 && !state.models.find((model) => model.id === modelId)?.multimodalEnabled) {
+      return toast("当前选择的模型不是多模态模型，无法发送图片附件", "error");
+    }
+    if (imageAttachmentIds.length > 0 && taskType !== "chat") {
+      return toast("图片附件目前仅支持问答对话", "error");
+    }
     try {
       await prepareAiRequestConversation(requestHolder, selectedTaskType, requestScope.conversationScope);
     } catch (error) {
@@ -15074,6 +15272,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false, retry = null } 
         scope,
         modelId,
         citations,
+        ...(imageAttachmentIds.length ? { imageAttachmentIds } : {}),
         conversationId: requestHolder.snapshot.conversationId,
         ...(ignoreContextWarning ? { ignoreContextWarning: true } : {})
       }, retry), createAiIdempotencyKey());
@@ -15508,6 +15707,24 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   }
 }
 
+function appendAiMessageImageAttachments(message, attachments) {
+  const normalized = normalizeAiChatImageAttachments(attachments);
+  if (normalized.length === 0) return;
+  const host = document.createElement("div");
+  host.className = "ai-message-images";
+  host.setAttribute("aria-label", "消息中的图片附件");
+  for (const attachment of normalized) {
+    const image = document.createElement("img");
+    image.src = attachment.contentUrl;
+    image.alt = attachment.originalName;
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.title = attachment.originalName;
+    host.append(image);
+  }
+  message.append(host);
+}
+
 function appendMessage(role, text, citations = [], createdAt = null, metadata = {}, messageId = null, options = {}) {
   const tab = options.tab ?? activeAiChatTab();
   const feed = options.feed ?? tab?.feed ?? $("#ai-feed");
@@ -15588,6 +15805,13 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   }
   if (role === "user") {
     message.dataset.aiCitations = JSON.stringify(Array.isArray(citations) ? citations : []);
+    const imageAttachments = normalizeAiChatImageAttachments(
+      Array.isArray(metadata?.chatImageAttachmentIds)
+        ? metadata.chatImageAttachmentIds.map((id) => ({ id }))
+        : []
+    );
+    message.dataset.aiImageAttachmentIds = JSON.stringify(imageAttachments.map((attachment) => attachment.id));
+    appendAiMessageImageAttachments(message, imageAttachments);
     attachUserCopyAction(message, text);
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
@@ -17179,7 +17403,29 @@ $("#module-nav").addEventListener("click", (event) => {
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftDialog, settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
-bindPlainTextPaste($("#ai-prompt"));
+  $("#ai-prompt").addEventListener("paste", (event) => {
+    const files = clipboardImageFiles(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!aiModelSupportsImageInput()) {
+      toast("当前选择的模型不是多模态模型，无法粘贴图片附件", "error");
+      return;
+    }
+    void addAiImageFiles(files);
+  }, true);
+  bindPlainTextPaste($("#ai-prompt"));
+  $("#ai-attachment-button").addEventListener("click", () => {
+    if (!aiModelSupportsImageInput()) {
+      toast("当前选择的模型不是多模态模型，无法添加图片附件", "error");
+      return;
+    }
+    $("#ai-attachment-input").click();
+  });
+  $("#ai-attachment-input").addEventListener("change", (event) => {
+    const input = event.currentTarget;
+    void addAiImageFiles(input.files).finally(() => { input.value = ""; });
+  });
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   setAiContextMeter(null);
@@ -17212,7 +17458,7 @@ $("#ai-model").addEventListener("change", (event) => {
   syncAiModelPicker();
   setAiModelPickerVisible(false);
 });
-$("#ai-model-picker").addEventListener("click", async (event) => {
+  $("#ai-model-picker").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   if (notifyAiConversationModelLocked(button)) return;
   const willOpen = $("#ai-model-popover").classList.contains("hidden");
@@ -17224,7 +17470,22 @@ $("#ai-model-picker").addEventListener("click", async (event) => {
   } catch (error) {
     toast(`模型加载失败：${error.message}`, "error");
   }
-  if (!$("#ai-model-popover").classList.contains("hidden") && !$("#ai-model").disabled) $("#ai-model").focus();
+  if (!$("#ai-model-popover").classList.contains("hidden") && !$("#ai-model").disabled) focusAiModelOption();
+});
+$("#ai-model-options").addEventListener("keydown", (event) => {
+  const options = [...event.currentTarget.querySelectorAll('[role="option"]')].filter((option) => !option.disabled);
+  const currentIndex = options.indexOf(document.activeElement);
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (options.length === 0) return;
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    options[(currentIndex + direction + options.length) % options.length]?.focus();
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    document.activeElement?.click();
+  }
 });
 $("#ai-roleplay-character").addEventListener("focus", async () => {
   try {

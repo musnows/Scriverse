@@ -77,7 +77,7 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ChapterAnnotationKind = "note" | "todo";
 type ImportMode = "append" | "overwrite";
 
-export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations", "ai-chat"] as const satisfies readonly WorkPermissionModule[];
 export const WORK_AGENT_TOOL_IDS = [
   "story_index",
   "read_chapters",
@@ -553,6 +553,7 @@ type AiConversationMessageInput = {
     processSteps?: unknown[];
     reasoningContent?: string;
     anthropicContent?: unknown[];
+    chatImageAttachmentIds?: string[];
   };
 };
 
@@ -575,7 +576,7 @@ type BeginAiConversationStreamRequestInput = {
   userMessage: {
     content: string;
     citations?: unknown[];
-    metadata?: { mentionCharacterIds?: string[]; mentionRaceIds?: string[]; mentionOrganizationIds?: string[]; modelId?: string };
+    metadata?: { mentionCharacterIds?: string[]; mentionRaceIds?: string[]; mentionOrganizationIds?: string[]; modelId?: string; chatImageAttachmentIds?: string[] };
     existingMessageId?: string;
   };
 };
@@ -6480,9 +6481,16 @@ export class Store {
       ["chapter_versions", "content"],
       ["file_versions", "snapshot_json"]
     ] as const;
-    return sources.reduce((count, [table, column]) => count + Number(
+    const historicalCount = sources.reduce((count, [table, column]) => count + Number(
       this.db.get(`SELECT COUNT(*) AS count FROM ${table} WHERE instr(${column}, ?) > 0`, needle)?.count ?? 0
     ), 0);
+    const conversationCount = Number(
+      this.db.get(
+        "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE instr(metadata_json, ?) > 0",
+        attachmentId
+      )?.count ?? 0
+    );
+    return historicalCount + conversationCount;
   }
 
   queueUnreferencedAttachments(retentionMs = 24 * 60 * 60_000, limit = 100): number {

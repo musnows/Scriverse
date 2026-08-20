@@ -166,6 +166,82 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
     expect(stream.text).toContain("先确认。");
   });
 
+  it("聊天附件通过上传 ID 进入 OpenAI Responses 图片块，并拒绝非多模态模型", async () => {
+    let imageRequestSeen = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "gpt-5-chat-vision" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as {
+        input?: Array<Record<string, unknown>>;
+        max_output_tokens?: number;
+        stream?: boolean;
+      };
+      if (body.max_output_tokens === 10) {
+        return new Response(JSON.stringify({
+          status: "completed",
+          output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "连接成功" }] }]
+        }), { status: 200 });
+      }
+      const userMessage = body.input?.find((item) => item.role === "user"
+        && Array.isArray(item.content)
+        && (item.content as Array<Record<string, unknown>>).some((part) => part.type === "input_image"));
+      const imagePart = (userMessage?.content as Array<Record<string, unknown>> | undefined)
+        ?.find((part) => part.type === "input_image");
+      expect(imagePart?.image_url).toMatch(/^data:image\/(?:png|webp);base64,/u);
+      imageRequestSeen = true;
+      if (!body.stream) throw new Error("聊天请求必须使用流式模式");
+      return new Response([
+        'data: {"type":"response.output_text.delta","delta":"已收到图片。"}',
+        'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":18,"output_tokens":5}}}'
+      ].join("\n\n") + "\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=", "base64");
+    const uploaded = await request(runtime.app)
+      .post(`/api/works/${workId}/attachments?module=ai-chat`)
+      .attach("file", png, { filename: "聊天图片.png", contentType: "image/png" })
+      .expect(201);
+    const attachmentId = String(uploaded.body.data.id);
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "聊天图片 Responses 服务",
+      protocol: "openai-responses",
+      baseUrl: "https://responses-chat-image.test/v1",
+      apiKey: "sk-responses-chat-image-test",
+      status: "enabled"
+    }).expect(201);
+    const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "聊天图片模型",
+      modelId: "gpt-5-chat-vision",
+      multimodalEnabled: true
+    }).expect(201);
+    const modelId = String(model.body.data.id);
+    await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+
+    const stream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请描述这张图片。",
+      scope: { type: "none" },
+      modelId,
+      imageAttachmentIds: [attachmentId]
+    }).expect(200);
+    expect(stream.text).toContain("已收到图片");
+    expect(stream.text).toContain(attachmentId);
+    expect(imageRequestSeen).toBe(true);
+
+    const textModel = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "文本模型",
+      modelId: "gpt-5-chat-text",
+      multimodalEnabled: false
+    }).expect(201);
+    const rejected = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请描述这张图片。",
+      scope: { type: "none" },
+      modelId: textModel.body.data.id,
+      imageAttachmentIds: [attachmentId]
+    }).expect(400);
+    expect(rejected.body.error).toMatchObject({ code: "MODEL_NOT_MULTIMODAL" });
+  });
+
   it("OpenAI Responses 的 image 工具发送附件图片并保留工具调用上下文", async () => {
     let requestedAttachmentId = "";
     let generationCount = 0;

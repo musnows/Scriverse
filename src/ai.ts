@@ -358,6 +358,15 @@ type ModelRow = Row & {
   enabled: number;
 };
 
+export type ChatImageAttachment = {
+  id: string;
+  originalName: string;
+  storedMimeType: string;
+  width: number;
+  height: number;
+  dataUrl: string;
+};
+
 type GenerateInput = {
   workId: string;
   taskId?: string;
@@ -378,6 +387,7 @@ type GenerateInput = {
   disableTools?: boolean;
   agentToolIds?: AgentToolId[];
   agentToolCallLimit?: number;
+  imageAttachments?: ChatImageAttachment[];
 };
 
 type GenerateResult = {
@@ -5215,6 +5225,56 @@ export class AiManager {
     return this.mergeInstructionEntityMatches(input.scope, matches);
   }
 
+  async prepareChatImageAttachments(
+    workId: string,
+    modelId: string | undefined,
+    attachmentIds: string[],
+    permissions: WorkModulePermissions
+  ): Promise<ChatImageAttachment[]> {
+    const ids = [...new Set(attachmentIds.map((attachmentId) => String(attachmentId).trim()).filter(Boolean))];
+    if (ids.length === 0) return [];
+    if (ids.length > 4) throw new AppError(400, "AI_CHAT_IMAGE_LIMIT", "一次最多添加 4 张图片附件");
+    const { model, provider } = this.resolveModel(workId, "chat", modelId);
+    if (!boolValue(model, "multimodal_enabled")) {
+      throw new AppError(400, "MODEL_NOT_MULTIMODAL", "当前选择的模型不是多模态模型，无法处理图片附件");
+    }
+    if (!supportsMultimodalProviderProtocol(provider)) {
+      throw new AppError(400, "MODEL_PROTOCOL_NOT_MULTIMODAL", "当前接口协议不支持图片附件");
+    }
+    if (!this.attachmentStorage) throw new AppError(500, "IMAGE_STORAGE_UNAVAILABLE", "图片附件存储不可用");
+
+    const prepared: ChatImageAttachment[] = [];
+    for (const attachmentId of ids) {
+      const attachment = this.store.getAttachment(attachmentId);
+      if (String(attachment.workId) !== workId) {
+        throw new AppError(400, "ATTACHMENT_WORK_MISMATCH", "图片附件不属于当前作品");
+      }
+      if (!this.store.attachmentModules(attachmentId).some((module) => canReadWorkModule(permissions, module))) {
+        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该图片附件的权限");
+      }
+      if (Boolean(attachment.animated) || Number(attachment.pageCount) > 1) {
+        throw new AppError(415, "AI_CHAT_ANIMATED_IMAGE_UNSUPPORTED", "AI 对话暂不支持动画图片附件");
+      }
+      const byteLength = Number(attachment.storedByteLength);
+      if (!Number.isInteger(byteLength) || byteLength <= 0 || byteLength > IMAGE_TOOL_MAX_BYTES) {
+        throw new AppError(413, "AI_CHAT_IMAGE_TOO_LARGE", "图片附件超过 AI 对话大小限制");
+      }
+      const image = await this.attachmentStorage.read(String(attachment.storageKey));
+      if (image.byteLength > IMAGE_TOOL_MAX_BYTES) {
+        throw new AppError(413, "AI_CHAT_IMAGE_TOO_LARGE", "图片附件超过 AI 对话大小限制");
+      }
+      prepared.push({
+        id: attachmentId,
+        originalName: String(attachment.originalName ?? "图片附件"),
+        storedMimeType: String(attachment.storedMimeType),
+        width: Number(attachment.width),
+        height: Number(attachment.height),
+        dataUrl: `data:${String(attachment.storedMimeType)};base64,${image.toString("base64")}`
+      });
+    }
+    return prepared;
+  }
+
   async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "excludeConversationMessageId"> & { conversationId: string }): Promise<Record<string, unknown>> {
     const conversation = this.store.getAiConversationContext(
       input.conversationId,
@@ -5282,7 +5342,7 @@ export class AiManager {
   }
 
   private buildMessages(
-    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds" | "imageAttachments">,
     context: string,
     existingConversation?: AiConversationContext | null
   ): CompletionMessage[] {
@@ -5399,10 +5459,27 @@ export class AiManager {
       input.instruction,
       { escape: false }
     );
+    const currentInstructionContent: CompletionMessageContent = input.imageAttachments?.length
+      ? [
+        { type: "text", text: currentInstruction },
+        ...input.imageAttachments.map((attachment) => ({
+          type: "image_url",
+          image_url: { url: attachment.dataUrl, detail: "auto" }
+        }))
+      ]
+      : currentInstruction;
     if (!conversation) {
       return [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `${renderedContext}\n\n${currentInstruction}` }
+        { role: "user", content: input.imageAttachments?.length
+          ? [
+            { type: "text", text: `${renderedContext}\n\n${currentInstruction}` },
+            ...input.imageAttachments.map((attachment) => ({
+              type: "image_url",
+              image_url: { url: attachment.dataUrl, detail: "auto" }
+            }))
+          ]
+          : `${renderedContext}\n\n${currentInstruction}` }
       ];
     }
     // 本轮 user 侧 XML 注入：普通任务使用 story_context / author_instruction；角色扮演使用 scene_context / user_message。
@@ -5434,7 +5511,7 @@ export class AiManager {
       // 历史在前、本轮注入在后：保证多轮前缀（system + memory + history）稳定，便于命中 prompt cache
       ...conversationMessages,
       { role: "user", content: renderedContext },
-      { role: "user", content: currentInstruction }
+      { role: "user", content: currentInstructionContent }
     ];
   }
 

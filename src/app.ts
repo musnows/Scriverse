@@ -2128,7 +2128,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/attachments", attachmentUpload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要上传的图片附件");
-    const accessModule = parse(attachmentPermissionModuleSchema, request.query.module ?? "settings");
+    const accessModule = parse(attachmentPermissionModuleSchema, request.query.module ?? "settings") as typeof attachmentPermissionModules[number];
+    if (!canWriteWorkModule(requestPermissions(request, String(request.params.workId)), accessModule)) {
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有编辑该资料模块的权限");
+    }
     let storageKey: string | null = null;
     try {
       const stored = await attachmentStorage.ingest(request.file.path);
@@ -2880,6 +2883,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       modelId: identifier.optional(),
       parameters: jsonObject.optional(),
       citations: aiCitationsSchema.optional(),
+      imageAttachmentIds: z.array(identifier).max(4).optional(),
       conversationId: identifier.optional(),
       currentMessageId: identifier.optional(),
       ignoreContextWarning: z.boolean().optional()
@@ -2919,6 +2923,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     let lastStreamLeaseTouchAt = Date.now();
     let preparedContext: Record<string, unknown> | null = null;
     let preparedConversation: Record<string, unknown> | null = null;
+    let preparedChatImageAttachments: Awaited<ReturnType<typeof ai.prepareChatImageAttachments>> = [];
     const startStream = (): void => {
       if (response.headersSent) return;
       response.status(200);
@@ -2937,6 +2942,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     };
     try {
       if (!existingRequest) {
+        preparedChatImageAttachments = await ai.prepareChatImageAttachments(
+          request.params.workId,
+          modelId,
+          input.imageAttachmentIds ?? [],
+          permissions
+        );
         store.assertAiConversationStreamAvailable(conversationId);
         preparedContext = await ai.prepareConversationContext({
           conversationId,
@@ -2988,11 +2999,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           content: input.instruction,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
-          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length) ? { metadata: {
+          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length) ? { metadata: {
             ...(modelId ? { modelId } : {}),
             ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
             ...(mentionRaceIds.length ? { mentionRaceIds } : {}),
-            ...(mentionOrganizationIds.length ? { mentionOrganizationIds } : {})
+            ...(mentionOrganizationIds.length ? { mentionOrganizationIds } : {}),
+            ...(input.imageAttachmentIds?.length ? { chatImageAttachmentIds: [...new Set(input.imageAttachmentIds)] } : {})
           } } : {})
         }
       });
@@ -3049,7 +3061,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         excludeConversationMessageId: currentMessageId,
         ...(currentMessageId ? { assistantMessageRequestId: `assistant:${currentMessageId}` } : {}),
         ...(modelId ? { modelId } : {}),
-        ...(input.parameters ? { parameters: input.parameters } : {})
+        ...(input.parameters ? { parameters: input.parameters } : {}),
+        ...(preparedChatImageAttachments.length ? { imageAttachments: preparedChatImageAttachments } : {})
       }, (delta) => sendEvent("delta", { delta }));
       const assistantMessageId = typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
         ? String((suggestion.conversationMessage as Record<string, unknown>).id ?? "")
