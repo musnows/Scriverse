@@ -27,6 +27,28 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
     await runtime.close();
   });
 
+  it("由后端返回供应商协议选项及其能力", async () => {
+    const response = await request(runtime.app).get("/api/platform/ai/protocols").expect(200);
+    expect(response.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        value: "openai-responses",
+        label: "OpenAI Responses",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        credentialKind: "api-key",
+        supportsMultimodal: true,
+        supportsMaxCompletionTokens: false
+      }),
+      expect.objectContaining({
+        value: "anthropic-messages",
+        supportsMultimodal: true
+      }),
+      expect.objectContaining({
+        value: "google-vertex",
+        credentialKind: "service-account-json"
+      })
+    ]));
+  });
+
   it("Anthropic Messages 模型连接测试发送官方图片块并允许多模态配置", async () => {
     fetchMock.mockImplementation(async (input, init) => {
       const url = String(input);

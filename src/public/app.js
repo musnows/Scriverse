@@ -16,7 +16,7 @@ import {
   visibleForeshadowReminders
 } from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260816-extended-thinking-effort-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260816-extended-thinking-effort-v1&feature=ai-provider-responses-v1";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
@@ -54,7 +54,7 @@ import {
   timelineStatusLabel,
   characterGenderLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1";
+} from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1&feature=ai-provider-responses-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
@@ -195,6 +195,8 @@ const state = {
   collapsedRaceIds: new Set(),
   contextChapterId: null
 };
+
+let platformAiProtocolOptions = [];
 
 const aiRequestManager = createAiRequestManager();
 const aiChatTabManager = createAiChatTabManager(() => createAiIdempotencyKey());
@@ -10714,7 +10716,7 @@ function openTaskDetailDialog(task, trace) {
   });
 }
 
-function renderProviderCards(providers, models) {
+function renderProviderCards(providers, models, protocolOptions) {
   return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => {
     const providerModels = models.filter((model) => model.providerId === provider.id);
     const providerStatusClass = provider.status === "disabled" ? "is-disabled" : provider.status === "error" ? "is-error" : "is-enabled";
@@ -10722,7 +10724,7 @@ function renderProviderCards(providers, models) {
       ? `<div class="provider-disabled-notice" role="status"><strong>已停用</strong><span>不会出现在新任务的模型列表中，历史任务仍可查看。</span></div>`
       : "";
     return `
-    <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
+    <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol, protocolOptions))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
     ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
@@ -10738,7 +10740,7 @@ function renderProviderCards(providers, models) {
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
-    : emptyModule("尚未配置 AI 供应商", "添加 OpenAI、Anthropic 或 Google Vertex 接口地址和凭据，测试成功后再添加模型。");
+    : emptyModule("尚未配置 AI 供应商", "添加后端返回的供应商协议、接口地址和凭据，测试成功后再添加模型。");
 }
 
 async function deletePlatformModel(item) {
@@ -10783,7 +10785,7 @@ async function deletePlatformProvider(item) {
   }
 }
 
-function bindPlatformProviderActions(host, providers, models) {
+function bindPlatformProviderActions(host, providers, models, protocolOptions) {
   host.querySelectorAll("[data-test-provider]").forEach((button) => button.addEventListener("click", async () => {
     const providerId = button.dataset.testProvider;
     button.disabled = true;
@@ -10804,19 +10806,20 @@ function bindPlatformProviderActions(host, providers, models) {
       focusTarget?.focus({ preventScroll: true });
     }
   }));
-  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel, null, providers.find((provider) => provider.id === button.dataset.addModel))));
+  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel, null, providers.find((provider) => provider.id === button.dataset.addModel), protocolOptions)));
   host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => {
     const model = models.find((item) => item.id === button.dataset.editModel);
-    openModelDialog(undefined, model, providers.find((provider) => provider.id === model?.providerId));
+    openModelDialog(undefined, model, providers.find((provider) => provider.id === model?.providerId), protocolOptions);
   }));
-  host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
+  host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider), protocolOptions)));
 }
 
-function renderTaskDefaults(models, providers, taskDefaults, settings) {
+function renderTaskDefaults(models, providers, taskDefaults, settings, protocolOptions = platformAiProtocolOptions) {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+  const protocolByValue = new Map(protocolOptions.map((option) => [option.value, option]));
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   const availableModels = models.filter((model) => isSelectableModel(model));
-  const imageModels = availableModels.filter((model) => model.multimodalEnabled && providerById.get(model.providerId)?.protocol === "openai-chat-completions");
+  const imageModels = availableModels.filter((model) => model.multimodalEnabled && protocolByValue.get(providerById.get(model.providerId)?.protocol)?.supportsMultimodal === true);
   const availableModelIds = new Set(availableModels.map((model) => model.id));
   const currentDefaultModels = taskDefaults
     .map((item) => item.model)
@@ -11149,20 +11152,23 @@ function startBackgroundTaskCenter(workId) {
 }
 
 async function renderPlatformAiConfig() {
-  const [providers, models, settings] = await Promise.all([
+  const [providers, models, settings, protocolOptions] = await Promise.all([
     api("/api/platform/ai/providers"),
     api("/api/platform/ai/models"),
-    api("/api/platform/ai/settings")
+    api("/api/platform/ai/settings"),
+    api("/api/platform/ai/protocols")
   ]);
+  platformAiProtocolOptions = protocolOptions;
   const host = $("#platform-ai-content");
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const imageModels = models.filter((model) => model.multimodalEnabled && providerById.get(model.providerId)?.protocol === "openai-chat-completions");
+  const protocolByValue = new Map(protocolOptions.map((option) => [option.value, option]));
+  const imageModels = models.filter((model) => model.multimodalEnabled && protocolByValue.get(providerById.get(model.providerId)?.protocol)?.supportsMultimodal === true);
   const imageModelOptions = imageModels.map((model) => {
     const provider = providerById.get(model.providerId);
     const available = isSelectableModel({ ...model, providerStatus: provider?.status, providerConnectionStatus: provider?.connectionStatus });
     return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""} ${available || model.id === settings.imageToolModelId ? "" : "disabled"}>${esc(`${available ? "" : "不可用 · "}${modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })}`)}</option>`;
   }).join("");
-  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-stream-timeout-section"><div class="config-section-header"><div><h2>AI 流事件空闲超时</h2><p>首个流事件或相邻流事件在此时间内没有新数据时，请求会被关闭。默认 90 秒，最低 30 秒，最高 600 秒。</p></div></div><div class="platform-stream-timeout-panel"><label class="platform-stream-timeout-field"><span>超时时间（秒）</span><input id="platform-ai-stream-idle-timeout" type="number" min="30" max="600" step="1" value="${esc(String(settings.streamIdleTimeoutSeconds ?? 90))}" aria-label="AI 流事件空闲超时时间（秒）"></label><button id="save-platform-ai-stream-idle-timeout" class="ghost-button config-save-button" type="button">保存流超时设置</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models)}</section>`;
+  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-stream-timeout-section"><div class="config-section-header"><div><h2>AI 流事件空闲超时</h2><p>首个流事件或相邻流事件在此时间内没有新数据时，请求会被关闭。默认 90 秒，最低 30 秒，最高 600 秒。</p></div></div><div class="platform-stream-timeout-panel"><label class="platform-stream-timeout-field"><span>超时时间（秒）</span><input id="platform-ai-stream-idle-timeout" type="number" min="30" max="600" step="1" value="${esc(String(settings.streamIdleTimeoutSeconds ?? 90))}" aria-label="AI 流事件空闲超时时间（秒）"></label><button id="save-platform-ai-stream-idle-timeout" class="ghost-button config-save-button" type="button">保存流超时设置</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models, protocolOptions)}</section>`;
   $("#save-platform-system-prompt").addEventListener("click", async () => {
     const button = $("#save-platform-system-prompt");
     button.disabled = true;
@@ -11202,7 +11208,7 @@ async function renderPlatformAiConfig() {
       button.disabled = false;
     }
   });
-  bindPlatformProviderActions(host, providers, models);
+  bindPlatformProviderActions(host, providers, models, protocolOptions);
 }
 
 function tokenUsageDateLabel(date) {
@@ -11351,15 +11357,17 @@ async function renderBookAiSettings() {
     clearTimeout(relationshipSearchIndexRefreshTimer);
     relationshipSearchIndexRefreshTimer = null;
   }
-  const [settings, providers, models, taskDefaults, relationshipIndex, usage] = await Promise.all([
+  const [settings, providers, models, taskDefaults, relationshipIndex, usage, protocolOptions] = await Promise.all([
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings`),
     moduleApi("ai-settings", "/api/platform/ai/providers"),
     moduleApi("ai-settings", `/api/works/${state.work.id}/models`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/task-defaults`),
     moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/relationship-search-index`),
-    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`)
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`),
+    moduleApi("ai-settings", "/api/platform/ai/protocols")
   ]);
   const host = $("#module-content");
+  platformAiProtocolOptions = protocolOptions;
   const workId = String(state.work.id);
   const maximumAgentToolCallLimit = Math.max(5, Number(settings.agentToolCallLimitMaximum) || 80);
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"]);
@@ -14800,22 +14808,12 @@ async function refreshAnalysisTaskViewsAfterCreate(workId) {
   }
 }
 
-function openProviderDialog(item) {
-  const protocol = item?.protocol ?? "openai-chat-completions";
-  const providerProtocolOptions = [
-    ["openai-chat-completions", "OpenAI Chat Completions"],
-    ["anthropic-messages", "Anthropic Messages"],
-    ["google-vertex", "Google Vertex"]
-  ];
-  const defaultBaseUrlForProtocol = (value) => {
-    if (value === "anthropic-messages") return "https://api.anthropic.com";
-    if (value === "google-vertex") {
-      return "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi";
-    }
-    return "https://api.openai.com/v1";
-  };
+function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
+  const protocol = item?.protocol ?? protocolOptions[0]?.value ?? "";
+  const selectedProtocolOption = (value) => protocolOptions.find((option) => option.value === value);
+  const defaultBaseUrlForProtocol = (value) => protocolOptions.find((option) => option.value === value)?.defaultBaseUrl ?? "";
   const credentialFieldForProtocol = (value) => {
-    if (value === "google-vertex") {
+    if (protocolOptions.find((option) => option.value === value)?.credentialKind === "service-account-json") {
       return field(
         "apiKey",
         item ? "替换服务账号 JSON（留空则不变）" : "服务账号 JSON",
@@ -14826,12 +14824,14 @@ function openProviderDialog(item) {
     return field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password");
   };
   const defaultBaseUrl = item?.baseUrl ?? defaultBaseUrlForProtocol(protocol);
-  const useMaxCompletionTokens = item?.maxTokensParameter === "max_completion_tokens" && protocol !== "anthropic-messages";
+  const useMaxCompletionTokens = item?.maxTokensParameter === "max_completion_tokens"
+    && protocolOptions.find((option) => option.value === protocol)?.supportsMaxCompletionTokens !== false;
+  const providerProtocolFieldOptions = protocolOptions.map((option) => [option.value, option.label]);
   const maxTokensParameterField = `<div class="form-field provider-max-tokens-parameter-field" data-provider-max-tokens-parameter-field><span>最大输出令牌参数</span><label class="checkbox-field"><input name="useMaxCompletionTokens" type="checkbox" ${useMaxCompletionTokens ? "checked" : ""} aria-describedby="provider-max-tokens-parameter-hint"><span>使用 max_completion_tokens</span></label><small id="provider-max-tokens-parameter-hint" data-provider-max-tokens-parameter-hint>默认使用 max_tokens；OpenAI 新版模型可按需切换。</small></div>`;
   openDialog(
     item ? "编辑 AI 供应商" : "新建 AI 供应商",
     field("name", "显示名称", "text", item?.name)
-      + field("protocol", "接口协议", "select", protocol, providerProtocolOptions)
+      + field("protocol", "接口协议", "select", protocol, providerProtocolFieldOptions)
       + field("baseUrl", "API 基础地址", "url", defaultBaseUrl)
       + `<div data-provider-credential-field>${credentialFieldForProtocol(protocol)}</div>`
       + maxTokensParameterField
@@ -14856,7 +14856,7 @@ function openProviderDialog(item) {
       await loadModels();
       if (item) toast(connectivityConfigurationSavedToast("provider"));
     },
-    item ? "协议、限流与凭据" : "OpenAI / Anthropic / Google Vertex", {
+    item ? "协议、限流与凭据" : "供应商协议、限流与凭据", {
       dangerAction: item ? { label: "删除供应商", onClick: () => deletePlatformProvider(item) } : null
     }
   );
@@ -14866,11 +14866,11 @@ function openProviderDialog(item) {
   const maxTokensParameterFieldElement = $("#dialog-fields [data-provider-max-tokens-parameter-field]");
   const maxTokensParameterInput = $("#dialog-fields input[name='useMaxCompletionTokens']");
   const syncMaxTokensParameter = () => {
-    const anthropic = protocolSelect.value === "anthropic-messages";
-    maxTokensParameterFieldElement.hidden = anthropic;
-    maxTokensParameterFieldElement.classList.toggle("hidden", anthropic);
-    maxTokensParameterInput.disabled = anthropic;
-    if (anthropic) maxTokensParameterInput.checked = false;
+    const supportsMaxCompletionTokens = selectedProtocolOption(protocolSelect.value)?.supportsMaxCompletionTokens !== false;
+    maxTokensParameterFieldElement.hidden = !supportsMaxCompletionTokens;
+    maxTokensParameterFieldElement.classList.toggle("hidden", !supportsMaxCompletionTokens);
+    maxTokensParameterInput.disabled = !supportsMaxCompletionTokens;
+    if (!supportsMaxCompletionTokens) maxTokensParameterInput.checked = false;
   };
   const syncProviderCredentialField = () => {
     const nextProtocol = protocolSelect.value;
@@ -14882,10 +14882,10 @@ function openProviderDialog(item) {
   syncMaxTokensParameter();
 }
 
-function openModelDialog(providerId, item = null, provider = null) {
+function openModelDialog(providerId, item = null, provider = null, protocolOptions = platformAiProtocolOptions) {
   const values = modelFormValues(item);
-  const imageDefaultSupported = supportsMultimodalModelProtocol(provider?.protocol);
-  const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>平台默认模型只能由 Chat Completions 协议提供。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
+  const imageDefaultSupported = supportsMultimodalModelProtocol(provider?.protocol, protocolOptions);
+  const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>支持多模态的接口协议都可以作为默认读图模型。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
   const connectionTestDescription = values.multimodalEnabled && imageDefaultSupported
@@ -16926,7 +16926,7 @@ $("#member-permission-form").addEventListener("submit", async (event) => {
     toast(existing ? "成员模块权限已更新" : "成员已添加并保存模块权限");
   } catch (error) { toast(error.message, "error"); }
 });
-$("#platform-new-provider").addEventListener("click", () => openProviderDialog());
+$("#platform-new-provider").addEventListener("click", () => openProviderDialog(null, platformAiProtocolOptions));
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#shelf-recycle-bin").addEventListener("click", () => { void openWorkRecycleBin(); });
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());

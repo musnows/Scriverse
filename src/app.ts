@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
-import { AI_PROVIDER_PROTOCOLS, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
+import { AI_PROVIDER_PROTOCOL_OPTIONS, AI_PROVIDER_PROTOCOLS, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
 import { DEFAULT_AI_CHAT_TAB_LIMIT } from "./ai-chat-tab-limit.js";
 import type { AiRetryPolicy } from "./ai-retry.js";
@@ -2551,6 +2551,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listProvidersPage(pagination) : ai.listProviders());
   });
+  app.get("/api/platform/ai/protocols", (_request, response) => data(response, AI_PROVIDER_PROTOCOL_OPTIONS));
   app.post("/api/platform/ai/providers", (request, response) => data(response, ai.createProvider(parse(providerSchema, request.body)), 201));
   app.get("/api/platform/ai/models", (request, response) => {
     const pagination = parsePagination(request.query);

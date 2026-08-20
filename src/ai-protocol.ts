@@ -6,6 +6,50 @@ export type AiProviderProtocol = (typeof AI_PROVIDER_PROTOCOLS)[number];
 export const MAX_TOKENS_PARAMETERS = ["max_tokens", "max_completion_tokens"] as const;
 export type MaxTokensParameter = (typeof MAX_TOKENS_PARAMETERS)[number];
 
+export type AiProviderProtocolOption = {
+  value: AiProviderProtocol;
+  label: string;
+  defaultBaseUrl: string;
+  credentialKind: "api-key" | "service-account-json";
+  supportsMultimodal: boolean;
+  supportsMaxCompletionTokens: boolean;
+};
+
+export const AI_PROVIDER_PROTOCOL_OPTIONS: readonly AiProviderProtocolOption[] = Object.freeze([
+  {
+    value: "openai-chat-completions",
+    label: "OpenAI Chat Completions",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    credentialKind: "api-key",
+    supportsMultimodal: true,
+    supportsMaxCompletionTokens: true
+  },
+  {
+    value: "openai-responses",
+    label: "OpenAI Responses",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    credentialKind: "api-key",
+    supportsMultimodal: true,
+    supportsMaxCompletionTokens: false
+  },
+  {
+    value: "anthropic-messages",
+    label: "Anthropic Messages",
+    defaultBaseUrl: "https://api.anthropic.com",
+    credentialKind: "api-key",
+    supportsMultimodal: true,
+    supportsMaxCompletionTokens: false
+  },
+  {
+    value: "google-vertex",
+    label: "Google Vertex",
+    defaultBaseUrl: "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi",
+    credentialKind: "service-account-json",
+    supportsMultimodal: true,
+    supportsMaxCompletionTokens: true
+  }
+]);
+
 export function isAiProviderProtocol(value: string): value is AiProviderProtocol {
   return (AI_PROVIDER_PROTOCOLS as readonly string[]).includes(value);
 }
@@ -19,10 +63,7 @@ export function usesOpenAiResponsesShape(protocol: AiProviderProtocol): boolean 
 }
 
 export function providerProtocolLabelText(protocol: AiProviderProtocol): string {
-  if (protocol === "openai-responses") return "OpenAI Responses";
-  if (protocol === "anthropic-messages") return "Anthropic Messages";
-  if (protocol === "google-vertex") return "Google Vertex";
-  return "Chat Completions";
+  return AI_PROVIDER_PROTOCOL_OPTIONS.find((option) => option.value === protocol)?.label ?? "AI provider";
 }
 
 export type CompletionToolCall = {
