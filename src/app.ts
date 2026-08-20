@@ -92,6 +92,11 @@ const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
 const maximumKnowledgeSectionsLength = 4_000_000;
+const aiChatAttachmentIngestOptions = {
+  allowedFormats: new Set(["png", "jpeg"]),
+  preserveFormat: true,
+  unsupportedMessage: "AI 对话图片附件仅支持 PNG、JPG、JPEG 图片"
+};
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
@@ -2134,7 +2139,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     let storageKey: string | null = null;
     try {
-      const stored = await attachmentStorage.ingest(request.file.path);
+      const stored = await attachmentStorage.ingest(
+        request.file.path,
+        accessModule === "ai-chat" ? aiChatAttachmentIngestOptions : undefined
+      );
       storageKey = stored.storageKey;
       const result = store.createAttachment(String(request.params.workId), {
         originalName: normalizeUploadFileName(request.file.originalname),

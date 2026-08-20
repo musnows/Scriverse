@@ -5252,6 +5252,9 @@ export class AiManager {
       if (!this.store.attachmentModules(attachmentId).some((module) => canReadWorkModule(permissions, module))) {
         throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该图片附件的权限");
       }
+      if (String(attachment.originalMimeType) !== "image/png" && String(attachment.originalMimeType) !== "image/jpeg") {
+        throw new AppError(415, "AI_CHAT_IMAGE_FORMAT_UNSUPPORTED", "AI 对话图片附件仅支持 PNG、JPG、JPEG 图片");
+      }
       if (Boolean(attachment.animated) || Number(attachment.pageCount) > 1) {
         throw new AppError(415, "AI_CHAT_ANIMATED_IMAGE_UNSUPPORTED", "AI 对话暂不支持动画图片附件");
       }

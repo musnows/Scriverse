@@ -1,6 +1,6 @@
 export const AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT = 4;
 
-const supportedImageMimeType = /^image\/(?:png|jpe?g|webp|gif)$/u;
+const supportedImageMimeType = /^image\/(?:png|jpe?g)$/u;
 
 export function isAiChatImageFile(file) {
   return Boolean(file) && supportedImageMimeType.test(String(file.type ?? ""));

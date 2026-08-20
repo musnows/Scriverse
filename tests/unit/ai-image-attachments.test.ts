@@ -10,6 +10,10 @@ import {
 describe("AI 对话图片附件前端工具", () => {
   it("只接受支持的图片类型并限制附件数量", () => {
     expect(isAiChatImageFile({ type: "image/png" })).toBe(true);
+    expect(isAiChatImageFile({ type: "image/jpeg" })).toBe(true);
+    expect(isAiChatImageFile({ type: "image/jpg" })).toBe(true);
+    expect(isAiChatImageFile({ type: "image/webp" })).toBe(false);
+    expect(isAiChatImageFile({ type: "image/gif" })).toBe(false);
     expect(isAiChatImageFile({ type: "image/svg+xml" })).toBe(false);
     const attachments = normalizeAiChatImageAttachments([
       { id: "one", originalName: "一.png" },

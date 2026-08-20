@@ -13,7 +13,7 @@ describe("AI 对话图片附件界面", () => {
 
     expect(page).toContain('id="ai-image-attachments" class="ai-image-attachments hidden"');
     expect(page).toContain('id="ai-attachment-button" class="ai-attachment-button hidden"');
-    expect(page).toContain('accept="image/png,image/jpeg,image/webp,image/gif"');
+    expect(page).toContain('accept="image/png,image/jpeg,.jpg,.jpeg"');
     expect(application).toContain("function aiModelSupportsImageInput()");
     expect(application).toContain("function addAiImageFiles(files)");
     expect(application).toContain("clipboardImageFiles(event.clipboardData)");
@@ -21,6 +21,7 @@ describe("AI 对话图片附件界面", () => {
     expect(application).toContain('toast("当前选择的模型不是多模态模型，无法粘贴图片附件", "error")');
     expect(application).toContain('module=ai-chat');
     expect(application).toContain("imageAttachmentIds");
+    expect(application).toContain('toast("图片附件仅支持 PNG、JPG、JPEG", "error")');
     expect(styles).toContain(".ai-attachment-button { position: absolute; bottom: 8px; left: 8px;");
     expect(styles).toContain(".ai-image-attachment { position: relative;");
   });

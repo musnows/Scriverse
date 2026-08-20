@@ -12,6 +12,12 @@ const maximumAnimationPixels = 50_000_000;
 const maximumGifFrames = 10_000;
 const allowedFormats = new Set(["png", "jpeg", "webp", "gif"]);
 
+type AttachmentIngestOptions = {
+  allowedFormats?: ReadonlySet<string>;
+  preserveFormat?: boolean;
+  unsupportedMessage?: string;
+};
+
 type StoredImageMimeType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 
 export type StoredAttachmentFile = {
@@ -115,7 +121,7 @@ export class AttachmentStorage {
     await rm(this.resolvedStoragePath(storageKey), { force: true });
   }
 
-  async ingest(sourcePath: string): Promise<StoredAttachmentFile> {
+  async ingest(sourcePath: string, options: AttachmentIngestOptions = {}): Promise<StoredAttachmentFile> {
     await this.prepare();
     const originalStats = await stat(sourcePath);
     if (originalStats.size > this.maximumUploadBytes) {
@@ -130,7 +136,9 @@ export class AttachmentStorage {
       throw new AppError(415, "INVALID_ATTACHMENT_IMAGE", "附件不是有效的图片文件");
     }
     const format = String(metadata.format ?? "");
-    if (!allowedFormats.has(format)) throw new AppError(415, "UNSUPPORTED_ATTACHMENT", "附件仅支持 PNG、JPEG、WebP 和 GIF 图片");
+    if (!(options.allowedFormats ?? allowedFormats).has(format)) {
+      throw new AppError(415, "UNSUPPORTED_ATTACHMENT", options.unsupportedMessage ?? "附件仅支持 PNG、JPEG、WebP 和 GIF 图片");
+    }
     const width = Number(metadata.width ?? 0);
     const pageHeight = Number(metadata.pageHeight ?? metadata.height ?? 0);
     const pageCount = Math.max(1, Number(metadata.pages ?? 1));
@@ -152,7 +160,7 @@ export class AttachmentStorage {
     const candidatePath = join(this.temporaryDirectory, `${originalSha256}-${Date.now()}.webp`);
     let selectedPath = sourcePath;
     let storedMimeType = originalMimeType;
-    if (format !== "webp" && !isGif) {
+    if (!options.preserveFormat && format !== "webp" && !isGif) {
       try {
         await sharp(sourcePath, { animated: true, limitInputPixels: maximumPixels, sequentialRead: true })
           .webp({ lossless: true, effort: 6 })

@@ -30,7 +30,7 @@ import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-resu
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260820-ai-chat-image-attachments-v1";
-import { AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT, aiChatImageAttachmentIds, isAiChatImageFile, normalizeAiChatImageAttachments } from "/ai-image-attachments.js?v=20260820-ai-chat-image-attachments-v1";
+import { AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT, aiChatImageAttachmentIds, isAiChatImageFile, normalizeAiChatImageAttachments } from "/ai-image-attachments.js?v=20260820-ai-chat-image-attachments-v2";
 import { findTextMatches, replaceTextMatches } from "/chapter-search.js?v=20260818-chapter-search-replace-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -3816,7 +3816,7 @@ async function addAiImageFiles(files) {
   }
   const candidates = Array.from(files ?? []).filter(isAiChatImageFile);
   if (candidates.length === 0) {
-    toast("图片附件仅支持 PNG、JPEG、WebP 和 GIF", "error");
+    toast("图片附件仅支持 PNG、JPG、JPEG", "error");
     return;
   }
   const remaining = AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT - state.aiImageAttachments.length;

@@ -1,4 +1,5 @@
 import request from "supertest";
+import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime } from "../helpers.js";
@@ -240,6 +241,39 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
       imageAttachmentIds: [attachmentId]
     }).expect(400);
     expect(rejected.body.error).toMatchObject({ code: "MODEL_NOT_MULTIMODAL" });
+  });
+
+  it("聊天图片附件只接受 PNG、JPG、JPEG", async () => {
+    const png = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: { r: 32, g: 96, b: 160 } }
+    }).png().toBuffer();
+    const jpeg = await sharp(png).jpeg().toBuffer();
+    for (const [filename, content, contentType] of [
+      ["聊天图片.png", png, "image/png"],
+      ["聊天图片.jpg", jpeg, "image/jpeg"]
+    ] as const) {
+      const uploaded = await request(runtime.app)
+        .post(`/api/works/${workId}/attachments?module=ai-chat`)
+        .attach("file", content, { filename, contentType })
+        .expect(201);
+      expect(uploaded.body.data).toMatchObject({ originalMimeType: contentType, storedMimeType: contentType });
+    }
+
+    const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+    const webp = await sharp(png).webp().toBuffer();
+    for (const [filename, content, contentType] of [
+      ["聊天图片.gif", gif, "image/gif"],
+      ["聊天图片.webp", webp, "image/webp"]
+    ] as const) {
+      const rejected = await request(runtime.app)
+        .post(`/api/works/${workId}/attachments?module=ai-chat`)
+        .attach("file", content, { filename, contentType })
+        .expect(415);
+      expect(rejected.body.error).toEqual({
+        code: "UNSUPPORTED_ATTACHMENT",
+        message: "AI 对话图片附件仅支持 PNG、JPG、JPEG 图片"
+      });
+    }
   });
 
   it("OpenAI Responses 的 image 工具发送附件图片并保留工具调用上下文", async () => {
