@@ -2587,6 +2587,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-inline-save .context-compact-threshold-field input { width: 88px; }
 .config-inline-save .daily-token-quota-field { width: 144px; }
 .config-inline-save .monthly-token-quota-field { width: 144px; }
+@media (min-width: 641px) {
+  .config-inline-save .daily-token-quota-field,
+  .config-inline-save .monthly-token-quota-field { flex: 1 1 0; width: auto; min-width: 240px; }
+  .config-inline-save .daily-token-quota-field input,
+  .config-inline-save .monthly-token-quota-field input { width: 100%; }
+}
 .config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto; margin: 0; color: var(--muted); font-size: 10px; }
 .config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px; min-height: 32px; margin: 0; color: var(--muted); font-size: calc(11px * var(--ui-font-scale)); line-height: 1.4; white-space: nowrap; }
 .config-inline-save > .config-checkbox-field input[type="checkbox"] { width: 18px; min-width: 18px; height: 18px; }
