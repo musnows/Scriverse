@@ -2863,7 +2863,17 @@ function shouldRenderAiProcessStep(step) {
 }
 
 function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null) {
-  message.querySelector(".ai-process-details")?.remove();
+  const previousDetails = message.querySelector(".ai-process-details");
+  const previousScrollStates = new Map();
+  previousDetails?.querySelectorAll(".ai-process-step[data-ai-process-step-id]").forEach((section) => {
+    const body = section.querySelector(".ai-process-step-body");
+    if (!body) return;
+    previousScrollStates.set(section.dataset.aiProcessStepId, {
+      scrollTop: body.scrollTop,
+      nearBottom: body.scrollHeight - body.scrollTop - body.clientHeight < 24
+    });
+  });
+  previousDetails?.remove();
   const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);
   if (!renderableSteps.length) return;
   const details = document.createElement("details");
@@ -2898,6 +2908,7 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null, visi
     }
     const section = document.createElement("section");
     section.className = `ai-process-step ai-process-${step.type}-step`;
+    section.dataset.aiProcessStepId = `${step.type}:${String(step.id ?? step.round ?? "")}`;
     const label = document.createElement("small");
     label.textContent = `第 ${Number(step.round) || 1} 轮 · ${step.type === "thinking" ? "Thinking" : "中间输出"}`;
     const body = document.createElement("div");
@@ -2908,6 +2919,14 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null, visi
     list.append(section);
   }
   details.append(summary, list);
+  list.querySelectorAll(".ai-process-step[data-ai-process-step-id]").forEach((section) => {
+    const scrollState = previousScrollStates.get(section.dataset.aiProcessStepId);
+    const body = section.querySelector(".ai-process-step-body");
+    if (!scrollState || !body) return;
+    body.scrollTop = scrollState.nearBottom
+      ? body.scrollHeight
+      : Math.min(scrollState.scrollTop, body.scrollHeight);
+  });
   const body = message.querySelector(".message-body");
   if (body) body.before(details);
   else message.append(details);
@@ -15734,13 +15753,20 @@ function appendAiMessageImageAttachments(message, attachments) {
   host.className = "ai-message-images";
   host.setAttribute("aria-label", "消息中的图片附件");
   for (const attachment of normalized) {
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "ai-message-image-preview";
+    preview.setAttribute("aria-label", `查看图片附件：${attachment.originalName}`);
+    preview.title = "点击查看大图";
+    preview.addEventListener("click", () => openAiImagePreview(attachment));
     const image = document.createElement("img");
     image.src = attachment.contentUrl;
     image.alt = attachment.originalName;
     image.loading = "lazy";
     image.decoding = "async";
     image.title = attachment.originalName;
-    host.append(image);
+    preview.append(image);
+    host.append(preview);
   }
   message.append(host);
 }

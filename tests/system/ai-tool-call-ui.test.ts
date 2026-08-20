@@ -25,6 +25,9 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('eventName === "process_step"');
     expect(application).toContain('`调用了 ${name} 工具`');
     expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null)");
+    expect(application).toContain("const previousScrollStates = new Map();");
+    expect(application).toContain("section.dataset.aiProcessStepId");
+    expect(application).toContain("body.scrollTop = scrollState.nearBottom");
     expect(application).toContain("function shouldRenderAiProcessStep(step)");
     expect(application).toContain('step.type !== "intermediate" || typeof step.content !== "string" || step.content.trim().length > 0');
     expect(application).toContain("const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);");
@@ -68,6 +71,8 @@ describe("AI 工具调用记录界面", () => {
     expect(styles).toContain(".ai-tool-call-summary::after { content: \"查看详情\";");
     expect(styles).toContain(".ai-process-details > summary");
     expect(styles).toContain(".ai-process-step-body");
+    expect(styles).toContain("overflow-y: auto");
+    expect(styles).toContain("scrollbar-gutter: stable");
     expect(styles).toContain(".ai-tool-call-detail { display: grid; grid-template-columns: minmax(0, 1fr);");
     expect(styles).toContain(".ai-tool-call-info { display: grid;");
     expect(styles).toContain(".ai-tool-call-copy-button { position: absolute;");
