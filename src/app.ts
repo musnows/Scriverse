@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
-import { AI_PROVIDER_PROTOCOL_OPTIONS, AI_PROVIDER_PROTOCOLS, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
+import { AI_PROVIDER_PROTOCOL_OPTIONS, AI_PROVIDER_PROTOCOLS, AI_THINKING_TYPES, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
 import { DEFAULT_AI_CHAT_TAB_LIMIT } from "./ai-chat-tab-limit.js";
 import type { AiRetryPolicy } from "./ai-retry.js";
@@ -433,6 +433,7 @@ const providerBaseSchema = z.object({
   baseUrl: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "接口地址必须使用 HTTP 或 HTTPS"),
   apiKey: z.string().trim().min(1).max(50_000),
   protocol: z.enum(AI_PROVIDER_PROTOCOLS).optional(),
+  thinkingType: z.enum(AI_THINKING_TYPES).optional(),
   maxTokensParameter: z.enum(MAX_TOKENS_PARAMETERS).optional(),
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),

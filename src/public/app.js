@@ -11099,7 +11099,7 @@ function renderProviderCards(providers, models, protocolOptions) {
       : "";
     return `
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol, protocolOptions))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
-    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n思考类型：${esc(provider.thinkingType ?? "enabled")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
@@ -15239,8 +15239,10 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
   const defaultBaseUrl = item?.baseUrl ?? defaultBaseUrlForProtocol(protocol);
   const useMaxCompletionTokens = item?.maxTokensParameter === "max_completion_tokens"
     && protocolOptions.find((option) => option.value === protocol)?.supportsMaxCompletionTokens !== false;
+  const useAdaptiveThinking = item?.thinkingType === "adaptive";
   const providerProtocolFieldOptions = protocolOptions.map((option) => [option.value, option.label]);
   const maxTokensParameterField = `<div class="form-field provider-max-tokens-parameter-field" data-provider-max-tokens-parameter-field><span>最大输出令牌参数</span><label class="checkbox-field"><input name="useMaxCompletionTokens" type="checkbox" ${useMaxCompletionTokens ? "checked" : ""} aria-describedby="provider-max-tokens-parameter-hint"><span>使用 max_completion_tokens</span></label><small id="provider-max-tokens-parameter-hint" data-provider-max-tokens-parameter-hint>默认使用 max_tokens；OpenAI 新版模型可按需切换。</small></div>`;
+  const thinkingTypeField = `<div class="form-field provider-thinking-type-field" data-provider-thinking-type-field><span>思考类型（开启时）</span><label class="checkbox-field"><input name="useAdaptiveThinking" type="checkbox" ${useAdaptiveThinking ? "checked" : ""} aria-describedby="provider-thinking-type-hint"><span>使用 adaptive（关闭时发送 enabled）</span></label><small id="provider-thinking-type-hint">关闭模型思考时仍发送 disabled；请只在供应商支持 adaptive 时开启。</small></div>`;
   openDialog(
     item ? "编辑 AI 供应商" : "新建 AI 供应商",
     field("name", "显示名称", "text", item?.name)
@@ -15248,6 +15250,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
       + field("baseUrl", "API 基础地址", "url", defaultBaseUrl)
       + `<div data-provider-credential-field>${credentialFieldForProtocol(protocol)}</div>`
       + maxTokensParameterField
+      + thinkingTypeField
       + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
       + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
       + field("note", "用途备注", "textarea", item?.note)
@@ -15258,6 +15261,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
         protocol: form.get("protocol"),
         baseUrl: form.get("baseUrl"),
         maxTokensParameter: form.get("useMaxCompletionTokens") === "on" ? "max_completion_tokens" : "max_tokens",
+        thinkingType: form.get("useAdaptiveThinking") === "on" ? "adaptive" : "enabled",
         concurrencyLimit: Number(form.get("concurrencyLimit")),
         rpmLimit: Number(form.get("rpmLimit")),
         note: form.get("note"),

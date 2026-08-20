@@ -139,6 +139,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
+    expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "thinking_type" && column.dflt_value === "'enabled'")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_connectivity_test_states)").map((column) => column.name)).toEqual([
       "object_type",
       "object_id",
@@ -1619,6 +1620,37 @@ describe("数据库版本化迁移", () => {
       protocol: "openai-chat-completions",
       max_tokens_parameter: "max_tokens"
     });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 106 为既有供应商补充默认思考类型并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-provider-thinking-type-"));
+    roots.push(root);
+    const filename = join(root, "provider-thinking-type.db");
+    const timestamp = "2026-08-21T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, thinking_type, created_at, updated_at
+      ) VALUES (
+        'provider-thinking-type', '__scriverse_platform_ai__', '思考类型迁移供应商', 'https://thinking-type.test/v1',
+        'openai-chat-completions', 'encrypted', 'iv', 'tag', '***', 'disabled', 'adaptive', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.raw.exec("ALTER TABLE providers DROP COLUMN thinking_type");
+    current.run("DELETE FROM schema_migrations WHERE version = 106");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT name, thinking_type FROM providers WHERE id = 'provider-thinking-type'")).toEqual({
+      name: "思考类型迁移供应商",
+      thinking_type: "enabled"
+    });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 106")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
