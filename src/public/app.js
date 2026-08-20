@@ -11778,7 +11778,7 @@ async function renderBookAiSettings() {
     warning.className = "token-quota-warning hidden";
     warning.setAttribute("role", "alert");
     warning.dataset.threshold = String(threshold);
-    warning.textContent = "ai 小说用量巨大，低用量基本等于不可用";
+    warning.textContent = "ai 小说用量巨大，低用量基本等于不可用，建议增大限制量";
     input.closest(".config-inline-save")?.querySelector(".config-save-button")?.insertAdjacentElement("afterend", warning);
   };
   configureTokenQuotaInput(host.querySelector("#daily-token-quota"), "daily-token-quota-warning", 10_000);
@@ -15363,7 +15363,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
     warning.dataset.period = period;
     warning.dataset.threshold = String(threshold);
     warning.setAttribute("role", "alert");
-    warning.textContent = "ai 小说用量巨大，低用量基本等于不可用";
+    warning.textContent = "ai 小说用量巨大，低用量基本等于不可用，建议增大限制量";
     input.insertAdjacentElement("afterend", warning);
   }
   const protocolSelect = $("#dialog-fields select[name='protocol']");

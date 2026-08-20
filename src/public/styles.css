@@ -2592,7 +2592,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .config-inline-save .monthly-token-quota-field { flex: 0 1 360px; width: min(100%, 360px); min-width: 240px; }
   .config-inline-save .daily-token-quota-field input,
   .config-inline-save .monthly-token-quota-field input { width: 100%; }
-  .config-inline-save > .token-quota-warning { flex: 1 1 220px; width: min(100%, 260px); min-width: 200px; align-self: center; }
+  .config-inline-save > .token-quota-warning { flex: 1 1 220px; width: min(100%, 260px); min-width: 200px; align-self: flex-end; margin-bottom: 8px; }
 }
 @media (max-width: 640px) {
   .config-inline-save > .token-quota-warning { flex: 1 1 106px; width: auto; min-width: 0; align-self: center; }
