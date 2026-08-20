@@ -90,7 +90,7 @@ import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, normalizeCharacterName, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
-import { buildWritingCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
+import { buildWritingCalendar, buildWritingMonthCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
@@ -118,6 +118,8 @@ type ProviderInput = {
   note?: string;
   concurrencyLimit?: number;
   rpmLimit?: number;
+  dailyTokenQuota?: number | null;
+  monthlyTokenQuota?: number | null;
 };
 
 type ModelInput = {
@@ -312,6 +314,16 @@ const AUTO_RUN_FATAL_CODES = new Set([
   "WORK_ACCESS_DENIED",
   "WORK_MODULE_READ_DENIED"
 ]);
+const AI_TOKEN_QUOTA_ERROR_CODES = new Set([
+  "DAILY_TOKEN_QUOTA_EXCEEDED",
+  "MONTHLY_TOKEN_QUOTA_EXCEEDED",
+  "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED",
+  "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED"
+]);
+
+function isAiTokenQuotaError(error: unknown): error is AppError {
+  return error instanceof AppError && AI_TOKEN_QUOTA_ERROR_CODES.has(error.code);
+}
 
 export type AutoRunFailureDisposition = {
   retry: boolean;
@@ -1463,6 +1475,10 @@ function numberValue(row: Row, key: string): number {
   return Number(row[key] ?? 0);
 }
 
+function nullableNumberValue(row: Row, key: string): number | null {
+  return row[key] === null || row[key] === undefined ? null : numberValue(row, key);
+}
+
 function boolValue(row: Row, key: string): boolean {
   return Number(row[key] ?? 0) === 1;
 }
@@ -2401,7 +2417,7 @@ export class AiManager {
     this.store.getWork(workId);
     return {
       ...this.getTokenUsage(workId, timezoneOffset, false),
-      quota: this.getWorkDailyTokenQuotaStatus(workId)
+      quota: this.getWorkTokenQuotaStatus(workId)
     };
   }
 
@@ -2427,6 +2443,109 @@ export class AiManager {
       dayStartedAt: calendar.startInclusive,
       resetsAt: calendar.endExclusive,
       timezone: calendar.timeZone
+    };
+  }
+
+  getWorkMonthlyTokenQuotaStatus(workId: string, referenceDate = new Date()): Record<string, unknown> {
+    const settings = this.store.getWorkAiSettings(workId);
+    const monthlyTokenQuota = settings.monthlyTokenQuota === null
+      ? null
+      : Number(settings.monthlyTokenQuota);
+    const calendar = buildWritingMonthCalendar(referenceDate, resolveServerTimeZone());
+    const usage = this.store.db.get(
+      `SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS used_tokens
+       FROM ai_calls WHERE work_id = ? AND created_at >= ? AND created_at < ?`,
+      workId,
+      calendar.startInclusive,
+      calendar.endExclusive
+    );
+    const usedTokens = numberValue(usage ?? {}, "used_tokens");
+    return {
+      monthlyTokenQuota,
+      usedTokens,
+      remainingTokens: monthlyTokenQuota === null ? null : Math.max(0, monthlyTokenQuota - usedTokens),
+      reached: monthlyTokenQuota !== null && usedTokens >= monthlyTokenQuota,
+      monthStartedAt: calendar.startInclusive,
+      resetsAt: calendar.endExclusive,
+      timezone: calendar.timeZone
+    };
+  }
+
+  getProviderDailyTokenQuotaStatus(providerId: string, referenceDate = new Date()): Record<string, unknown> {
+    const provider = this.getProviderRow(providerId);
+    const dailyTokenQuota = nullableNumberValue(provider, "daily_token_quota");
+    const calendar = buildWritingCalendar(referenceDate, 1, resolveServerTimeZone());
+    const usage = this.store.db.get(
+      `SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS used_tokens
+       FROM ai_calls WHERE provider_id = ? AND created_at >= ? AND created_at < ?`,
+      providerId,
+      calendar.startInclusive,
+      calendar.endExclusive
+    );
+    const usedTokens = numberValue(usage ?? {}, "used_tokens");
+    return {
+      providerId: stringValue(provider, "id"),
+      providerName: stringValue(provider, "name"),
+      dailyTokenQuota,
+      usedTokens,
+      remainingTokens: dailyTokenQuota === null ? null : Math.max(0, dailyTokenQuota - usedTokens),
+      reached: dailyTokenQuota !== null && usedTokens >= dailyTokenQuota,
+      dayStartedAt: calendar.startInclusive,
+      resetsAt: calendar.endExclusive,
+      timezone: calendar.timeZone
+    };
+  }
+
+  getProviderMonthlyTokenQuotaStatus(providerId: string, referenceDate = new Date()): Record<string, unknown> {
+    const provider = this.getProviderRow(providerId);
+    const monthlyTokenQuota = nullableNumberValue(provider, "monthly_token_quota");
+    const calendar = buildWritingMonthCalendar(referenceDate, resolveServerTimeZone());
+    const usage = this.store.db.get(
+      `SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS used_tokens
+       FROM ai_calls WHERE provider_id = ? AND created_at >= ? AND created_at < ?`,
+      providerId,
+      calendar.startInclusive,
+      calendar.endExclusive
+    );
+    const usedTokens = numberValue(usage ?? {}, "used_tokens");
+    return {
+      providerId: stringValue(provider, "id"),
+      providerName: stringValue(provider, "name"),
+      monthlyTokenQuota,
+      usedTokens,
+      remainingTokens: monthlyTokenQuota === null ? null : Math.max(0, monthlyTokenQuota - usedTokens),
+      reached: monthlyTokenQuota !== null && usedTokens >= monthlyTokenQuota,
+      monthStartedAt: calendar.startInclusive,
+      resetsAt: calendar.endExclusive,
+      timezone: calendar.timeZone
+    };
+  }
+
+  getProviderTokenQuotaStatus(providerId: string, referenceDate = new Date()): Record<string, unknown> {
+    const daily = this.getProviderDailyTokenQuotaStatus(providerId, referenceDate);
+    const monthly = this.getProviderMonthlyTokenQuotaStatus(providerId, referenceDate);
+    return {
+      ...daily,
+      monthlyTokenQuota: monthly.monthlyTokenQuota,
+      monthlyUsedTokens: monthly.usedTokens,
+      monthlyRemainingTokens: monthly.remainingTokens,
+      monthlyReached: monthly.reached,
+      monthStartedAt: monthly.monthStartedAt,
+      monthlyResetsAt: monthly.resetsAt
+    };
+  }
+
+  private getWorkTokenQuotaStatus(workId: string, referenceDate = new Date()): Record<string, unknown> {
+    const daily = this.getWorkDailyTokenQuotaStatus(workId, referenceDate);
+    const monthly = this.getWorkMonthlyTokenQuotaStatus(workId, referenceDate);
+    return {
+      ...daily,
+      monthlyTokenQuota: monthly.monthlyTokenQuota,
+      monthlyUsedTokens: monthly.usedTokens,
+      monthlyRemainingTokens: monthly.remainingTokens,
+      monthlyReached: monthly.reached,
+      monthStartedAt: monthly.monthStartedAt,
+      monthlyResetsAt: monthly.resetsAt
     };
   }
 
@@ -3150,13 +3269,15 @@ export class AiManager {
       logger.debug("ai.auto_run.drain_started", { workId });
       const settings = this.store.getWorkAiSettings(workId);
       if (!settings.autoRunEnabled || settings.autoRunPaused) return;
-      const tokenQuota = this.getWorkDailyTokenQuotaStatus(workId);
-      if (tokenQuota.reached) {
-        const dailyTokenQuota = Number(tokenQuota.dailyTokenQuota);
-        const resumeAt = String(tokenQuota.resetsAt);
-        this.store.pauseAutoRun(workId, `已达到每日 Token 额度 ${dailyTokenQuota}`, resumeAt);
+      const tokenQuota = this.getWorkTokenQuotaStatus(workId);
+      if (tokenQuota.reached || tokenQuota.monthlyReached) {
+        const monthlyReached = Boolean(tokenQuota.monthlyReached) && !Boolean(tokenQuota.reached);
+        const quota = Number(monthlyReached ? tokenQuota.monthlyTokenQuota : tokenQuota.dailyTokenQuota);
+        const periodLabel = monthlyReached ? "每月" : "每日";
+        const resumeAt = String(monthlyReached ? tokenQuota.monthlyResetsAt : tokenQuota.resetsAt);
+        this.store.pauseAutoRun(workId, `已达到${periodLabel} Token 额度 ${quota}`, resumeAt);
         this.scheduleAutoRun(workId);
-        logger.info("ai.auto_run.token_quota_reached", { workId, dailyTokenQuota, resumeAt });
+        logger.info("ai.auto_run.token_quota_reached", { workId, period: monthlyReached ? "monthly" : "daily", quota, resumeAt });
         return;
       }
       const dailyTaskLimit = Number(settings.autoRunDailyTaskLimit);
@@ -3226,6 +3347,22 @@ export class AiManager {
       });
     }
     if (current.status !== "partial" && current.status !== "failed") return;
+    if (isAiTokenQuotaError(error)) {
+      const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+        ? error.details as Record<string, unknown>
+        : {};
+      const resumeAt = typeof details.resetsAt === "string" ? details.resetsAt : null;
+      const settings = this.store.pauseAutoRun(workId, error.message, resumeAt);
+      logger.info("ai.auto_run.token_quota_reached", {
+        workId,
+        taskId,
+        scope: details.limitScope ?? null,
+        period: details.limitPeriod ?? null,
+        resumeAt,
+        paused: settings.autoRunPaused
+      });
+      return;
+    }
     const disposition = autoRunFailureDisposition(error, Number(current.attemptCount));
     const settings = this.store.recordAutoRunFailure(workId, message, disposition.pauseImmediately);
     logger.warn("ai.auto_run.task_failed", {
@@ -3325,8 +3462,8 @@ export class AiManager {
     if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, max_tokens_parameter, thinking_type, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, daily_token_quota, monthly_token_quota, max_tokens_parameter, thinking_type, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -3339,6 +3476,8 @@ export class AiManager {
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
+      input.dailyTokenQuota ?? null,
+      input.monthlyTokenQuota ?? null,
       maxTokensParameter,
       input.thinkingType ?? "enabled",
       input.note ?? "",
@@ -3398,9 +3537,16 @@ export class AiManager {
     }
     if (nextMaxTokensParameter !== currentMaxTokensParameter) connectionStatus = "unchecked";
     if (nextThinkingType !== currentThinkingType) connectionStatus = "unchecked";
+    const nextDailyTokenQuota = input.dailyTokenQuota === undefined
+      ? nullableNumberValue(row, "daily_token_quota")
+      : input.dailyTokenQuota;
+    const nextMonthlyTokenQuota = input.monthlyTokenQuota === undefined
+      ? nullableNumberValue(row, "monthly_token_quota")
+      : input.monthlyTokenQuota;
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens_parameter = ?, thinking_type = ?, note = ?, updated_at = ? WHERE id = ?`,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, daily_token_quota = ?, monthly_token_quota = ?,
+       max_tokens_parameter = ?, thinking_type = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       nextBaseUrl,
       nextProtocol,
@@ -3412,6 +3558,8 @@ export class AiManager {
       connectionStatus,
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
+      nextDailyTokenQuota,
+      nextMonthlyTokenQuota,
       nextMaxTokensParameter,
       nextThinkingType,
       input.note ?? stringValue(row, "note"),
@@ -7095,34 +7243,116 @@ export class AiManager {
     };
   }
 
-  private constrainParametersForDailyTokenQuota(
+  private constrainParametersForTokenQuota(
     workId: string,
+    provider: ProviderRow,
     messages: CompletionMessage[],
     parameters: Record<string, unknown>,
     tools: Record<string, unknown>[] = [],
     additionalUsedTokens = 0
   ): Record<string, unknown> {
-    const status = this.getWorkDailyTokenQuotaStatus(workId);
-    if (status.dailyTokenQuota === null) return parameters;
-    const dailyTokenQuota = Number(status.dailyTokenQuota);
-    const usedTokens = Number(status.usedTokens) + Math.max(0, additionalUsedTokens);
-    const remainingTokens = Math.max(0, dailyTokenQuota - usedTokens);
+    const workStatus = this.getWorkTokenQuotaStatus(workId);
+    const providerStatus = this.getProviderTokenQuotaStatus(stringValue(provider, "id"));
+    const dailyTokenQuota = workStatus.dailyTokenQuota === null ? null : Number(workStatus.dailyTokenQuota);
+    const monthlyTokenQuota = workStatus.monthlyTokenQuota === null ? null : Number(workStatus.monthlyTokenQuota);
+    const providerDailyTokenQuota = providerStatus.dailyTokenQuota === null ? null : Number(providerStatus.dailyTokenQuota);
+    const providerMonthlyTokenQuota = providerStatus.monthlyTokenQuota === null ? null : Number(providerStatus.monthlyTokenQuota);
+    if (dailyTokenQuota === null && monthlyTokenQuota === null && providerDailyTokenQuota === null && providerMonthlyTokenQuota === null) return parameters;
+    const additionalTokens = Math.max(0, additionalUsedTokens);
     const estimatedInputTokens = estimateCompletionMessageTokens(messages)
       + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
-    if (remainingTokens <= estimatedInputTokens) {
-      throw new AppError(
-        429,
-        "DAILY_TOKEN_QUOTA_EXCEEDED",
-        `本书今日剩余 Token 额度不足以发起本次请求（已用 ${usedTokens.toLocaleString("zh-CN")} / ${dailyTokenQuota.toLocaleString("zh-CN")}）`,
-        {
-          dailyTokenQuota,
-          usedTokens,
-          remainingTokens,
-          estimatedInputTokens,
-          resetsAt: status.resetsAt,
-          timezone: status.timezone
-        }
-      );
+    let remainingTokens = Number.POSITIVE_INFINITY;
+    const quotas: Array<{
+      scope: "work" | "provider";
+      period: "daily" | "monthly";
+      quota: number | null;
+      usedTokens: number;
+      resetsAt: string;
+      startedAt: string;
+      timezone: string;
+      providerId?: string;
+      providerName?: string;
+    }> = [
+      {
+        scope: "work",
+        period: "daily" as const,
+        quota: dailyTokenQuota,
+        usedTokens: Number(workStatus.usedTokens) + additionalTokens,
+        resetsAt: String(workStatus.resetsAt),
+        startedAt: String(workStatus.dayStartedAt),
+        timezone: String(workStatus.timezone)
+      },
+      {
+        scope: "work",
+        period: "monthly" as const,
+        quota: monthlyTokenQuota,
+        usedTokens: Number(workStatus.monthlyUsedTokens) + additionalTokens,
+        resetsAt: String(workStatus.monthlyResetsAt),
+        startedAt: String(workStatus.monthStartedAt),
+        timezone: String(workStatus.timezone)
+      },
+      {
+        scope: "provider",
+        period: "daily" as const,
+        quota: providerDailyTokenQuota,
+        usedTokens: Number(providerStatus.usedTokens) + additionalTokens,
+        resetsAt: String(providerStatus.resetsAt),
+        startedAt: String(providerStatus.dayStartedAt),
+        timezone: String(providerStatus.timezone),
+        providerId: stringValue(provider, "id"),
+        providerName: stringValue(provider, "name")
+      },
+      {
+        scope: "provider",
+        period: "monthly" as const,
+        quota: providerMonthlyTokenQuota,
+        usedTokens: Number(providerStatus.monthlyUsedTokens) + additionalTokens,
+        resetsAt: String(providerStatus.monthlyResetsAt),
+        startedAt: String(providerStatus.monthStartedAt),
+        timezone: String(providerStatus.timezone),
+        providerId: stringValue(provider, "id"),
+        providerName: stringValue(provider, "name")
+      }
+    ];
+    for (const item of quotas) {
+      if (item.quota === null) continue;
+      const availableTokens = Math.max(0, item.quota - item.usedTokens);
+      remainingTokens = Math.min(remainingTokens, availableTokens);
+      if (availableTokens <= estimatedInputTokens) {
+        const periodLabel = item.period === "daily" ? "每日" : "每月";
+        const code = item.scope === "provider"
+          ? item.period === "daily" ? "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED" : "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED"
+          : item.period === "daily" ? "DAILY_TOKEN_QUOTA_EXCEEDED" : "MONTHLY_TOKEN_QUOTA_EXCEEDED";
+        const targetLabel = item.scope === "provider"
+          ? `配置的供应商“${item.providerName || item.providerId || "未知"}”额度`
+          : "单个小说额度";
+        const quotaDetails = item.period === "daily"
+          ? { dailyTokenQuota: item.quota, dayStartedAt: item.startedAt }
+          : { monthlyTokenQuota: item.quota, monthStartedAt: item.startedAt };
+        const targetDetails = item.scope === "provider"
+          ? { providerId: item.providerId, providerName: item.providerName }
+          : { workId };
+        const limitMessage = availableTokens === 0
+          ? `已达到${periodLabel} Token 额度`
+          : `${periodLabel} Token 剩余额度不足以发起本次请求`;
+        throw new AppError(
+          429,
+          code,
+          `叙界平台限制了后续 Token 使用：${targetLabel}${limitMessage}（已用 ${item.usedTokens.toLocaleString("zh-CN")} / ${item.quota.toLocaleString("zh-CN")}）`,
+          {
+            platformLimited: true,
+            limitScope: item.scope,
+            limitPeriod: item.period,
+            ...targetDetails,
+            ...quotaDetails,
+            usedTokens: item.usedTokens,
+            remainingTokens: availableTokens,
+            estimatedInputTokens,
+            resetsAt: item.resetsAt,
+            timezone: item.timezone
+          }
+        );
+      }
     }
     return {
       ...parameters,
@@ -7195,7 +7425,7 @@ export class AiManager {
         modelId: stringValue(model, "id")
       });
     }
-    parameters = this.constrainParametersForDailyTokenQuota(input.workId, messages, parameters, tools);
+    parameters = this.constrainParametersForTokenQuota(input.workId, provider, messages, parameters, tools);
     const completionMessages: CompletionMessage[] = [...messages];
     const callId = id("call");
     const timestamp = now();
@@ -7311,8 +7541,9 @@ export class AiManager {
         const streamResponse = Boolean(onDelta) && purpose === "generation";
         const processRound = streamResponse ? streamingGenerationRound + 1 : 0;
         if (streamResponse) streamingGenerationRound = processRound;
-        const roundParameters = this.constrainParametersForDailyTokenQuota(
+        const roundParameters = this.constrainParametersForTokenQuota(
           input.workId,
+          provider,
           requestMessages,
           this.constrainParametersForContext(model, requestMessages, requestParameters, requestTools),
           requestTools,
@@ -7892,6 +8123,9 @@ export class AiManager {
       if (error instanceof AppError && (
         error.code === "CONTEXT_WINDOW_EXCEEDED"
         || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED"
+        || error.code === "MONTHLY_TOKEN_QUOTA_EXCEEDED"
+        || error.code === "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED"
+        || error.code === "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED"
         || isInteractiveStreamError(error)
       )) {
         throw new AppError(error.status, error.code, error.message, {
@@ -12204,6 +12438,8 @@ export class AiManager {
       connectionStatus: stringValue(row, "connection_status"),
       concurrencyLimit: numberValue(row, "concurrency_limit") || 10,
       rpmLimit: numberValue(row, "rpm_limit") || 10,
+      dailyTokenQuota: nullableNumberValue(row, "daily_token_quota"),
+      monthlyTokenQuota: nullableNumberValue(row, "monthly_token_quota"),
       defaultModelId: row.default_model_id === null ? null : stringValue(row, "default_model_id"),
       note: stringValue(row, "note"),
       lastError: row.last_error === null ? null : stringValue(row, "last_error"),

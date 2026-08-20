@@ -137,7 +137,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA index_list(drafts)").some((index) => index.name === "idx_drafts_work")).toBe(true);
     expect(first.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'drafts'").map((row) => row.name)).toEqual(expect.arrayContaining(["drafts_binding_insert", "drafts_binding_update"]));
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
-    expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
+    expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "daily_token_quota", "monthly_token_quota", "max_tokens"].includes(String(column.name)))).toHaveLength(5);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "thinking_type" && column.dflt_value === "'enabled'")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_connectivity_test_states)").map((column) => column.name)).toEqual([
@@ -190,6 +190,7 @@ describe("数据库版本化迁移", () => {
       "token_usage_source"
     ]));
     expect(first.all("PRAGMA table_info(work_ai_settings)").some((column) => column.name === "daily_token_quota")).toBe(true);
+    expect(first.all("PRAGMA table_info(work_ai_settings)").some((column) => column.name === "monthly_token_quota")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_call_traces)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["call_id", "task_id", "initial_messages_json", "rounds_json", "source_refs_json", "created_at", "updated_at"])
     );
@@ -979,6 +980,93 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT sort_order, story_order FROM volumes WHERE id = 'volume-story-order'"))
       .toEqual({ sort_order: 6, story_order: 6 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 105")?.count).toBe(1);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 109 为已有供应商增加日、月 Token 额度", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-provider-quota-"));
+    roots.push(root);
+    const filename = join(root, "provider-quota.db");
+    const current = new Database(filename);
+    expect(current.all("PRAGMA table_info(providers)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "daily_token_quota",
+      "monthly_token_quota"
+    ]));
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DELETE FROM schema_migrations WHERE version = 109;
+      ALTER TABLE providers DROP COLUMN daily_token_quota;
+      ALTER TABLE providers DROP COLUMN monthly_token_quota;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.all("PRAGMA table_info(providers)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "daily_token_quota",
+      "monthly_token_quota"
+    ]));
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 109")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 110 将日、月 Token 额度约束调整为正整数并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-positive-quota-"));
+    roots.push(root);
+    const filename = join(root, "positive-quota.db");
+    const timestamp = "2026-08-21T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
+       VALUES ('work-positive-quota', '正额度迁移', '', '', 'zh-CN', '[]', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO work_ai_settings (work_id, daily_token_quota, monthly_token_quota, updated_at)
+       VALUES ('work-positive-quota', 12345, 67890, ?)`,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO providers (id, work_id, name, base_url, encrypted_key, key_iv, key_tag, key_hint, created_at, updated_at)
+       VALUES ('provider-positive-quota', '__scriverse_platform_ai__', '正额度供应商', 'https://mock-ai.test/v1', 'encrypted', 'iv', 'tag', 'hint', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      PRAGMA foreign_keys = OFF;
+      DELETE FROM schema_migrations WHERE version = 110;
+      CREATE TABLE work_ai_settings_v107 AS SELECT * FROM work_ai_settings;
+      DROP TABLE work_ai_settings;
+      ALTER TABLE work_ai_settings_v107 RENAME TO work_ai_settings;
+      CREATE TABLE providers_v107 AS SELECT * FROM providers;
+      DROP TABLE providers;
+      ALTER TABLE providers_v107 RENAME TO providers;
+      PRAGMA foreign_keys = ON;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT daily_token_quota, monthly_token_quota FROM work_ai_settings WHERE work_id = 'work-positive-quota'")).toEqual({
+      daily_token_quota: 12345,
+      monthly_token_quota: 67890
+    });
+    expect(migrated.get("SELECT name FROM providers WHERE id = 'provider-positive-quota'")).toEqual({ name: "正额度供应商" });
+    expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_ai_settings'")?.sql)).toContain("daily_token_quota IS NULL OR daily_token_quota >= 1");
+    expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'providers'")?.sql)).toContain("monthly_token_quota IS NULL OR monthly_token_quota >= 1");
+    migrated.run("UPDATE work_ai_settings SET daily_token_quota = 1, monthly_token_quota = 1 WHERE work_id = 'work-positive-quota'");
+    migrated.run("UPDATE providers SET daily_token_quota = 1, monthly_token_quota = 1 WHERE id = 'provider-positive-quota'");
+    expect(() => migrated.run("UPDATE work_ai_settings SET daily_token_quota = 0 WHERE work_id = 'work-positive-quota'")).toThrow();
+    expect(() => migrated.run("UPDATE providers SET monthly_token_quota = -1 WHERE id = 'provider-positive-quota'")).toThrow();
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 110")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();

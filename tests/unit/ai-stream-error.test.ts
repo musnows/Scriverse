@@ -70,4 +70,38 @@ describe("publicAiStreamError", () => {
       idleTimeoutSeconds: 30
     });
   });
+
+  it("向客户端公开叙界平台 Token 额度限制来源", () => {
+    expect(publicAiStreamError(new AppError(429, "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED", "叙界平台限制了后续 Token 使用：配置的供应商“demo”额度已达到每月 Token 额度", {
+      platformLimited: true,
+      limitScope: "provider",
+      limitPeriod: "monthly",
+      providerId: "provider_1",
+      providerName: "demo",
+      monthlyTokenQuota: 10_000,
+      usedTokens: 10_000,
+      remainingTokens: 0,
+      resetsAt: "2026-09-01T00:00:00.000Z",
+      timezone: "Asia/Shanghai",
+      secret: "must-not-be-forwarded"
+    }))).toEqual({
+      code: "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED",
+      message: "叙界平台限制了后续 Token 使用：配置的供应商“demo”额度已达到每月 Token 额度",
+      status: 429,
+      details: {
+        platformLimited: true,
+        limitScope: "provider",
+        limitPeriod: "monthly",
+        providerId: "provider_1",
+        providerName: "demo",
+        monthlyTokenQuota: 10_000,
+        usedTokens: 10_000,
+        remainingTokens: 0,
+        resetsAt: "2026-09-01T00:00:00.000Z",
+        timezone: "Asia/Shanghai"
+      },
+      providerName: "demo",
+      providerId: "provider_1"
+    });
+  });
 });

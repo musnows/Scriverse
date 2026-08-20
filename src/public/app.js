@@ -4660,6 +4660,12 @@ function formatAiFailureMessage(error) {
   const modelId = typeof error?.modelId === "string" ? error.modelId : typeof details.modelId === "string" ? details.modelId : "";
   if (code) lines.push(`错误码：${code}`);
   if (status) lines.push(`服务端状态：HTTP ${status}`);
+  if (details.platformLimited === true) {
+    const limitSource = details.limitScope === "provider"
+      ? `配置的供应商额度${providerName ? `（${providerName}）` : ""}`
+      : "单个小说额度";
+    lines.push(`叙界平台限制来源：${limitSource}`);
+  }
   if (providerName || providerId) lines.push(`模型供应商：${providerName || providerId}`);
   if (modelId) lines.push(`模型 ID：${modelId}`);
   if (callId) lines.push(`调用 ID：${callId}`);
@@ -11101,7 +11107,7 @@ function renderProviderCards(providers, models, protocolOptions) {
       : "";
     return `
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol, protocolOptions))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
-    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n思考类型：${esc(provider.thinkingType ?? "enabled")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n思考类型：${esc(provider.thinkingType ?? "enabled")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}\n每日 Token 额度：${provider.dailyTokenQuota === null || provider.dailyTokenQuota === undefined ? "未限制" : Number(provider.dailyTokenQuota).toLocaleString("zh-CN")} · 每月 Token 额度：${provider.monthlyTokenQuota === null || provider.monthlyTokenQuota === undefined ? "未限制" : Number(provider.monthlyTokenQuota).toLocaleString("zh-CN")}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
@@ -11762,14 +11768,37 @@ async function renderBookAiSettings() {
   const quotaRemainingTokens = usage?.quota?.remainingTokens === null
     ? null
     : Math.max(0, Number(usage?.quota?.remainingTokens) || 0);
+  const monthlyTokenQuota = settings.monthlyTokenQuota === null ? null : Number(settings.monthlyTokenQuota);
+  const monthlyQuotaUsedTokens = Number(usage?.quota?.monthlyUsedTokens) || 0;
+  const monthlyQuotaRemainingTokens = usage?.quota?.monthlyRemainingTokens === null
+    ? null
+    : Math.max(0, Number(usage?.quota?.monthlyRemainingTokens) || 0);
   const quotaTimezone = String(usage?.quota?.timezone || "后端部署时区");
   const quotaStatusText = dailyTokenQuota === null
     ? `今日已使用 ${quotaUsedTokens.toLocaleString("zh-CN")} Token，当前未启用额度限制。`
     : `今日已使用 ${quotaUsedTokens.toLocaleString("zh-CN")} / ${dailyTokenQuota.toLocaleString("zh-CN")} Token，剩余 ${Number(quotaRemainingTokens).toLocaleString("zh-CN")} Token。`;
+  const monthlyQuotaStatusText = monthlyTokenQuota === null
+    ? `本月已使用 ${monthlyQuotaUsedTokens.toLocaleString("zh-CN")} Token，当前未启用额度限制。`
+    : `本月已使用 ${monthlyQuotaUsedTokens.toLocaleString("zh-CN")} / ${monthlyTokenQuota.toLocaleString("zh-CN")} Token，剩余 ${Number(monthlyQuotaRemainingTokens).toLocaleString("zh-CN")} Token。`;
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>该阈值按对话历史的独立预算计算，用于显示可选择压缩或忽略的提醒；整次请求达到模型上下文窗口 95% 时仍会强制压缩较早消息，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度必须设置为大于 0 的整数；低于 10,000 时仅提示风险；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="1" max="2000000000" step="1" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>该阈值按对话历史的独立预算计算，用于显示可选择压缩或忽略的提醒；整次请求达到模型上下文窗口 95% 时仍会强制压缩较早消息，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  const dailyQuotaSection = host.querySelector("#daily-token-quota-enabled")?.closest(".config-section");
+  dailyQuotaSection?.insertAdjacentHTML("afterend", `<section class="config-section"><div class="config-section-header"><div><h2>每月 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然月（当月 1 日至月末）可使用的输入与输出 Token 总量。额度必须设置为大于 0 的整数；低于 1,000,000 时仅提示风险；达到额度后，新的 AI 请求会等到下月 1 日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="monthly-token-quota-enabled" type="checkbox" ${monthlyTokenQuota === null ? "" : "checked"}>启用每月额度</label><label class="monthly-token-quota-field">每月额度<input id="monthly-token-quota" type="number" min="1" max="2000000000" step="1" value="${esc(String(monthlyTokenQuota ?? 10000))}" aria-label="本书每月 Token 额度" ${monthlyTokenQuota === null ? "disabled" : ""}></label><button id="save-monthly-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="monthly-token-quota-status" class="usage-measurement-note" role="status">${esc(monthlyQuotaStatusText)}</p></section>`);
+  const configureTokenQuotaInput = (input, warningId, threshold) => {
+    input.min = "1";
+    input.step = "1";
+    const warning = document.createElement("small");
+    warning.id = warningId;
+    warning.className = "token-quota-warning hidden";
+    warning.setAttribute("role", "alert");
+    warning.dataset.threshold = String(threshold);
+    warning.textContent = "ai 小说用量巨大，低用量基本等于不可用，建议增大限制量";
+    input.closest(".config-inline-save")?.querySelector(".config-save-button")?.insertAdjacentElement("afterend", warning);
+  };
+  configureTokenQuotaInput(host.querySelector("#daily-token-quota"), "daily-token-quota-warning", 10_000);
+  configureTokenQuotaInput(host.querySelector("#monthly-token-quota"), "monthly-token-quota-warning", 1_000_000);
   const agentToolCallLimitInput = host.querySelector("#agent-tool-call-limit");
   agentToolCallLimitInput?.setAttribute("max", String(maximumAgentToolCallLimit));
   const agentToolCallDescription = agentToolCallLimitInput?.closest(".config-section")?.querySelector(".config-section-header p");
@@ -11823,15 +11852,27 @@ async function renderBookAiSettings() {
     return status;
   };
   updateRelationshipIndexStatus(relationshipIndex);
+  const syncTokenQuotaWarnings = () => {
+    for (const period of ["daily", "monthly"]) {
+      const enabled = $(`#${period}-token-quota-enabled`).checked;
+      const input = $(`#${period}-token-quota`);
+      const warning = $(`#${period}-token-quota-warning`);
+      const value = Number(input.value);
+      const threshold = Number(warning.dataset.threshold);
+      warning.classList.toggle("hidden", !enabled || !Number.isInteger(value) || value <= 0 || value >= threshold);
+    }
+  };
   $("#daily-token-quota-enabled").addEventListener("change", (event) => {
     $("#daily-token-quota").disabled = !event.currentTarget.checked;
+    syncTokenQuotaWarnings();
   });
+  $("#daily-token-quota").addEventListener("input", syncTokenQuotaWarnings);
   $("#save-daily-token-quota").addEventListener("click", async () => {
     const button = $("#save-daily-token-quota");
     const enabled = $("#daily-token-quota-enabled").checked;
     const quota = Number($("#daily-token-quota").value);
-    if (enabled && (!Number.isInteger(quota) || quota < 10_000 || quota > 2_000_000_000)) {
-      toast("每日 Token 额度必须是 10,000 到 2,000,000,000 之间的整数", "error");
+    if (enabled && (!Number.isInteger(quota) || quota <= 0 || quota > 2_000_000_000)) {
+      toast("每日 Token 额度必须设置大于 0 的整数，且不超过 2,000,000,000", "error");
       $("#daily-token-quota").focus();
       return;
     }
@@ -11848,6 +11889,34 @@ async function renderBookAiSettings() {
       button.disabled = false;
     }
   });
+  $("#monthly-token-quota-enabled").addEventListener("change", (event) => {
+    $("#monthly-token-quota").disabled = !event.currentTarget.checked;
+    syncTokenQuotaWarnings();
+  });
+  $("#monthly-token-quota").addEventListener("input", syncTokenQuotaWarnings);
+  $("#save-monthly-token-quota").addEventListener("click", async () => {
+    const button = $("#save-monthly-token-quota");
+    const enabled = $("#monthly-token-quota-enabled").checked;
+    const quota = Number($("#monthly-token-quota").value);
+    if (enabled && (!Number.isInteger(quota) || quota <= 0 || quota > 2_000_000_000)) {
+      toast("每月 Token 额度必须设置大于 0 的整数，且不超过 2,000,000,000", "error");
+      $("#monthly-token-quota").focus();
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, {
+        method: "PATCH",
+        body: { monthlyTokenQuota: enabled ? quota : null }
+      });
+      toast(enabled ? "本书每月 Token 额度已保存" : "本书每月 Token 额度限制已关闭");
+      await renderBookAiSettings();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  });
+  syncTokenQuotaWarnings();
   $("#save-always-include-setting-info").addEventListener("click", async () => {
     const button = $("#save-always-include-setting-info");
     button.disabled = true;
@@ -12455,6 +12524,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   void discardPendingMarkdownAttachments();
   const dialog = $("#form-dialog");
   const form = $("#dynamic-form");
+  form.noValidate = false;
   const submit = $("#dialog-submit");
   const submitStatus = $("#dialog-submit-status");
   const submitStatusMessage = $("#dialog-submit-status-message");
@@ -15254,6 +15324,9 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
   const useAdaptiveThinking = item?.thinkingType === "adaptive";
   const providerProtocolFieldOptions = protocolOptions.map((option) => [option.value, option.label]);
   const maxTokensParameterField = `<div class="form-field provider-max-tokens-parameter-field" data-provider-max-tokens-parameter-field><span>最大输出令牌参数</span><label class="checkbox-field"><input name="useMaxCompletionTokens" type="checkbox" ${useMaxCompletionTokens ? "checked" : ""} aria-describedby="provider-max-tokens-parameter-hint"><span>使用 max_completion_tokens</span></label><small id="provider-max-tokens-parameter-hint" data-provider-max-tokens-parameter-hint>默认使用 max_tokens；OpenAI 新版模型可按需切换。</small></div>`;
+  const dailyTokenQuota = item?.dailyTokenQuota ?? null;
+  const monthlyTokenQuota = item?.monthlyTokenQuota ?? null;
+  const providerTokenQuotaFields = `<div class="form-field provider-token-quota-fields" data-provider-token-quota-fields><span>供应商 Token 额度</span><small>按服务器部署时区统计该供应商跨所有小说的输入与输出 Token；与单个小说额度独立。额度必须设置为大于 0；低于每日 10,000 或每月 1,000,000 时仅提示风险。</small><div class="provider-token-quota-row"><label class="checkbox-field provider-token-quota-toggle"><input name="dailyTokenQuotaEnabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}><span>启用每日额度</span></label><label class="provider-token-quota-input">每日额度<input name="dailyTokenQuota" type="number" min="1" max="2000000000" step="1" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="供应商每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label></div><div class="provider-token-quota-row"><label class="checkbox-field provider-token-quota-toggle"><input name="monthlyTokenQuotaEnabled" type="checkbox" ${monthlyTokenQuota === null ? "" : "checked"}><span>启用每月额度</span></label><label class="provider-token-quota-input">每月额度<input name="monthlyTokenQuota" type="number" min="1" max="2000000000" step="1" value="${esc(String(monthlyTokenQuota ?? 10000))}" aria-label="供应商每月 Token 额度" ${monthlyTokenQuota === null ? "disabled" : ""}></label></div></div>`;
   const thinkingTypeField = `<div class="form-field provider-thinking-type-field" data-provider-thinking-type-field><span>思考类型（开启时）</span><label class="checkbox-field"><input name="useAdaptiveThinking" type="checkbox" ${useAdaptiveThinking ? "checked" : ""} aria-describedby="provider-thinking-type-hint"><span>使用 adaptive（关闭时发送 enabled）</span></label><small id="provider-thinking-type-hint">关闭模型思考时仍发送 disabled；请只在供应商支持 adaptive 时开启。</small></div>`;
   openDialog(
     item ? "编辑 AI 供应商" : "新建 AI 供应商",
@@ -15265,6 +15338,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
       + thinkingTypeField
       + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
       + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
+      + providerTokenQuotaFields
       + field("note", "用途备注", "textarea", item?.note)
       + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true),
     async (form) => {
@@ -15276,10 +15350,18 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
         thinkingType: form.get("useAdaptiveThinking") === "on" ? "adaptive" : "enabled",
         concurrencyLimit: Number(form.get("concurrencyLimit")),
         rpmLimit: Number(form.get("rpmLimit")),
+        dailyTokenQuota: form.get("dailyTokenQuotaEnabled") === "on" ? Number(form.get("dailyTokenQuota")) : null,
+        monthlyTokenQuota: form.get("monthlyTokenQuotaEnabled") === "on" ? Number(form.get("monthlyTokenQuota")) : null,
         note: form.get("note"),
         status: form.get("enabled") === "on" ? "enabled" : "disabled"
       };
       if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
+      for (const [period, label] of [["daily", "每日"], ["monthly", "每月"]]) {
+        const value = body[`${period}TokenQuota`];
+        if (value !== null && (!Number.isInteger(value) || value <= 0 || value > 2_000_000_000)) {
+          throw new Error(`${label} Token 额度必须设置大于 0 的整数，且不超过 2,000,000,000`);
+        }
+      }
       await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
       await renderPlatformAiConfig();
       await loadModels();
@@ -15289,11 +15371,37 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
       dangerAction: item ? { label: "删除供应商", onClick: () => deletePlatformProvider(item) } : null
     }
   );
+  $("#dynamic-form").noValidate = true;
+  const providerQuotaDescription = $("#dialog-fields [data-provider-token-quota-fields] > small");
+  if (providerQuotaDescription) providerQuotaDescription.textContent = "按服务器部署时区统计该供应商跨所有小说的输入与输出 Token；与单个小说额度独立。额度必须设置为大于 0；低于每日 10,000 或每月 1,000,000 时仅提示风险。";
+  for (const [period, threshold] of [["daily", 10_000], ["monthly", 1_000_000]]) {
+    const input = $(`#dialog-fields input[name='${period}TokenQuota']`);
+    input.min = "1";
+    input.step = "1";
+    const warning = document.createElement("small");
+    warning.className = "provider-token-quota-warning hidden";
+    warning.dataset.period = period;
+    warning.dataset.threshold = String(threshold);
+    warning.setAttribute("role", "alert");
+    warning.textContent = "ai 小说用量巨大，低用量基本等于不可用，建议增大限制量";
+    input.insertAdjacentElement("afterend", warning);
+  }
   const protocolSelect = $("#dialog-fields select[name='protocol']");
   const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
   const credentialHost = $("#dialog-fields [data-provider-credential-field]");
   const maxTokensParameterFieldElement = $("#dialog-fields [data-provider-max-tokens-parameter-field]");
   const maxTokensParameterInput = $("#dialog-fields input[name='useMaxCompletionTokens']");
+  const syncProviderTokenQuotaFields = () => {
+    for (const period of ["daily", "monthly"]) {
+      const enabled = $(`#dialog-fields input[name='${period}TokenQuotaEnabled']`);
+      const input = $(`#dialog-fields input[name='${period}TokenQuota']`);
+      const warning = $(`#dialog-fields [data-period='${period}']`);
+      input.disabled = !enabled.checked;
+      const value = Number(input.value);
+      const threshold = Number(warning.dataset.threshold);
+      warning.classList.toggle("hidden", !enabled.checked || !Number.isInteger(value) || value <= 0 || value >= threshold);
+    }
+  };
   const syncMaxTokensParameter = () => {
     const supportsMaxCompletionTokens = selectedProtocolOption(protocolSelect.value)?.supportsMaxCompletionTokens !== false;
     maxTokensParameterFieldElement.hidden = !supportsMaxCompletionTokens;
@@ -15307,8 +15415,13 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
     if (!item) baseUrlInput.value = defaultBaseUrlForProtocol(nextProtocol);
     syncMaxTokensParameter();
   };
+  $("#dialog-fields input[name='dailyTokenQuotaEnabled']").addEventListener("change", syncProviderTokenQuotaFields);
+  $("#dialog-fields input[name='monthlyTokenQuotaEnabled']").addEventListener("change", syncProviderTokenQuotaFields);
+  $("#dialog-fields input[name='dailyTokenQuota']").addEventListener("input", syncProviderTokenQuotaFields);
+  $("#dialog-fields input[name='monthlyTokenQuota']").addEventListener("input", syncProviderTokenQuotaFields);
   protocolSelect.addEventListener("change", syncProviderCredentialField);
   syncMaxTokensParameter();
+  syncProviderTokenQuotaFields();
 }
 
 function openModelDialog(providerId, item = null, provider = null, protocolOptions = platformAiProtocolOptions) {

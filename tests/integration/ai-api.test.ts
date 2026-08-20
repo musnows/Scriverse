@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { AI_RESPONSE_MAX_BYTES, estimateAiTokens } from "../../src/ai.js";
 import { resolveServerTimeZone } from "../../src/writing-progress-time.js";
-import { createTestRuntime } from "../helpers.js";
+import { createTestRuntime, createWork } from "../helpers.js";
 
 describe("AI 供应商、模型与建议 API", () => {
   let runtime: Runtime;
@@ -63,7 +63,14 @@ describe("AI 供应商、模型与建议 API", () => {
     const providerId = provider.body.data.id;
     expect(provider.body.data.apiKey).toBe("sk-se************lue");
     expect(provider.body.data.baseUrl).toBe("https://mock-ai.test/v1");
-    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10, maxTokensParameter: "max_tokens", thinkingType: "enabled" });
+    expect(provider.body.data).toMatchObject({
+      concurrencyLimit: 10,
+      rpmLimit: 10,
+      dailyTokenQuota: null,
+      monthlyTokenQuota: null,
+      maxTokensParameter: "max_tokens",
+      thinkingType: "enabled"
+    });
     expect(provider.body.data).not.toHaveProperty("maxTokens");
     const databaseRow = runtime.database.get<Record<string, unknown>>("SELECT encrypted_key FROM providers WHERE id = ?", providerId);
     expect(databaseRow?.encrypted_key).not.toContain("sk-sensitive-test-value");
@@ -228,7 +235,171 @@ describe("AI 供应商、模型与建议 API", () => {
         timezone: resolveServerTimeZone()
       }
     });
+    expect(rejected.body.error.message).toContain("叙界平台限制了后续 Token 使用");
+    expect(rejected.body.error.message).toContain("单个小说额度");
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", workId)).toEqual({ count: 1 });
+  });
+
+  it("达到本书每月 Token 额度后拒绝新的 AI 调用", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      monthlyTokenQuota: 10_000,
+      agentTools: []
+    }).expect(200);
+    const createdAt = new Date().toISOString();
+    runtime.database.run(
+      `INSERT INTO ai_calls (
+         id, work_id, task_type, provider_id, model_id, context_scope_json, status,
+         input_tokens, output_tokens, token_usage_source, created_at, completed_at
+       ) VALUES ('monthly-quota-used', ?, 'chat', ?, ?, '{}', 'completed', 9000, 1000, 'reported', ?, ?)`,
+      workId,
+      providerId,
+      modelId,
+      createdAt,
+      createdAt
+    );
+
+    const rejected = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "继续分析",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(429);
+    expect(rejected.body.error).toMatchObject({
+      code: "MONTHLY_TOKEN_QUOTA_EXCEEDED",
+      details: {
+        monthlyTokenQuota: 10_000,
+        usedTokens: 10_000,
+        remainingTokens: 0,
+        timezone: resolveServerTimeZone()
+      }
+    });
+    expect(rejected.body.error.message).toContain("叙界平台限制了后续 Token 使用");
+    expect(rejected.body.error.message).toContain("单个小说额度");
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", workId)).toEqual({ count: 1 });
+  });
+
+  it("供应商每日 Token 额度跨作品累计且不消耗当前小说的额度", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const otherWork = await createWork(runtime, "供应商额度占用作品");
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ dailyTokenQuota: 10_000 }).expect(200);
+    const createdAt = new Date().toISOString();
+    runtime.database.run(
+      `INSERT INTO ai_calls (
+         id, work_id, task_type, provider_id, model_id, context_scope_json, status,
+         input_tokens, output_tokens, token_usage_source, created_at, completed_at
+       ) VALUES ('provider-daily-cross-work', ?, 'chat', ?, ?, '{}', 'completed', 9000, 1000, 'reported', ?, ?)`,
+      String(otherWork.id),
+      providerId,
+      modelId,
+      createdAt,
+      createdAt
+    );
+
+    expect(runtime.ai.getWorkDailyTokenQuotaStatus(workId)).toMatchObject({ usedTokens: 0, dailyTokenQuota: null });
+    expect(runtime.ai.getProviderDailyTokenQuotaStatus(providerId)).toMatchObject({
+      dailyTokenQuota: 10_000,
+      usedTokens: 10_000,
+      remainingTokens: 0,
+      timezone: resolveServerTimeZone()
+    });
+    const rejected = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "继续分析",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(429);
+    expect(rejected.body.error).toMatchObject({
+      code: "PROVIDER_DAILY_TOKEN_QUOTA_EXCEEDED",
+      details: {
+        platformLimited: true,
+        limitScope: "provider",
+        limitPeriod: "daily",
+        providerId,
+        providerName: "本地兼容服务",
+        usedTokens: 10_000,
+        remainingTokens: 0,
+        timezone: resolveServerTimeZone()
+      }
+    });
+    expect(rejected.body.error.message).toContain("叙界平台限制了后续 Token 使用");
+    expect(rejected.body.error.message).toContain("配置的供应商");
+  });
+
+  it("供应商每月 Token 额度按服务器时区跨作品累计", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const otherWork = await createWork(runtime, "供应商月度额度占用作品");
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ monthlyTokenQuota: 10_000 }).expect(200);
+    const createdAt = new Date().toISOString();
+    runtime.database.run(
+      `INSERT INTO ai_calls (
+         id, work_id, task_type, provider_id, model_id, context_scope_json, status,
+         input_tokens, output_tokens, token_usage_source, created_at, completed_at
+       ) VALUES ('provider-monthly-cross-work', ?, 'chat', ?, ?, '{}', 'completed', 9000, 1000, 'reported', ?, ?)`,
+      String(otherWork.id),
+      providerId,
+      modelId,
+      createdAt,
+      createdAt
+    );
+
+    expect(runtime.ai.getProviderMonthlyTokenQuotaStatus(providerId)).toMatchObject({
+      monthlyTokenQuota: 10_000,
+      usedTokens: 10_000,
+      remainingTokens: 0,
+      timezone: resolveServerTimeZone()
+    });
+    const rejected = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "继续分析",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(429);
+    expect(rejected.body.error).toMatchObject({
+      code: "PROVIDER_MONTHLY_TOKEN_QUOTA_EXCEEDED",
+      details: {
+        platformLimited: true,
+        limitScope: "provider",
+        limitPeriod: "monthly",
+        providerId,
+        providerName: "本地兼容服务",
+        usedTokens: 10_000,
+        remainingTokens: 0,
+        timezone: resolveServerTimeZone()
+      }
+    });
+    expect(rejected.body.error.message).toContain("叙界平台限制了后续 Token 使用");
+    expect(rejected.body.error.message).toContain("配置的供应商");
+  });
+
+  it("日、月 Token 额度允许低用量正数但拒绝零和负数", async () => {
+    const { providerId } = await configureAi();
+    const workLowQuota = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      dailyTokenQuota: 1,
+      monthlyTokenQuota: 999_999
+    }).expect(200);
+    expect(workLowQuota.body.data).toMatchObject({ dailyTokenQuota: 1, monthlyTokenQuota: 999_999 });
+
+    const workZeroQuota = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ dailyTokenQuota: 0 }).expect(400);
+    expect(workZeroQuota.body.error.details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "dailyTokenQuota", message: "Token 额度必须设置大于 0" })
+    ]));
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ monthlyTokenQuota: -1 }).expect(400);
+
+    const providerLowQuota = await request(runtime.app).patch(`/api/providers/${providerId}`).send({
+      dailyTokenQuota: 1,
+      monthlyTokenQuota: 999_999
+    }).expect(200);
+    expect(providerLowQuota.body.data).toMatchObject({ dailyTokenQuota: 1, monthlyTokenQuota: 999_999 });
+
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ dailyTokenQuota: 0 }).expect(400);
+    const providerNegativeQuota = await request(runtime.app).patch(`/api/providers/${providerId}`).send({ monthlyTokenQuota: -1 }).expect(400);
+    expect(providerNegativeQuota.body.error.details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "monthlyTokenQuota", message: "Token 额度必须设置大于 0" })
+    ]));
   });
 
   it("聊天模型和历史列表通过独立接口返回", async () => {

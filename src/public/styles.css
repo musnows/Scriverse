@@ -2570,19 +2570,36 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .context-compact-threshold-field { width: min(100%, 280px); }
 .agent-tool-call-limit-field { width: min(100%, 280px); }
 .daily-token-quota-field { width: min(100%, 144px); }
+.monthly-token-quota-field { width: min(100%, 144px); }
 .agent-tool-call-global-multiplier-field { width: auto; min-width: 0; }
 .book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input, .daily-token-quota-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px; font-family: var(--font-latin), monospace; }
 .daily-token-quota-field input { width: 144px; }
+.monthly-token-quota-field input { width: 144px; }
+.monthly-token-quota-field input { min-height: 32px; padding: 5px 8px; font-size: 13px; font-family: var(--font-latin), monospace; }
+.token-quota-warning, .provider-token-quota-warning { display: block; color: var(--accent-dark); font-size: 10px; font-weight: 600; line-height: 1.5; }
+.token-quota-warning.hidden, .provider-token-quota-warning.hidden { display: none; }
 .config-inline-save { display: flex; align-items: flex-end; gap: 10px; margin: 14px 0 4px; flex-wrap: wrap; }
 .config-inline-save .book-summary-context-percent-field,
 .config-inline-save .context-compact-threshold-field,
 .config-inline-save .agent-tool-call-limit-field,
 .config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
+.config-inline-save .monthly-token-quota-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
 .config-inline-save .book-summary-context-percent-field,
 .config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(110px, 130px) 88px; align-items: center; column-gap: 12px; width: min(100%, 230px); }
 .config-inline-save .book-summary-context-percent-field input,
 .config-inline-save .context-compact-threshold-field input { width: 88px; }
 .config-inline-save .daily-token-quota-field { width: 144px; }
+.config-inline-save .monthly-token-quota-field { width: 144px; }
+@media (min-width: 641px) {
+  .config-inline-save .daily-token-quota-field,
+  .config-inline-save .monthly-token-quota-field { flex: 0 1 360px; width: min(100%, 360px); min-width: 240px; }
+  .config-inline-save .daily-token-quota-field input,
+  .config-inline-save .monthly-token-quota-field input { width: 100%; }
+  .config-inline-save > .token-quota-warning { flex: 1 1 220px; width: min(100%, 260px); min-width: 200px; align-self: flex-end; margin-bottom: 8px; }
+}
+@media (max-width: 640px) {
+  .config-inline-save > .token-quota-warning { flex: 1 1 106px; width: auto; min-width: 0; align-self: center; }
+}
 .config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto; margin: 0; color: var(--muted); font-size: 10px; }
 .config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px; min-height: 32px; margin: 0; color: var(--muted); font-size: calc(11px * var(--ui-font-scale)); line-height: 1.4; white-space: nowrap; }
 .config-inline-save > .config-checkbox-field input[type="checkbox"] { width: 18px; min-width: 18px; height: 18px; }
@@ -3072,6 +3089,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .background-task-actions #background-task-open-analysis { margin-right: auto; }
 .merge-dialog-note { margin: 0; padding: 10px 12px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 11px; line-height: 1.6; }
 .form-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.provider-token-quota-fields { gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.provider-token-quota-fields > small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.provider-token-quota-row { display: grid; grid-template-columns: minmax(132px, .7fr) minmax(0, 1fr); align-items: end; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.provider-token-quota-toggle { color: var(--ink) !important; font-size: 10px !important; }
+.provider-token-quota-input { display: grid; gap: 5px; min-width: 0; }
+.provider-token-quota-input input:disabled { opacity: .58; }
 .model-multimodal-fields { gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .model-multimodal-heading { color: var(--ink); font-size: 12px; font-weight: 600; }
 .model-multimodal-fields .model-capability-option { display: grid !important; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 9px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink) !important; transition: border-color .15s ease, background-color .15s ease; }

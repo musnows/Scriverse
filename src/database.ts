@@ -7,9 +7,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置；版本 107 增加 AI Cache Write 输入 Token 统计；版本 108 增加作品 AI 每月 Token 额度；版本 109 增加供应商日、月 Token 额度；版本 110 将日、月 Token 额度下限调整为大于 0。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 107;
+export const DATABASE_SCHEMA_VERSION = 110;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -460,6 +460,8 @@ export class Database {
         connection_status TEXT NOT NULL DEFAULT 'unchecked',
         concurrency_limit INTEGER NOT NULL DEFAULT 10 CHECK(concurrency_limit BETWEEN 1 AND 100),
         rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
+        daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 1),
+        monthly_token_quota INTEGER CHECK(monthly_token_quota IS NULL OR monthly_token_quota >= 1),
         max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
         max_tokens_parameter TEXT NOT NULL DEFAULT 'max_tokens' CHECK(max_tokens_parameter IN ('max_tokens', 'max_completion_tokens')),
         thinking_type TEXT NOT NULL DEFAULT 'enabled' CHECK(thinking_type IN ('enabled', 'adaptive')),
@@ -537,7 +539,8 @@ export class Database {
       CREATE TABLE IF NOT EXISTS work_ai_settings (
         work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
         system_prompt TEXT NOT NULL DEFAULT '',
-        daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000),
+        daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 1),
+        monthly_token_quota INTEGER CHECK(monthly_token_quota IS NULL OR monthly_token_quota >= 1),
         auto_run_enabled INTEGER NOT NULL DEFAULT 0,
         auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
@@ -3935,6 +3938,142 @@ export class Database {
         }
         this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (107, ?)", new Date().toISOString());
       });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(108)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!columns.has("monthly_token_quota")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN monthly_token_quota INTEGER CHECK(monthly_token_quota IS NULL OR monthly_token_quota >= 10000)");
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (108, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(109)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(providers)").map((row) => String(row.name)));
+        if (!columns.has("daily_token_quota")) {
+          this.run("ALTER TABLE providers ADD COLUMN daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000)");
+        }
+        if (!columns.has("monthly_token_quota")) {
+          this.run("ALTER TABLE providers ADD COLUMN monthly_token_quota INTEGER CHECK(monthly_token_quota IS NULL OR monthly_token_quota >= 10000)");
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (109, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(110)) {
+      this.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.transaction(() => {
+          this.run(`CREATE TABLE work_ai_settings_v110 (
+            work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+            system_prompt TEXT NOT NULL DEFAULT '',
+            daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 1),
+            auto_run_enabled INTEGER NOT NULL DEFAULT 0,
+            auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
+            auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
+            auto_run_daily_task_limit INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_daily_task_limit BETWEEN 0 AND 10000),
+            auto_run_failure_threshold INTEGER NOT NULL DEFAULT 3 CHECK(auto_run_failure_threshold BETWEEN 1 AND 10),
+            auto_run_paused INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_paused IN (0, 1)),
+            auto_run_pause_reason TEXT NOT NULL DEFAULT '',
+            auto_run_resume_at TEXT,
+            auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
+            context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
+            agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 1000),
+            agent_tool_call_global_multiplier INTEGER NOT NULL DEFAULT 3 CHECK(agent_tool_call_global_multiplier BETWEEN 1 AND 6),
+            agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts","image"]',
+            title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+            image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+            always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1)),
+            updated_at TEXT NOT NULL,
+            auto_run_stability_delay_minutes INTEGER NOT NULL DEFAULT 2 CHECK(auto_run_stability_delay_minutes BETWEEN 1 AND 120),
+            monthly_token_quota INTEGER CHECK(monthly_token_quota IS NULL OR monthly_token_quota >= 1)
+          )`);
+          this.run(`INSERT INTO work_ai_settings_v110 (
+            work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+            auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+            auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
+            context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
+            agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info,
+            updated_at, auto_run_stability_delay_minutes, monthly_token_quota
+          )
+          SELECT
+            work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+            auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+            auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
+            context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
+            agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info,
+            updated_at, auto_run_stability_delay_minutes, monthly_token_quota
+          FROM work_ai_settings`);
+          this.run("DROP TABLE work_ai_settings");
+          this.run("ALTER TABLE work_ai_settings_v110 RENAME TO work_ai_settings");
+          this.run("CREATE INDEX IF NOT EXISTS idx_work_ai_settings_work ON work_ai_settings(work_id)");
+
+          this.run(`CREATE TABLE providers_v110 (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            base_url TEXT NOT NULL,
+            protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'openai-responses', 'anthropic-messages', 'google-vertex')),
+            encrypted_key TEXT NOT NULL,
+            key_iv TEXT NOT NULL,
+            key_tag TEXT NOT NULL,
+            key_hint TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'disabled',
+            connection_status TEXT NOT NULL DEFAULT 'unchecked',
+            concurrency_limit INTEGER NOT NULL DEFAULT 10 CHECK(concurrency_limit BETWEEN 1 AND 100),
+            rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
+            daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 1),
+            monthly_token_quota INTEGER CHECK(monthly_token_quota IS NULL OR monthly_token_quota >= 1),
+            max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
+            max_tokens_parameter TEXT NOT NULL DEFAULT 'max_tokens' CHECK(max_tokens_parameter IN ('max_tokens', 'max_completion_tokens')),
+            thinking_type TEXT NOT NULL DEFAULT 'enabled' CHECK(thinking_type IN ('enabled', 'adaptive')),
+            default_model_id TEXT,
+            note TEXT NOT NULL DEFAULT '',
+            last_error TEXT,
+            last_success_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )`);
+          this.run(`INSERT INTO providers_v110 (
+            id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
+            connection_status, concurrency_limit, rpm_limit, daily_token_quota, monthly_token_quota,
+            max_tokens, max_tokens_parameter, thinking_type, default_model_id, note, last_error, last_success_at, created_at, updated_at
+          )
+          SELECT
+            id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
+            connection_status, concurrency_limit, rpm_limit, daily_token_quota, monthly_token_quota,
+            max_tokens, max_tokens_parameter, thinking_type, default_model_id, note, last_error, last_success_at, created_at, updated_at
+          FROM providers`);
+          this.run("DROP TABLE providers");
+          this.run("ALTER TABLE providers_v110 RENAME TO providers");
+          this.run(`CREATE TRIGGER IF NOT EXISTS ai_connectivity_test_states_provider_delete
+            AFTER DELETE ON providers BEGIN
+              DELETE FROM ai_connectivity_test_states WHERE object_type = 'provider' AND object_id = OLD.id;
+            END`);
+          this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (110, ?)", new Date().toISOString());
+        });
+      } finally {
+        this.raw.exec("PRAGMA foreign_keys = ON");
+      }
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
         throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
