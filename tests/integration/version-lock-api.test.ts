@@ -41,15 +41,15 @@ describe("作品和分卷版本锁", () => {
   it("保存分卷元数据版本并支持按当前版本恢复", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "分卷版本作品" }).expect(201);
     const workId = work.body.data.id as string;
-    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷", storyOrder: 7 }).expect(201);
     const volumeId = volume.body.data.id as string;
-    expect(volume.body.data.versionNo).toBe(1);
+    expect(volume.body.data).toMatchObject({ storyOrder: 7, versionNo: 1 });
 
     const updated = await request(runtime.app)
       .patch(`/api/volumes/${volumeId}`)
-      .send({ title: "第一卷 暗潮", expectedVersionNo: 1 })
+      .send({ title: "第一卷 暗潮", storyOrder: 2, expectedVersionNo: 1 })
       .expect(200);
-    expect(updated.body.data).toMatchObject({ title: "第一卷 暗潮", versionNo: 2 });
+    expect(updated.body.data).toMatchObject({ title: "第一卷 暗潮", storyOrder: 2, versionNo: 2 });
 
     await request(runtime.app)
       .patch(`/api/volumes/${volumeId}`)
@@ -63,7 +63,7 @@ describe("作品和分卷版本锁", () => {
       .post(`/api/entity-versions/volume/${volumeId}/restore`)
       .send({ versionNo: 1, expectedVersionNo: 2 })
       .expect(200);
-    expect(restored.body.data).toMatchObject({ title: "第一卷", versionNo: 3 });
+    expect(restored.body.data).toMatchObject({ title: "第一卷", storyOrder: 7, versionNo: 3 });
   });
 
   it("删除分卷后恢复时沿用连续版本号并继续校验锁", async () => {

@@ -2637,6 +2637,16 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ volumeId: volume.body.data.id, title: "机密章", content: "TOP_SECRET_PROSE_TOOL" })
       .expect(201);
+    await owner.agent.post(`/api/works/${workId}/timeline`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        name: "TOP_SECRET_TIMELINE_TOOL",
+        timeLabel: "秘密时点",
+        timeSort: 88,
+        chapterIds: [chapter.body.data.id],
+        status: "confirmed"
+      })
+      .expect(201);
     const permissions = {
       prose: "none",
       drafts: "none",
@@ -2696,6 +2706,23 @@ describe("用户、作品权限与操作者追踪 API", () => {
       result: { ok: false, error: { code: "TOOL_NOT_AVAILABLE" } }
     });
     expect(JSON.stringify(result)).not.toContain("TOP_SECRET_PROSE_TOOL");
+
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: { ...permissions, prose: "read" } })
+      .expect(200);
+    const structureOnly = await runWithRequestActor(
+      { ...collaborator.user, authentication: "session" },
+      () => internalAi.executeAgentTool(workId, {
+        id: "structure-only",
+        type: "function",
+        function: { name: "story_index", arguments: JSON.stringify({ offset: 0, limit: 20, cursor: 0 }) }
+      })
+    );
+    expect(structureOnly).toMatchObject({ status: "completed", result: { ok: true } });
+    expect(JSON.stringify(structureOnly)).toContain('"storyOrder"');
+    expect(JSON.stringify(structureOnly)).not.toContain("TOP_SECRET_TIMELINE_TOOL");
+    expect(JSON.stringify(structureOnly)).not.toContain("confirmedTimelineEvents");
   });
 
   it("AI 调用列表按成员权限隐藏原始上下文", async () => {

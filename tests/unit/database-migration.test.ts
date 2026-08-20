@@ -945,6 +945,43 @@ describe("数据库版本化迁移", () => {
     repaired.close();
   });
 
+  it("迁移 105 以目录顺序回填独立的分卷剧情顺序", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-volume-story-order-"));
+    roots.push(root);
+    const filename = join(root, "story-order.db");
+    const current = new Database(filename);
+    const timestamp = "2026-08-20T00:00:00.000Z";
+    current.run(
+      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
+       VALUES ('work-story-order', '剧情顺序迁移', '', '', 'zh-CN', '[]', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, story_order, created_at, updated_at)
+       VALUES ('volume-story-order', 'work-story-order', '倒叙卷', 'main', 'manual', '', '[]', 6, 2, ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DELETE FROM schema_migrations WHERE version = 105;
+      DROP INDEX idx_volumes_story_order;
+      ALTER TABLE volumes DROP COLUMN story_order;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT sort_order, story_order FROM volumes WHERE id = 'volume-story-order'"))
+      .toEqual({ sort_order: 6, story_order: 6 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 105")?.count).toBe(1);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 40 将 query_story_knowledge 重命名为 search_story_entities", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-tool-rename-"));
     roots.push(root);
