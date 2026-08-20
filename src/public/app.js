@@ -3808,21 +3808,24 @@ function renderAiImageAttachments() {
   host.replaceChildren();
   host.classList.toggle("hidden", attachments.length === 0);
   host.setAttribute("aria-hidden", String(attachments.length === 0));
-  for (const attachment of attachments) {
+  for (const [index, attachment] of attachments.entries()) {
     const card = document.createElement("figure");
     card.className = "ai-image-attachment";
     card.dataset.attachmentId = attachment.id;
     const preview = document.createElement("button");
     preview.type = "button";
     preview.className = "ai-image-attachment-preview";
-    preview.setAttribute("aria-label", `查看图片附件：${attachment.originalName}`);
+    preview.setAttribute("aria-label", `查看第 ${index + 1} 个图片附件：${attachment.originalName}`);
     preview.title = "点击查看原图";
     const image = document.createElement("img");
     image.src = attachment.contentUrl;
     image.alt = attachment.originalName;
     image.loading = "lazy";
     image.decoding = "async";
-    preview.append(image);
+    const label = document.createElement("span");
+    label.className = "ai-image-attachment-label";
+    label.textContent = `#${index + 1} 图片`;
+    preview.append(image, label);
     preview.addEventListener("click", () => openAiImagePreview(attachment));
     const remove = document.createElement("button");
     remove.type = "button";
