@@ -28,6 +28,8 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain("const previousScrollStates = new Map();");
     expect(application).toContain("section.dataset.aiProcessStepId");
     expect(application).toContain("body.scrollTop = scrollState.nearBottom");
+    expect(application).toContain("function scrollAiProcessStepsToBottom(message)");
+    expect(application).toContain("if (!completed) scrollAiProcessStepsToBottom(message);");
     expect(application).toContain("function shouldRenderAiProcessStep(step)");
     expect(application).toContain('step.type !== "intermediate" || typeof step.content !== "string" || step.content.trim().length > 0');
     expect(application).toContain("const renderableSteps = (Array.isArray(steps) ? steps : []).filter(shouldRenderAiProcessStep);");

@@ -2672,6 +2672,7 @@ const AI_TOOL_DESCRIPTIONS = {
 const aiFeedScrollFrames = new WeakMap();
 const aiFeedAutoScrollStates = new WeakMap();
 const aiFeedScrollBindings = new WeakSet();
+const aiProcessScrollFrames = new WeakMap();
 const AI_FEED_BOTTOM_THRESHOLD_PX = 24;
 let markdownTableMenuTarget = null;
 let markdownTableMenuTrigger = null;
@@ -2745,6 +2746,22 @@ function scrollAiFeedToBottom(feed = $("#ai-feed")) {
     aiFeedScrollFrames.delete(feed);
   });
   aiFeedScrollFrames.set(feed, nextFrame);
+}
+
+function scrollAiProcessStepsToBottom(message) {
+  const scroll = () => {
+    message.querySelectorAll(".ai-process-step-body").forEach((body) => {
+      body.scrollTop = body.scrollHeight;
+    });
+  };
+  scroll();
+  const currentFrame = aiProcessScrollFrames.get(message);
+  if (currentFrame !== undefined) window.cancelAnimationFrame(currentFrame);
+  const nextFrame = window.requestAnimationFrame(() => {
+    scroll();
+    aiProcessScrollFrames.delete(message);
+  });
+  aiProcessScrollFrames.set(message, nextFrame);
 }
 
 function formatAiToolCallTime(value) {
@@ -2934,6 +2951,7 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null, visi
   const body = message.querySelector(".message-body");
   if (body) body.before(details);
   else message.append(details);
+  if (!completed) scrollAiProcessStepsToBottom(message);
 }
 
 function renderAiToolCalls(message, toolCalls, completed = false) {
