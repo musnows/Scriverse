@@ -12816,6 +12816,9 @@ function openVolumeDialog(item) {
   if (!state.work) return openWorkDialog();
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
+  const nextStoryOrder = Math.max(-1, ...state.work.volumes.map((volume) => Number(volume.storyOrder)).filter(Number.isInteger)) + 1;
+  const storyOrder = Number.isInteger(Number(item?.storyOrder)) ? Number(item.storyOrder) : nextStoryOrder;
+  const storyOrderField = `<label>剧情顺序<input name="storyOrder" type="number" min="0" max="1000000" step="1" required value="${esc(String(storyOrder))}" aria-describedby="volume-story-order-help"></label><p id="volume-story-order-help" class="form-field-note">仅用于 AI 判断分卷间的剧情先后，不改变左侧目录、阅读或导出顺序；相同值表示并行或暂时无法定序。</p>`;
   const management = item ? `<section class="entity-dialog-management" aria-label="分卷详情操作">
     <div><strong>分卷详情</strong><small>可将当前分卷单独导出为 EPUB；移入回收站时会连同其中章节隐藏，正文、版本和关联资料默认保留 30 天。</small></div>
     <div class="entity-dialog-management-actions"><button class="ghost-button" type="button" data-dialog-volume-export>导出 EPUB</button><button class="danger-button" type="button" data-dialog-volume-delete>移入回收站</button></div>
@@ -12823,6 +12826,7 @@ function openVolumeDialog(item) {
   openDialog(item ? "分卷详情" : "新建分卷",
     field("title", "分卷名称", "text", item?.title) +
     field("kind", "分卷类型", "select", item?.kind ?? "main", kindOptions) +
+    storyOrderField +
     field("description", "分卷简介", "textarea", item?.description) +
     field("keywords", "分卷关键词", "keyword-chips", item?.keywords ?? []) +
     management,
@@ -12830,6 +12834,7 @@ function openVolumeDialog(item) {
       const body = {
         title: form.get("title"),
         kind: form.get("kind"),
+        storyOrder: Number(form.get("storyOrder")),
         description: form.get("description"),
         keywords: uniqueRelationshipKeywords(form.getAll("keywords").map(String))
       };

@@ -879,6 +879,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")');
     expect(application.text).toContain('field("keywords", "分卷关键词", "keyword-chips"');
     expect(application.text).toContain('keywords: uniqueRelationshipKeywords(form.getAll("keywords").map(String))');
+    expect(application.text).toContain('name="storyOrder" type="number" min="0" max="1000000" step="1" required');
+    expect(application.text).toContain('id="volume-story-order-help" class="form-field-note"');
+    expect(application.text).toContain('storyOrder: Number(form.get("storyOrder"))');
+    expect(application.text).toContain("不改变左侧目录、阅读或导出顺序");
+    expect(page.text).toContain("feature=volume-story-order-v1");
     expect(application.text).toContain('data-dialog-volume-delete');
     expect(application.text).toContain('async function deleteVolume(item)');
     expect(application.text).toContain('$("#form-dialog").close();');
