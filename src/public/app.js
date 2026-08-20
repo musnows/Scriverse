@@ -3873,7 +3873,7 @@ function openAiImagePreview(attachment, ordinal = null) {
   if (!dialog || !image) return;
   image.src = attachment.contentUrl;
   image.alt = attachment.originalName;
-  $("#ai-image-preview-title").textContent = Number.isInteger(ordinal) ? `#${ordinal} 图片预览` : "图片预览";
+  $("#ai-image-preview-title").textContent = Number.isInteger(ordinal) ? `#${ordinal}` : "图片附件";
   $("#ai-image-preview-meta").textContent = attachment.originalName;
   if (!dialog.open) dialog.showModal();
 }
