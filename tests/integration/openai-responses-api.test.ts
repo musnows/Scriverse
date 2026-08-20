@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import request from "supertest";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -241,6 +242,82 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
       imageAttachmentIds: [attachmentId]
     }).expect(400);
     expect(rejected.body.error).toMatchObject({ code: "MODEL_NOT_MULTIMODAL" });
+  });
+
+  it("多模态聊天首轮不按图片 base64 估算上下文，并用服务端 usage 更新上下文", async () => {
+    let imageRequestSeen = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "gpt-5-context-vision" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as {
+        input?: Array<Record<string, unknown>>;
+        max_output_tokens?: number;
+        stream?: boolean;
+      };
+      if (body.max_output_tokens === 10) {
+        return new Response(JSON.stringify({
+          status: "completed",
+          output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "连接成功" }] }]
+        }), { status: 200 });
+      }
+      const imagePart = (body.input ?? [])
+        .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+        .find((part) => (part as Record<string, unknown>).type === "input_image") as Record<string, unknown> | undefined;
+      expect(imagePart?.image_url).toMatch(/^data:image\/jpeg;base64,/u);
+      expect(String(imagePart?.image_url).length).toBeGreaterThan(200_000);
+      expect(body.stream).toBe(true);
+      imageRequestSeen = true;
+      return new Response([
+        'data: {"type":"response.output_text.delta","delta":"已按服务端上下文处理。"}',
+        'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":4321,"output_tokens":7}}}'
+      ].join("\n\n") + "\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const pixels = randomBytes(512 * 512 * 3);
+    const jpeg = await sharp(pixels, { raw: { width: 512, height: 512, channels: 3 } })
+      .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
+      .toBuffer();
+    const uploaded = await request(runtime.app)
+      .post(`/api/works/${workId}/attachments?module=ai-chat`)
+      .attach("file", jpeg, { filename: "上下文计量.jpg", contentType: "image/jpeg" })
+      .expect(201);
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "Responses 上下文计量服务",
+      protocol: "openai-responses",
+      baseUrl: "https://responses-context.test/v1",
+      apiKey: "sk-responses-context-test",
+      status: "enabled"
+    }).expect(201);
+    const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "Responses 上下文计量模型",
+      modelId: "gpt-5-context-vision",
+      multimodalEnabled: true
+    }).expect(201);
+    const modelId = String(model.body.data.id);
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 32_768 }).expect(200);
+    await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+
+    const stream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请读取图片并概括。",
+      scope: { type: "none" },
+      modelId,
+      imageAttachmentIds: [String(uploaded.body.data.id)]
+    }).expect(200);
+    const completeData = stream.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1];
+    const complete = JSON.parse(completeData ?? "{}") as {
+      contextUsage?: {
+        inputTokens?: number;
+        usagePercent?: number;
+        contextUsageSource?: string;
+      };
+    };
+    expect(imageRequestSeen).toBe(true);
+    expect(complete.contextUsage).toMatchObject({
+      inputTokens: 4_321,
+      usagePercent: 13,
+      contextUsageSource: "reported"
+    });
   });
 
   it("聊天图片附件只接受 PNG、JPG、JPEG", async () => {

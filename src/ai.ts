@@ -1102,9 +1102,17 @@ function completionMessageText(value: CompletionMessageContent | null | undefine
   if (typeof value === "string") return value;
   if (!Array.isArray(value)) return "";
   return value
-    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .filter((block) => (block.type === "text" || block.type === "input_text") && typeof block.text === "string")
     .map((block) => String(block.text))
     .join("\n");
+}
+
+function estimateCompletionMessageTokens(messages: CompletionMessage[]): number {
+  return estimateAiTokens(JSON.stringify(messages.map((message) => ({
+    ...message,
+    // 图片只参与供应商请求，不把 base64 数据当作本地文字 Token 估算。
+    content: completionMessageText(message.content)
+  }))));
 }
 
 export function collapseAiBlankLines(value: string): string {
@@ -1267,6 +1275,24 @@ function resolveInputCacheUsage(usage: unknown): InputCacheUsage | null {
   };
 }
 
+function resolveReportedInputTokens(usage: unknown): number | null {
+  const cacheUsage = resolveInputCacheUsage(usage);
+  if (cacheUsage) return cacheUsage.inputTokens;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+  const record = usage as Record<string, unknown>;
+  const usageMetadata = record.usageMetadata && typeof record.usageMetadata === "object" && !Array.isArray(record.usageMetadata)
+    ? record.usageMetadata as Record<string, unknown>
+    : {};
+  return reportedTokenCount(
+    record.prompt_tokens
+      ?? record.input_tokens
+      ?? record.promptTokenCount
+      ?? record.inputTokenCount
+      ?? usageMetadata.promptTokenCount
+      ?? usageMetadata.inputTokenCount
+  );
+}
+
 export function resolveCacheHitPercent(usage: unknown): number | undefined {
   const resolved = resolveInputCacheUsage(usage);
   if (!resolved) return undefined;
@@ -1281,7 +1307,7 @@ export function resolveAiTokenUsage(
   const record = usage && typeof usage === "object" && !Array.isArray(usage)
     ? usage as Record<string, unknown>
     : {};
-  const reportedInputTokens = reportedTokenCount(record.prompt_tokens ?? record.input_tokens);
+  const reportedInputTokens = resolveReportedInputTokens(usage);
   const reportedOutputTokens = reportedTokenCount(record.completion_tokens ?? record.output_tokens);
   const cacheUsage = resolveInputCacheUsage(record);
   const inputTokens = cacheUsage?.inputTokens
@@ -5108,11 +5134,12 @@ export class AiManager {
     input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
     model: ModelRow,
     messages: CompletionMessage[],
-    tools: Record<string, unknown>[]
+    tools: Record<string, unknown>[],
+    reportedUsage?: unknown
   ): Record<string, unknown> {
     const baseUsage = this.getContextUsage(input);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const serializedMessageTokens = estimateAiTokens(JSON.stringify(messages));
+    const serializedMessageTokens = estimateCompletionMessageTokens(messages);
     const systemPromptTokens = messages
       .filter((message) => message.role === "system")
       .reduce((total, message) => total + estimateAiTokens(completionMessageText(message.content)), 0);
@@ -5121,7 +5148,7 @@ export class AiManager {
     const inputTokens = serializedMessageTokens + functionTokens + skillsTokens;
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
     const contextTokens = Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - remainingTokens);
-    return {
+    const estimatedUsage = {
       ...baseUsage,
       contextWindow,
       inputTokens,
@@ -5134,6 +5161,31 @@ export class AiManager {
         skillsTokens,
         contextTokens,
         leftTokens: remainingTokens
+      }
+    };
+    const reportedInputTokens = resolveReportedInputTokens(reportedUsage);
+    if (reportedInputTokens === null) return estimatedUsage;
+    let reportedDistributionRemaining = reportedInputTokens;
+    const reportedSystemPromptTokens = Math.min(systemPromptTokens, reportedDistributionRemaining);
+    reportedDistributionRemaining -= reportedSystemPromptTokens;
+    const reportedFunctionTokens = Math.min(functionTokens, reportedDistributionRemaining);
+    reportedDistributionRemaining -= reportedFunctionTokens;
+    const reportedSkillsTokens = Math.min(skillsTokens, reportedDistributionRemaining);
+    reportedDistributionRemaining -= reportedSkillsTokens;
+    const reportedRemainingTokens = Math.max(0, contextWindow - reportedInputTokens);
+    return {
+      ...estimatedUsage,
+      inputTokens: reportedInputTokens,
+      remainingTokens: reportedRemainingTokens,
+      contextFallbackReached: reportedRemainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
+      usagePercent: Math.min(100, Math.round(reportedInputTokens / contextWindow * 100)),
+      contextUsageSource: "reported",
+      tokenDistribution: {
+        systemPromptTokens: reportedSystemPromptTokens,
+        functionTokens: reportedFunctionTokens,
+        skillsTokens: reportedSkillsTokens,
+        contextTokens: reportedDistributionRemaining,
+        leftTokens: reportedRemainingTokens
       }
     };
   }
@@ -5869,7 +5921,7 @@ export class AiManager {
         model,
         usage: resolveAiTokenUsage(
           payload.usage,
-          estimateAiTokens(JSON.stringify(messages)),
+          estimateCompletionMessageTokens(messages),
           outputText ? estimateAiTokens(outputText) : estimateAiTokens(content)
         )
       };
@@ -6632,7 +6684,7 @@ export class AiManager {
     tools: Record<string, unknown>[] = []
   ): Record<string, unknown> {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const inputTokens = estimateAiTokens(JSON.stringify(messages))
+    const inputTokens = estimateCompletionMessageTokens(messages)
       + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
     if (inputTokens >= contextWindow) {
       throw new AppError(
@@ -6660,7 +6712,7 @@ export class AiManager {
     const dailyTokenQuota = Number(status.dailyTokenQuota);
     const usedTokens = Number(status.usedTokens) + Math.max(0, additionalUsedTokens);
     const remainingTokens = Math.max(0, dailyTokenQuota - usedTokens);
-    const estimatedInputTokens = estimateAiTokens(JSON.stringify(messages))
+    const estimatedInputTokens = estimateCompletionMessageTokens(messages)
       + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
     if (remainingTokens <= estimatedInputTokens) {
       throw new AppError(
@@ -7041,7 +7093,7 @@ export class AiManager {
               const outputText = completionPayloadOutputText(parsed);
               trackUsage(resolveAiTokenUsage(
                 parsed.usage,
-                estimateAiTokens(JSON.stringify(requestMessages)),
+                estimateCompletionMessageTokens(requestMessages),
                 outputText ? estimateAiTokens(outputText) : 0
               ));
               return parsed;
@@ -7115,7 +7167,7 @@ export class AiManager {
           ...additionalMessages
         ];
         if (sourceMessages.length === 0) return;
-        const baseInputTokens = estimateAiTokens(JSON.stringify(messages));
+        const baseInputTokens = estimateCompletionMessageTokens(messages);
         const summaryMaxTokens = Math.max(128, Math.min(
           TOOL_CONTEXT_COMPACT_MAX_TOKENS,
           contextWindow - baseInputTokens - TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS
@@ -7196,7 +7248,7 @@ export class AiManager {
         });
       };
       const toolResultMaximumChars = (assistantMessage: CompletionMessage, toolCallCount: number): number => {
-        const inputTokens = estimateAiTokens(JSON.stringify([...completionMessages, assistantMessage]))
+        const inputTokens = estimateCompletionMessageTokens([...completionMessages, assistantMessage])
           + estimateAiTokens(JSON.stringify(tools));
         const availableTokens = Math.max(128, contextWindow - inputTokens - TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS);
         const perToolTokens = Math.max(128, Math.floor(availableTokens / Math.max(1, toolCallCount)));
@@ -7205,7 +7257,7 @@ export class AiManager {
       const shouldCompactBeforeToolRound = (assistantMessage: CompletionMessage, toolCallCount: number): boolean => {
         const hasRawToolResults = completionMessages.slice(toolContextStartIndex).some((message) => message.role === "tool");
         if (!hasRawToolResults) return false;
-        const currentTokens = estimateAiTokens(JSON.stringify([...completionMessages, assistantMessage]))
+        const currentTokens = estimateCompletionMessageTokens([...completionMessages, assistantMessage])
           + estimateAiTokens(JSON.stringify(tools));
         // 新工具结果可能附带 toolCallQuotaNotice，预估体积时一并计入，避免低估后触发上下文溢出。
         const noticeBudgetChars = Math.max(
@@ -7389,7 +7441,7 @@ export class AiManager {
         context,
         toolCalls: executedToolCalls,
         processSteps,
-        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools)
+        contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools, payload.usage)
       };
     } catch (error) {
       const message = error instanceof Error ? redactProviderSecretsText(error.message, ...activeSecrets) : "AI 调用失败";
