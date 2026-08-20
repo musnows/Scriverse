@@ -110,5 +110,129 @@ describe("章节段落关键字索引", () => {
         confirmedTimelineEvents: [{ name: "港口重逢", timeSort: 12, trackId: null }]
       }
     });
+    expect(runtime.store.searchLatestChapterParagraphsByTimelineTrack(String(work.id), "重逢")).toEqual([
+      expect.objectContaining({
+        trackId: null,
+        trackName: null,
+        timeSort: 12,
+        occurrence: expect.objectContaining({ chapterId: chapter.id })
+      })
+    ]);
+  });
+
+  it("独立定位关键词的结构末位与各已确认时间线轨道末位", async () => {
+    runtime = createTestRuntime();
+    const work = await createWork(runtime, "倒叙关键词检索");
+    const flashbackVolume = runtime.store.createVolume(String(work.id), { title: "倒叙卷", storyOrder: 8 });
+    const earlierVolume = runtime.store.createVolume(String(work.id), { title: "早期卷", storyOrder: 1 });
+    const flashbackChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(flashbackVolume.id),
+      title: "结构末章",
+      content: "密钥第一次出现在倒叙卷。\n\n密钥最后一次出现在倒叙卷。"
+    });
+    const timelineLaterChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(earlierVolume.id),
+      title: "时间线后期",
+      content: "密钥在主线较晚时刻出现。"
+    });
+    const track = runtime.store.createTimelineTrack(String(work.id), { name: "主线" });
+    runtime.store.createTimelineEvent(String(work.id), {
+      name: "倒叙回忆",
+      trackId: String(track.id),
+      timeLabel: "第 5 日",
+      timeSort: 5,
+      chapterIds: [String(flashbackChapter.id)],
+      status: "confirmed"
+    });
+    runtime.store.createTimelineEvent(String(work.id), {
+      name: "主线后期",
+      trackId: String(track.id),
+      timeLabel: "第 50 日",
+      timeSort: 50,
+      chapterIds: [String(timelineLaterChapter.id)],
+      status: "confirmed"
+    });
+    runtime.store.createTimelineEvent(String(work.id), {
+      name: "未确认未来",
+      trackId: String(track.id),
+      timeLabel: "第 999 日",
+      timeSort: 999,
+      chapterIds: [String(flashbackChapter.id)],
+      status: "candidate"
+    });
+
+    const matches = runtime.store.searchChapterParagraphs(String(work.id), "密钥", 1, {
+      includeStoryOrder: true,
+      includeTimeline: true,
+      order: "story_desc"
+    });
+    const latestByStructure = runtime.store.searchLatestChapterParagraphsByStructure(String(work.id), "密钥", {
+      includeTimeline: true
+    });
+    const latestByTimelineTrack = runtime.store.searchLatestChapterParagraphsByTimelineTrack(String(work.id), "密钥");
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        chapterId: flashbackChapter.id,
+        paragraphOrder: 1,
+        paragraph: "密钥最后一次出现在倒叙卷。"
+      })
+    ]);
+    expect(latestByStructure).toEqual([
+      expect.objectContaining({
+        chapterId: flashbackChapter.id,
+        paragraphOrder: 1,
+        storyOrder: expect.objectContaining({ volume: expect.objectContaining({ storyOrder: 8 }) })
+      })
+    ]);
+    expect(latestByTimelineTrack).toEqual([
+      expect.objectContaining({
+        trackId: track.id,
+        trackName: "主线",
+        timeSort: 50,
+        timeLabel: "第 50 日",
+        timelineEvent: expect.objectContaining({ name: "主线后期" }),
+        occurrence: expect.objectContaining({ chapterId: timelineLaterChapter.id, paragraphOrder: 0 }),
+        matchingLinksAtLatestTime: 1
+      })
+    ]);
+    expect(JSON.stringify(latestByTimelineTrack)).not.toContain("未确认未来");
+
+    expect(runtime.store.searchLatestChapterParagraphsByTimelineTrack(String(work.id), "密钥", {
+      chapterIds: [String(flashbackChapter.id)]
+    })).toEqual([
+      expect.objectContaining({ timeSort: 5, occurrence: expect.objectContaining({ chapterId: flashbackChapter.id }) })
+    ]);
+  });
+
+  it("最小工具结果预算下仍能分页返回关键词末位信息", async () => {
+    runtime = createTestRuntime();
+    const work = await createWork(runtime, "小预算关键词检索");
+    const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+    runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "长段落",
+      content: `密钥${"正文".repeat(2_000)}`
+    });
+    const internalAi = runtime.ai as unknown as {
+      executeAgentTool: (
+        workId: string,
+        toolCall: Record<string, unknown>,
+        maximumResultChars?: number
+      ) => Promise<{ result: Record<string, unknown> }>;
+    };
+
+    const execution = await internalAi.executeAgentTool(String(work.id), {
+      id: "small-budget-grep",
+      type: "function",
+      function: { name: "grep", arguments: { keyword: "密钥" } }
+    }, 1_000);
+
+    expect(JSON.stringify(execution.result).length).toBeLessThanOrEqual(1_000);
+    expect(execution.result).toMatchObject({
+      ok: true,
+      data: { latestOccurrences: expect.any(Object) },
+      pagination: { nextCursor: expect.any(Number), maxChars: 1_000 }
+    });
   });
 });

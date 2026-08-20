@@ -1053,7 +1053,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "story_index",
-      description: "读取当前作品的基本信息，并按分卷剧情顺序分页列出卷章、章节概要和完整顺序元数据。返回独立的分卷剧情顺序、目录顺序、卷内章节顺序、结构最新标记；有时间线读取权限时还返回已确认且可排序的关联事件。回答作品简介、最新剧情、情节先后、整体结构或定位章节时优先使用；不会返回正文。",
+      description: "读取当前作品的基本信息，并按分卷剧情顺序分页列出卷章、章节概要和完整顺序元数据。latestChaptersByStructure 始终独立返回结构上最新的正文章节，不受当前章节分页影响；nextOffset 非空时表示还有后续章节页。有时间线读取权限时还返回已确认且可排序的关联事件。回答作品简介、最新剧情、情节先后、整体结构或定位章节时优先使用；不会返回正文。",
       parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 50 }, cursor: agentToolCursorParameter }, additionalProperties: false }
     }
   },
@@ -1069,7 +1069,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "grep",
-      description: "在当前作品的章节正文索引中查询关键字，返回关键字所在的完整段落、章节标题、ID 和完整剧情顺序元数据。默认查询前 20 条，可按需调整 limit。",
+      description: "在当前作品的章节正文索引中查询关键字，返回最新结构位置优先的完整段落、章节标题、ID 和完整剧情顺序元数据。latestOccurrences.byStructure 独立给出结构顺序最后出现位置；有时间线权限时，latestOccurrences.byTimelineTrack 还会按每条已确认轨道（trackId=null 表示未分轨）给出最大 timeSort 对应的最后出现时间，可用于识别倒叙事件。默认返回 20 条证据，可按需调整 limit。",
       parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }, cursor: agentToolCursorParameter }, required: ["keyword"], additionalProperties: false }
     }
   },
@@ -1077,7 +1077,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "search_story_entities",
-      description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。人物结果包含权威 gender 字段：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据正文或常识自行推断。人物、种族、组织结果还分别包含权威布尔状态 isDead、isExtinct、isDissolved；只有值为 true 才能判定该角色已死亡、该种族已灭绝或该组织已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据正文情节自行改判。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
+      description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。人物结果包含权威 gender 字段：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据正文或常识自行推断。人物、种族、组织结果还分别包含权威布尔状态 isDead、isExtinct、isDissolved；只有值为 true 才能判定该角色已死亡、该种族已灭绝或该组织已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据正文情节自行改判。时间线事件结果返回 trackId、timeSort、chapterIds、chapterStoryOrders 与 orderEligible；只有 orderEligible=true 的事件才可参与同轨道时间比较。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: MAXIMUM_WORK_SEARCH_QUERY_LENGTH }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
     }
   },
@@ -1125,7 +1125,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "recall_story",
-      description: "查询当前作品已保存正文中的关键词，返回匹配的完整段落、章节标题、ID 和完整剧情顺序元数据；有时间线读取权限时还返回已确认且可排序的关联事件。用于回忆最近发生的故事情节、场景、先后顺序或原文措辞；只能读取当前正文，不会读取设定库或作者想法。",
+      description: "查询当前作品已保存正文中的关键词，返回最新结构位置优先的完整段落、章节标题、ID 和完整剧情顺序元数据。latestOccurrences.byStructure 独立给出结构顺序最后出现位置；有时间线权限时，latestOccurrences.byTimelineTrack 还会按每条已确认轨道（trackId=null 表示未分轨）给出最大 timeSort 对应的最后出现时间，可用于回忆倒叙事件。只能读取当前正文，不会读取设定库或作者想法。",
       parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }, cursor: agentToolCursorParameter }, required: ["keyword"], additionalProperties: false }
     }
   },
@@ -2791,12 +2791,69 @@ export class AiManager {
   private hybridAiSearchDetails(workId: string, sourceType: string, sourceId: string): Record<string, unknown> {
     const source = this.relationshipIndexedSource(workId, sourceType, sourceId);
     if (!source) return {};
+    let details: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(source.content) as unknown;
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) details = parsed as Record<string, unknown>;
     } catch {
-      return {};
+      details = {};
     }
+    if (sourceType === "timeline-track") {
+      try {
+        const track = this.store.getTimelineTrack(sourceId);
+        if (String(track.workId) !== workId) return {};
+        return {
+          ...details,
+          trackId: track.id,
+          name: track.name,
+          description: track.description,
+          sortOrder: track.sortOrder
+        };
+      } catch {
+        return details;
+      }
+    }
+    if (sourceType === "timeline-event") {
+      try {
+        const event = this.store.getTimelineEvent(sourceId);
+        if (String(event.workId) !== workId) return {};
+        const chapterIds = Array.isArray(event.chapterIds)
+          ? event.chapterIds.filter((chapterId): chapterId is string => typeof chapterId === "string")
+          : [];
+        const chapterStoryOrders = this.store.getChapterStoryOrders(workId, chapterIds);
+        const timeSort = typeof event.timeSort === "number" && Number.isFinite(event.timeSort) ? event.timeSort : null;
+        const trackId = typeof event.trackId === "string" ? event.trackId : null;
+        const track = trackId
+          ? (() => {
+              try {
+                const value = this.store.getTimelineTrack(trackId);
+                return String(value.workId) === workId
+                  ? { id: value.id, name: value.name, sortOrder: value.sortOrder }
+                  : null;
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+        return {
+          ...details,
+          trackId,
+          track,
+          timeSort,
+          timeLabel: event.timeLabel,
+          chapterIds,
+          chapterStoryOrders: chapterIds.flatMap((chapterId) => {
+            const storyOrder = chapterStoryOrders.get(chapterId);
+            return storyOrder ? [{ chapterId, storyOrder }] : [];
+          }),
+          orderEligible: event.status === "confirmed" && timeSort !== null,
+          status: event.status
+        };
+      } catch {
+        return details;
+      }
+    }
+    return details;
   }
 
   private getTokenUsage(workId: string | null, timezoneOffset: number, includeWorks: boolean): Record<string, unknown> {
@@ -5533,7 +5590,7 @@ export class AiManager {
           ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
           ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；先不传 characters 获取有关系的角色列表，再传入 characters 数组获取一个或多个指定角色的关系详情。它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
-          ...(enabledToolIds.includes("recall_story") ? ["当回应涉及已经写入故事的近期情节、场景、最新进展、先后顺序或具体措辞，而角色自身记忆与对话历史不足以确定时，使用 recall_story 按关键词查询当前正文，并严格按返回的 storyOrdering 与 storyOrder 判断顺序。"] : []),
+          ...(enabledToolIds.includes("recall_story") ? ["当回应涉及已经写入故事的近期情节、场景、最新进展、先后顺序或具体措辞，而角色自身记忆与对话历史不足以确定时，使用 recall_story 按关键词查询当前正文；以 latestOccurrences.byStructure 判断结构最后出现位置，以 latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。"] : []),
           "把返回内容自然地当作角色自己的记忆、认知或感受来表达。没有返回的信息就以符合角色的方式表现为不知道、没见过、记不清或不确定，不得补用全知信息。"
         ].join("\n")
       : enabledToolIds.length > 0
@@ -5542,7 +5599,7 @@ export class AiManager {
           ...directImageToolGuidance,
           ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index，并严格按返回的 storyOrdering 与 storyOrder 判断顺序；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
+          "整体介绍、作品基本信息、目录、最新剧情、情节先后或章节定位优先调用 story_index，并严格按返回的 storyOrdering 与 storyOrder 判断顺序；story_index.latestChaptersByStructure 是不受当前分页影响的结构最新章节，若要遍历完整目录则在 nextOffset 非空时用该值作为 offset 继续调用。按关键字定位正文段落时调用 grep；以 grep.latestOccurrences.byStructure 判断关键词的结构最后出现位置，以 grep.latestOccurrences.byTimelineTrack 中同一 trackId 的最大 timeSort 判断倒叙时间，不能跨轨道比较。已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -6436,7 +6493,18 @@ export class AiManager {
       }], maximumRecordChars).map((record) => ({ ...record, _toolResultSection: "work" }));
       const chapterRecords = structuralToolResultRecords(chapterPage.chapters, maximumRecordChars)
         .map((record) => ({ ...record, _toolResultSection: "chapter" }));
-      const result = paginateToolResultRecords([...workRecords, ...chapterRecords], cursor, (page, pagination) => {
+      const latestChapterRecords = structuralToolResultRecords(chapterPage.latestChaptersByStructure, maximumRecordChars)
+        .map((record) => ({ ...record, _toolResultSection: "latestChapter" }));
+      const compactOrdering = maximumResultChars < 2_000;
+      const indexStoryOrdering = compactOrdering
+        ? {
+            priority: timelineAvailable
+              ? ["同 trackId 的 confirmed timeSort", "volume.storyOrder", "chapter.order"]
+              : ["volume.storyOrder", "chapter.order"],
+            rule: "directoryOrder 非剧情顺序；相同 storyOrder 或 timeSort 不强行定序。"
+          }
+        : storyOrderingGuide(timelineAvailable);
+      const result = paginateToolResultRecords([...latestChapterRecords, ...workRecords, ...chapterRecords], cursor, (page, pagination) => {
         const pageWork = page.flatMap((record) => {
           if (record._toolResultSection !== "work") return [];
           const { _toolResultSection: _section, ...value } = record;
@@ -6447,16 +6515,28 @@ export class AiManager {
           const { _toolResultSection: _section, ...value } = record;
           return [value];
         });
+        const pageLatestChapters = page.flatMap((record) => {
+          if (record._toolResultSection !== "latestChapter") return [];
+          const { _toolResultSection: _section, ...value } = record;
+          return [value];
+        });
+        const nextOffset = pagination.nextCursor === null && offset + limit < chapterPage.totalChapters ? offset + limit : null;
         return {
           ok: true,
           data: {
             ...(pageWork[0] ? { work: pageWork[0] } : {}),
             ...(pageWork.length > 1 ? { workFragments: pageWork } : {}),
-            storyOrdering: storyOrderingGuide(timelineAvailable),
+            storyOrdering: indexStoryOrdering,
+            latestChaptersByStructure: pageLatestChapters,
             totalChapters: chapterPage.totalChapters,
             offset,
             chapters: pageChapters,
-            nextOffset: pagination.nextCursor === null && offset + limit < chapterPage.totalChapters ? offset + limit : null
+            nextOffset,
+            nextOffsetRule: compactOrdering
+              ? (nextOffset === null ? "end" : "use nextOffset")
+              : nextOffset === null
+                ? "当前章节页已到末尾。"
+                : "章节目录仍有后续；如需遍历完整目录，使用 nextOffset 作为下一次 story_index 的 offset。"
           },
           pagination
         };
@@ -6507,18 +6587,71 @@ export class AiManager {
     if (name === "grep" || name === "recall_story") {
       const { keyword, limit, cursor } = args as z.infer<typeof grepArguments>;
       const timelineAvailable = canReadWorkModule(permissions, "timeline");
+      const chapterIds = scopedChapterIds ? [...scopedChapterIds] : undefined;
       const matches = this.store.searchChapterParagraphs(workId, keyword, limit, {
         excludeAuthorNotes: true,
         includeStoryOrder: true,
-        includeTimeline: timelineAvailable
-      })
-        .filter((match) => !scopedChapterIds || scopedChapterIds.has(String(match.chapterId)));
-      const records = structuralToolResultRecords(matches, maximumRecordChars);
-      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
-        ok: true,
-        data: { keyword, limit, storyOrdering: storyOrderingGuide(timelineAvailable), matches: page },
-        pagination
-      }), maximumResultChars);
+        includeTimeline: timelineAvailable,
+        order: "story_desc",
+        chapterIds
+      });
+      const latestByStructure = this.store.searchLatestChapterParagraphsByStructure(workId, keyword, {
+        excludeAuthorNotes: true,
+        includeTimeline: timelineAvailable,
+        chapterIds
+      });
+      const latestByTimelineTrack = timelineAvailable
+        ? this.store.searchLatestChapterParagraphsByTimelineTrack(workId, keyword, { excludeAuthorNotes: true, chapterIds })
+        : [];
+      const latestStructureRecords = structuralToolResultRecords(latestByStructure, maximumRecordChars)
+        .map((record) => ({ ...record, _toolResultSection: "latestStructure" }));
+      const latestTimelineRecords = structuralToolResultRecords(latestByTimelineTrack, maximumRecordChars)
+        .map((record) => ({ ...record, _toolResultSection: "latestTimeline" }));
+      const matchRecords = structuralToolResultRecords(matches, maximumRecordChars)
+        .map((record) => ({ ...record, _toolResultSection: "match" }));
+      const compactOrdering = maximumResultChars < 2_000;
+      const grepStoryOrdering = compactOrdering
+        ? {
+            priority: timelineAvailable
+              ? ["同 trackId 的 confirmed timeSort", "volume.storyOrder", "chapter.order"]
+              : ["volume.storyOrder", "chapter.order"],
+            rule: "directoryOrder 非剧情顺序；相同 storyOrder 或 timeSort 表示并行、同时或未知。"
+          }
+        : storyOrderingGuide(timelineAvailable);
+      const result = paginateToolResultRecords(
+        [...latestStructureRecords, ...latestTimelineRecords, ...matchRecords],
+        cursor,
+        (page, pagination) => {
+          const section = (name: string): Record<string, unknown>[] => page.flatMap((record) => {
+            if (record._toolResultSection !== name) return [];
+            const { _toolResultSection: _section, ...value } = record;
+            return [value];
+          });
+          return {
+            ok: true,
+            data: {
+              keyword,
+              limit,
+              storyOrdering: grepStoryOrdering,
+              matchesOrder: compactOrdering
+                ? "story_desc"
+                : "volume.storyOrder DESC, chapter.order DESC, paragraphOrder DESC；相同分卷剧情顺序仍表示并行或未知。",
+              latestOccurrences: {
+                byStructure: section("latestStructure"),
+                ...(timelineAvailable ? { byTimelineTrack: section("latestTimeline") } : {}),
+                rule: compactOrdering
+                  ? (timelineAvailable ? "结构末位可并列；时间末位按 trackId 分组。" : "结构末位可并列；时间线不可读。")
+                  : timelineAvailable
+                    ? "byStructure 可有多个并行末位；byTimelineTrack 每项是对应 trackId（null 表示未分轨事件）上最大已确认 timeSort 的代表段落，matchingLinksAtLatestTime 大于 1 表示该时刻存在并列匹配。"
+                    : "byStructure 可有多个并行末位；当前不能读取时间线，因此不能判断倒叙时间。"
+              },
+              matches: section("match")
+            },
+            pagination
+          };
+        },
+        maximumResultChars
+      );
       return {
         id: toolCall.id,
         name,
@@ -6554,11 +6687,21 @@ export class AiManager {
         }];
       }).slice(0, limit);
       const records = structuralToolResultRecords(combined, maximumRecordChars);
+      const compactOrdering = maximumResultChars < 2_000;
+      const entityStoryOrdering = compactOrdering
+        ? {
+            priority: ["同 trackId 的 confirmed timeSort", "volume.storyOrder", "chapter.order"],
+            rule: "orderEligible=false 不参与时间比较；directoryOrder 非剧情顺序。"
+          }
+        : storyOrderingGuide(canReadWorkModule(permissions, "timeline"));
       const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
         ok: true,
         data: {
           query,
           matchMode: "hybrid_exact_phonetic",
+          ...(requestedCategories.has("timeline")
+            ? { storyOrdering: entityStoryOrdering }
+            : {}),
           matches: page,
           ...(combined.length === 0
             ? { hint: "没有找到精确或拼音相关结果。请改用更短的实体名、别名或标题，也可使用 story_index 浏览目录，或用 grep 搜索正文关键字。" }

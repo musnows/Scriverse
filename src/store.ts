@@ -671,12 +671,19 @@ export type AiConversationTitleContext = {
 
 export type StoryIndexChapterPage = {
   totalChapters: number;
+  latestChaptersByStructure: Array<{
+    id: string;
+    title: string;
+    versionNo: number;
+    storyOrder: ChapterStoryOrderDetails;
+    summary: string;
+  }>;
   chapters: Array<{
     id: string;
     title: string;
     versionNo: number;
-    summary: string;
     storyOrder: ChapterStoryOrderDetails;
+    summary: string;
   }>;
 };
 
@@ -704,6 +711,37 @@ export type ChapterStoryOrderDetails = {
     isLatestByStructure: boolean;
   };
   confirmedTimelineEvents?: ConfirmedTimelineOrderEvent[];
+};
+
+export type ChapterParagraphMatch = {
+  chapterId: string;
+  chapterTitle: string;
+  paragraph: string;
+  paragraphOrder?: number;
+  storyOrder?: ChapterStoryOrderDetails;
+};
+
+export type LatestTimelineTrackChapterParagraph = {
+  trackId: string | null;
+  trackName: string | null;
+  trackOrder: number | null;
+  timeSort: number;
+  timeLabel: string;
+  timelineEvent: {
+    id: string;
+    name: string;
+    eventType: string;
+  };
+  occurrence: ChapterParagraphMatch;
+  matchingLinksAtLatestTime: number;
+};
+
+type ChapterParagraphSearchOptions = {
+  excludeAuthorNotes?: boolean;
+  includeStoryOrder?: boolean;
+  includeTimeline?: boolean;
+  order?: "directory_asc" | "story_asc" | "story_desc";
+  chapterIds?: string[];
 };
 
 type RestorableFileSnapshotChapter = {
@@ -2123,7 +2161,7 @@ export class Store {
   ): StoryIndexChapterPage {
     const work = this.getWork(workId);
     const permissions = work.modulePermissions as WorkModulePermissions;
-    if (permissions.prose === "none") return { totalChapters: 0, chapters: [] };
+    if (permissions.prose === "none") return { totalChapters: 0, latestChaptersByStructure: [], chapters: [] };
     const authorNoteFilter = options.excludeAuthorNotes ? " AND chapter.chapter_type <> '作者的话'" : "";
     const countRow = this.db.get(
       `SELECT COUNT(*) AS count FROM chapters chapter
@@ -2142,7 +2180,35 @@ export class Store {
       limit,
       offset
     );
-    const chapterIds = chapterRows.map((row) => requiredString(row, "id"));
+    const latestChapterRows = this.db.all(
+      `SELECT chapter.id, chapter.title, chapter.version_no
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+         AND chapter.chapter_type = '正文'
+         AND volume.story_order = (
+           SELECT MAX(candidate_volume.story_order)
+           FROM volumes candidate_volume
+           WHERE candidate_volume.work_id = ? AND candidate_volume.deleted_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM chapters candidate_volume_chapter
+               WHERE candidate_volume_chapter.volume_id = candidate_volume.id
+                 AND candidate_volume_chapter.deleted_at IS NULL
+                 AND candidate_volume_chapter.chapter_type = '正文'
+             )
+         )
+         AND chapter.sort_order = (
+           SELECT MAX(candidate_chapter.sort_order)
+           FROM chapters candidate_chapter
+           WHERE candidate_chapter.volume_id = chapter.volume_id
+             AND candidate_chapter.deleted_at IS NULL
+             AND candidate_chapter.chapter_type = '正文'
+         )
+       ORDER BY volume.created_at, volume.id, chapter.created_at, chapter.id`,
+      workId,
+      workId
+    );
+    const chapterIds = [...new Set([...chapterRows, ...latestChapterRows].map((row) => requiredString(row, "id")))];
     const storyOrders = this.getChapterStoryOrders(workId, chapterIds, { includeTimeline: options.includeTimeline });
     const summaries = new Map<string, string>();
     if (chapterIds.length > 0) {
@@ -2165,14 +2231,24 @@ export class Store {
     }
     return {
       totalChapters: numberValue(countRow ?? {}, "count"),
+      latestChaptersByStructure: latestChapterRows.map((row) => {
+        const chapterId = requiredString(row, "id");
+        return {
+          id: chapterId,
+          title: requiredString(row, "title"),
+          versionNo: numberValue(row, "version_no"),
+          storyOrder: storyOrders.get(chapterId) as ChapterStoryOrderDetails,
+          summary: summaries.get(chapterId) ?? ""
+        };
+      }),
       chapters: chapterRows.map((row) => {
         const chapterId = requiredString(row, "id");
         return {
           id: chapterId,
           title: requiredString(row, "title"),
           versionNo: numberValue(row, "version_no"),
-          summary: summaries.get(chapterId) ?? "",
-          storyOrder: storyOrders.get(chapterId) as ChapterStoryOrderDetails
+          storyOrder: storyOrders.get(chapterId) as ChapterStoryOrderDetails,
+          summary: summaries.get(chapterId) ?? ""
         };
       })
     };
@@ -3843,46 +3919,38 @@ export class Store {
     );
   }
 
-  searchChapterParagraphs(workId: string, keyword: string, limit = 20, options: {
-    excludeAuthorNotes?: boolean;
-    includeStoryOrder?: boolean;
-    includeTimeline?: boolean;
-  } = {}): Array<{
-    chapterId: string;
-    chapterTitle: string;
-    paragraph: string;
-    storyOrder?: ChapterStoryOrderDetails;
-  }> {
-    this.getWork(workId);
-    const normalizedKeyword = normalizeDocumentSearchText(keyword.trim());
-    if (!normalizedKeyword) return [];
-    const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+  private chapterParagraphSearchPlan(
+    workId: string,
+    normalizedKeyword: string,
+    options: Pick<ChapterParagraphSearchOptions, "excludeAuthorNotes" | "chapterIds">
+  ): { joinSql: string; whereSql: string; params: SQLInputValue[] } {
+    const shortKeyword = [...normalizedKeyword].length < 3;
+    const scopedChapterIds = options.chapterIds
+      ? [...new Set(options.chapterIds.filter(Boolean))].slice(0, 10_000)
+      : null;
+    const scopeFilter = scopedChapterIds
+      ? " AND chapter.id IN (SELECT CAST(value AS TEXT) FROM json_each(?))"
+      : "";
     const authorNoteFilter = options.excludeAuthorNotes ? " AND chapter.chapter_type <> '作者的话'" : "";
-    const columns = `SELECT paragraph.chapter_id, chapter.title AS chapter_title, paragraph.content
-      FROM chapter_paragraph_search paragraph
-      JOIN chapters chapter ON chapter.id = paragraph.chapter_id
-      JOIN volumes volume ON volume.id = chapter.volume_id`;
-    const rows = [...normalizedKeyword].length < 3
-      ? this.db.all(
-          `${columns}
-           JOIN chapter_paragraph_short_terms term ON term.paragraph_id = paragraph.id
-           WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL${authorNoteFilter} AND term.term = ?
-           ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
-           LIMIT ?`,
-          workId,
-          normalizedKeyword,
-          safeLimit
-        )
-      : this.db.all(
-          `${columns}
-           JOIN chapter_paragraph_search_fts fts ON fts.rowid = paragraph.id
-           WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL${authorNoteFilter} AND chapter_paragraph_search_fts MATCH ?
-           ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
-           LIMIT ?`,
-          workId,
-          `"${normalizedKeyword.replaceAll('"', '""')}"`,
-          safeLimit
-        );
+    return {
+      joinSql: shortKeyword
+        ? "JOIN chapter_paragraph_short_terms term ON term.paragraph_id = paragraph.id"
+        : "JOIN chapter_paragraph_search_fts fts ON fts.rowid = paragraph.id",
+      whereSql: `paragraph.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL${authorNoteFilter}${scopeFilter}
+        AND ${shortKeyword ? "term.term = ?" : "chapter_paragraph_search_fts MATCH ?"}`,
+      params: [
+        workId,
+        ...(scopedChapterIds ? [JSON.stringify(scopedChapterIds)] : []),
+        shortKeyword ? normalizedKeyword : `"${normalizedKeyword.replaceAll('"', '""')}"`
+      ]
+    };
+  }
+
+  private mapChapterParagraphMatches(
+    workId: string,
+    rows: Row[],
+    options: { includeStoryOrder?: boolean; includeTimeline?: boolean; includeParagraphOrder?: boolean }
+  ): ChapterParagraphMatch[] {
     const chapterIds = rows.map((row) => requiredString(row, "chapter_id"));
     const storyOrders = options.includeStoryOrder
       ? this.getChapterStoryOrders(workId, chapterIds, { includeTimeline: options.includeTimeline })
@@ -3894,8 +3962,169 @@ export class Store {
         chapterId,
         chapterTitle: requiredString(row, "chapter_title"),
         paragraph: requiredString(row, "content"),
+        ...(options.includeParagraphOrder ? { paragraphOrder: numberValue(row, "paragraph_order") } : {}),
         ...(storyOrder ? { storyOrder } : {})
       };
+    });
+  }
+
+  searchChapterParagraphs(
+    workId: string,
+    keyword: string,
+    limit = 20,
+    options: ChapterParagraphSearchOptions = {}
+  ): ChapterParagraphMatch[] {
+    const work = this.getWork(workId);
+    if ((work.modulePermissions as WorkModulePermissions).prose === "none") return [];
+    const normalizedKeyword = normalizeDocumentSearchText(keyword.trim());
+    if (!normalizedKeyword) return [];
+    if (options.chapterIds && options.chapterIds.length === 0) return [];
+    const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+    const search = this.chapterParagraphSearchPlan(workId, normalizedKeyword, options);
+    const columns = `SELECT paragraph.chapter_id, chapter.title AS chapter_title, paragraph.content, paragraph.paragraph_order
+      FROM chapter_paragraph_search paragraph
+      JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+      JOIN volumes volume ON volume.id = chapter.volume_id
+      ${search.joinSql}`;
+    const orderSql = options.order === "story_desc"
+      ? "volume.story_order DESC, chapter.sort_order DESC, paragraph.paragraph_order DESC, volume.id, chapter.id, paragraph.id"
+      : options.order === "story_asc"
+        ? "volume.story_order, chapter.sort_order, paragraph.paragraph_order, volume.id, chapter.id, paragraph.id"
+        : "volume.sort_order, chapter.sort_order, paragraph.paragraph_order, volume.id, chapter.id, paragraph.id";
+    const rows = this.db.all(
+      `${columns}
+       WHERE ${search.whereSql}
+       ORDER BY ${orderSql}
+       LIMIT ?`,
+      ...search.params,
+      safeLimit
+    );
+    return this.mapChapterParagraphMatches(workId, rows, {
+      includeStoryOrder: options.includeStoryOrder,
+      includeTimeline: options.includeTimeline,
+      includeParagraphOrder: options.includeStoryOrder
+    });
+  }
+
+  searchLatestChapterParagraphsByStructure(
+    workId: string,
+    keyword: string,
+    options: Pick<ChapterParagraphSearchOptions, "excludeAuthorNotes" | "includeTimeline" | "chapterIds"> = {}
+  ): ChapterParagraphMatch[] {
+    const work = this.getWork(workId);
+    if ((work.modulePermissions as WorkModulePermissions).prose === "none") return [];
+    const normalizedKeyword = normalizeDocumentSearchText(keyword.trim());
+    if (!normalizedKeyword || (options.chapterIds && options.chapterIds.length === 0)) return [];
+    const search = this.chapterParagraphSearchPlan(workId, normalizedKeyword, options);
+    const rows = this.db.all(
+      `WITH matched_paragraphs AS (
+         SELECT DISTINCT paragraph.id AS paragraph_id, paragraph.chapter_id, chapter.title AS chapter_title,
+           paragraph.content, paragraph.paragraph_order, chapter.sort_order AS chapter_order,
+           volume.id AS volume_id, volume.story_order AS volume_story_order
+         FROM chapter_paragraph_search paragraph
+         JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         ${search.joinSql}
+         WHERE ${search.whereSql}
+       ), latest_story_order AS (
+         SELECT MAX(volume_story_order) AS value FROM matched_paragraphs
+       ), ranked_paragraphs AS (
+         SELECT matched_paragraphs.*,
+           DENSE_RANK() OVER (
+             PARTITION BY volume_id
+             ORDER BY chapter_order DESC, paragraph_order DESC
+           ) AS occurrence_rank
+         FROM matched_paragraphs
+         JOIN latest_story_order ON matched_paragraphs.volume_story_order = latest_story_order.value
+       )
+       SELECT chapter_id, chapter_title, content, paragraph_order
+       FROM ranked_paragraphs
+       WHERE occurrence_rank = 1
+       ORDER BY volume_id, chapter_id, paragraph_id`,
+      ...search.params
+    );
+    return this.mapChapterParagraphMatches(workId, rows, {
+      includeStoryOrder: true,
+      includeTimeline: options.includeTimeline,
+      includeParagraphOrder: true
+    });
+  }
+
+  searchLatestChapterParagraphsByTimelineTrack(
+    workId: string,
+    keyword: string,
+    options: Pick<ChapterParagraphSearchOptions, "excludeAuthorNotes" | "chapterIds"> = {}
+  ): LatestTimelineTrackChapterParagraph[] {
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none" || permissions.timeline === "none") return [];
+    const normalizedKeyword = normalizeDocumentSearchText(keyword.trim());
+    if (!normalizedKeyword || (options.chapterIds && options.chapterIds.length === 0)) return [];
+    const search = this.chapterParagraphSearchPlan(workId, normalizedKeyword, options);
+    const rows = this.db.all(
+      `WITH matched_paragraphs AS (
+         SELECT DISTINCT paragraph.id AS paragraph_id, paragraph.chapter_id, chapter.title AS chapter_title,
+           paragraph.content, paragraph.paragraph_order, chapter.sort_order AS chapter_order,
+           volume.story_order AS volume_story_order
+         FROM chapter_paragraph_search paragraph
+         JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         ${search.joinSql}
+         WHERE ${search.whereSql}
+       ), ranked_links AS (
+         SELECT matched_paragraphs.*, event.id AS event_id, event.name AS event_name,
+           event.event_type, event.time_label, event.time_sort, event.track_id,
+           track.name AS track_name, track.sort_order AS track_order,
+           ROW_NUMBER() OVER (
+             PARTITION BY event.track_id
+             ORDER BY event.time_sort DESC, matched_paragraphs.volume_story_order DESC,
+               matched_paragraphs.chapter_order DESC, matched_paragraphs.paragraph_order DESC,
+               event.id, matched_paragraphs.paragraph_id
+           ) AS track_rank,
+           COUNT(*) OVER (PARTITION BY event.track_id, event.time_sort) AS matching_links_at_time
+         FROM matched_paragraphs
+         JOIN timeline_events event ON event.work_id = ?
+           AND event.status = 'confirmed' AND event.time_sort IS NOT NULL
+           AND typeof(event.time_sort) IN ('integer', 'real')
+           AND event.time_sort BETWEEN -1.0e308 AND 1.0e308
+           AND json_valid(event.chapter_ids_json)
+         JOIN json_each(event.chapter_ids_json) linked_chapter
+           ON CAST(linked_chapter.value AS TEXT) = matched_paragraphs.chapter_id
+         LEFT JOIN timeline_tracks track ON track.id = event.track_id AND track.work_id = event.work_id
+       )
+       SELECT chapter_id, chapter_title, content, paragraph_order,
+         event_id, event_name, event_type, time_label, time_sort,
+         track_id, track_name, track_order, matching_links_at_time
+       FROM ranked_links
+       WHERE track_rank = 1
+       ORDER BY track_order IS NULL, track_order, track_id
+       LIMIT 100`,
+      ...search.params,
+      workId
+    );
+    const occurrences = this.mapChapterParagraphMatches(workId, rows, {
+      includeStoryOrder: true,
+      includeTimeline: false,
+      includeParagraphOrder: true
+    });
+    return rows.flatMap((row, index) => {
+      const timeSort = Number(row.time_sort);
+      const occurrence = occurrences[index];
+      if (!occurrence || !Number.isFinite(timeSort)) return [];
+      return [{
+        trackId: optionalString(row, "track_id"),
+        trackName: optionalString(row, "track_name"),
+        trackOrder: row.track_order === null || row.track_order === undefined ? null : numberValue(row, "track_order"),
+        timeSort,
+        timeLabel: requiredString(row, "time_label"),
+        timelineEvent: {
+          id: requiredString(row, "event_id"),
+          name: requiredString(row, "event_name"),
+          eventType: requiredString(row, "event_type")
+        },
+        occurrence,
+        matchingLinksAtLatestTime: numberValue(row, "matching_links_at_time")
+      }];
     });
   }
 

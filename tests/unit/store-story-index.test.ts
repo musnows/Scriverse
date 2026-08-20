@@ -42,6 +42,18 @@ describe("story_index 目录读取", () => {
 
     expect(page).toEqual({
       totalChapters: 4,
+      latestChaptersByStructure: [
+        {
+          id: chapters[3]?.id,
+          title: "第四章",
+          versionNo: 1,
+          storyOrder: {
+            volume: { volumeId: secondVolume.id, volumeTitle: "第二卷", directoryOrder: 1, storyOrder: 1 },
+            chapter: { order: 1, type: "正文", isLatestByStructure: true }
+          },
+          summary: "第 4 章摘要"
+        }
+      ],
       chapters: [
         {
           id: chapters[1]?.id,
@@ -73,9 +85,8 @@ describe("story_index 目录读取", () => {
     expect(chapterPageCall?.slice(1)).toEqual([work.id, 2, 1]);
 
     const insightCall = allSpy.mock.calls.find(([sql]) => String(sql).includes("SELECT insight.chapter_id, insight.summary"));
-    expect(insightCall?.slice(1)).toEqual([work.id, chapters[1]?.id, chapters[2]?.id]);
+    expect(insightCall?.slice(1)).toEqual([work.id, chapters[1]?.id, chapters[2]?.id, chapters[3]?.id]);
     expect(insightCall?.slice(1)).not.toContain(chapters[0]?.id);
-    expect(insightCall?.slice(1)).not.toContain(chapters[3]?.id);
   });
 
   it("供 AI 查询时排除作者的话章节并保持分页总数一致", () => {
@@ -97,6 +108,9 @@ describe("story_index 目录读取", () => {
     const page = runtime.store.getStoryIndexChapterPage(String(work.id), 0, 20, { excludeAuthorNotes: true });
 
     expect(page.totalChapters).toBe(1);
+    expect(page.latestChaptersByStructure).toEqual([
+      expect.objectContaining({ id: chapter.id, title: "第一章" })
+    ]);
     expect(page.chapters).toEqual([
       expect.objectContaining({ id: chapter.id, title: "第一章" })
     ]);
@@ -160,6 +174,64 @@ describe("story_index 目录读取", () => {
       chapter: { order: 0, isLatestByStructure: true },
       confirmedTimelineEvents: [{ name: "返港", timeSort: 9, trackId: track.id, trackName: "主线" }]
     });
+    expect(page.latestChaptersByStructure).toEqual([
+      expect.objectContaining({ id: laterChapter.id, title: "重返港口" })
+    ]);
     expect(JSON.stringify(page)).not.toContain("候选事件");
+  });
+
+  it("首页不足以覆盖全书时仍独立返回结构最新章节", () => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "长篇分页目录" });
+    const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+    const store = runtime.store;
+    const chapters = Array.from({ length: 21 }, (_, index) => store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: `第 ${index + 1} 章`,
+      content: `正文 ${index + 1}`
+    }));
+
+    const page = runtime.store.getStoryIndexChapterPage(String(work.id), 0, 20, { excludeAuthorNotes: true });
+
+    expect(page.totalChapters).toBe(21);
+    expect(page.chapters).toHaveLength(20);
+    expect(page.chapters.at(-1)?.id).toBe(chapters[19]?.id);
+    expect(page.latestChaptersByStructure).toEqual([
+      expect.objectContaining({
+        id: chapters[20]?.id,
+        storyOrder: expect.objectContaining({ chapter: expect.objectContaining({ isLatestByStructure: true }) })
+      })
+    ]);
+  });
+
+  it("最小工具结果预算下优先分页返回结构最新章节", async () => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "小预算目录" });
+    const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+    const chapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "最新章",
+      content: "正文"
+    });
+    const internalAi = runtime.ai as unknown as {
+      executeAgentTool: (
+        workId: string,
+        toolCall: Record<string, unknown>,
+        maximumResultChars?: number
+      ) => Promise<{ result: Record<string, unknown> }>;
+    };
+
+    const execution = await internalAi.executeAgentTool(String(work.id), {
+      id: "small-budget-index",
+      type: "function",
+      function: { name: "story_index", arguments: {} }
+    }, 1_000);
+
+    expect(JSON.stringify(execution.result).length).toBeLessThanOrEqual(1_000);
+    expect(execution.result).toMatchObject({
+      ok: true,
+      data: { latestChaptersByStructure: [expect.objectContaining({ id: chapter.id })] },
+      pagination: { nextCursor: expect.any(Number), maxChars: 1_000 }
+    });
   });
 });

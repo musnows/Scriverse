@@ -934,6 +934,138 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
   });
 
+  it("story_index 首页独立返回第二十一章作为结构最新章节并明确 nextOffset", async () => {
+    const volumeId = String(runtime.store.getChapter(chapterId).volumeId);
+    const addedChapters = Array.from({ length: 20 }, (_, index) => runtime.store.createChapter(workId, {
+      volumeId,
+      title: `第${index + 2}章`,
+      content: `第${index + 2}章正文。`
+    }));
+    const latestChapterId = String(addedChapters.at(-1)?.id);
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    let observedToolResult: Record<string, unknown> = {};
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      if (completionCount === 1) {
+        expect(body.messages[0]?.content).toContain("latestChaptersByStructure 是不受当前分页影响的结构最新章节");
+        expect(body.messages[0]?.content).toContain("nextOffset 非空时用该值作为 offset");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "long-story-index",
+          type: "function",
+          function: { name: "story_index", arguments: "{}" }
+        }] } }] }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      observedToolResult = JSON.parse(String(toolMessage?.content ?? "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已识别第二十一章为最新剧情。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "找出当前最新剧情。",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(observedToolResult).toMatchObject({
+      ok: true,
+      data: {
+        totalChapters: 21,
+        offset: 0,
+        nextOffset: 20,
+        latestChaptersByStructure: [{
+          id: latestChapterId,
+          title: "第21章",
+          storyOrder: { chapter: { order: 20, isLatestByStructure: true } }
+        }]
+      }
+    });
+    expect(observedToolResult).not.toMatchObject({ data: { chapters: expect.arrayContaining([{ id: latestChapterId }]) } });
+    expect(response.body.data.content).toBe("已识别第二十一章为最新剧情。");
+    expect(completionCount).toBe(2);
+  });
+
+  it("普通 Chat 的 grep 同时返回关键词结构末位与同轨道时间末位", async () => {
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
+      content: "密钥在主线后期被交接。"
+    }).expect(200);
+    const flashbackVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({
+      title: "倒叙卷",
+      storyOrder: 8
+    }).expect(201);
+    const flashbackChapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: flashbackVolume.body.data.id,
+      title: "倒叙末章",
+      content: "密钥在倒叙中再次出现。"
+    }).expect(201);
+    const track = await request(runtime.app).post(`/api/works/${workId}/timeline-tracks`).send({ name: "主线" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/timeline`).send({
+      name: "主线交接",
+      trackId: track.body.data.id,
+      timeLabel: "第 42 日",
+      timeSort: 42,
+      chapterIds: [chapterId],
+      status: "confirmed"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/timeline`).send({
+      name: "倒叙回忆",
+      trackId: track.body.data.id,
+      timeLabel: "第 5 日",
+      timeSort: 5,
+      chapterIds: [flashbackChapter.body.data.id],
+      status: "confirmed"
+    }).expect(201);
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      if (completionCount === 1) {
+        expect(body.messages[0]?.content).toContain("grep.latestOccurrences.byStructure");
+        expect(body.messages[0]?.content).toContain("grep.latestOccurrences.byTimelineTrack");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "ordinary-last-keyword",
+          type: "function",
+          function: { name: "grep", arguments: { keyword: "密钥", limit: 1 } }
+        }] } }] }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      const result = JSON.parse(String(toolMessage?.content ?? "{}")) as Record<string, unknown>;
+      expect(result).toMatchObject({
+        ok: true,
+        data: {
+          latestOccurrences: {
+            byStructure: [{ chapterId: flashbackChapter.body.data.id, paragraphOrder: 0 }],
+            byTimelineTrack: [{
+              trackId: track.body.data.id,
+              timeSort: 42,
+              timeLabel: "第 42 日",
+              occurrence: { chapterId, paragraphOrder: 0 }
+            }]
+          },
+          matches: [{ chapterId: flashbackChapter.body.data.id, paragraphOrder: 0 }]
+        }
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "结构末位在倒叙末章，但主线最后时间是第 42 日。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "密钥最后在哪里出现？",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toContain("第 42 日");
+    expect(completionCount).toBe(2);
+  });
+
   it("已开始的对话锁定工具集，中途改作品设置不影响该对话", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -1148,6 +1280,98 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.toolCalls).toEqual([expect.objectContaining({ name: "search_story_entities", status: "completed" })]);
   });
 
+  it("时间线实体查询返回可比较时间与关联章节剧情顺序", async () => {
+    const track = await request(runtime.app).post(`/api/works/${workId}/timeline-tracks`).send({
+      name: "港口主线",
+      sortOrder: 3
+    }).expect(201);
+    const event = await request(runtime.app).post(`/api/works/${workId}/timeline`).send({
+      name: "港口密钥交接",
+      trackId: track.body.data.id,
+      timeLabel: "远航第 42 日",
+      timeSort: 42,
+      chapterIds: [chapterId],
+      status: "confirmed"
+    }).expect(201);
+    const internalAi = runtime.ai as unknown as {
+      executeAgentTool: (
+        workId: string,
+        toolCall: Record<string, unknown>,
+        maximumResultChars?: number
+      ) => Promise<{ result: Record<string, unknown> }>;
+    };
+    const smallBudgetExecution = await internalAi.executeAgentTool(workId, {
+      id: "small-budget-timeline-entity",
+      type: "function",
+      function: { name: "search_story_entities", arguments: { query: "港口密钥", categories: ["timeline"] } }
+    }, 1_000);
+    expect(JSON.stringify(smallBudgetExecution.result).length).toBeLessThanOrEqual(1_000);
+    expect(smallBudgetExecution.result).toMatchObject({
+      ok: true,
+      data: { storyOrdering: expect.any(Object), matches: expect.any(Array) },
+      pagination: { maxChars: 1_000 }
+    });
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    let observedToolResult: Record<string, unknown> = {};
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string; description?: string } }>;
+      };
+      if (completionCount === 1) {
+        const tool = body.tools?.find((candidate) => candidate.function?.name === "search_story_entities");
+        expect(tool?.function?.description).toContain("trackId、timeSort、chapterIds、chapterStoryOrders 与 orderEligible");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "timeline-knowledge",
+          type: "function",
+          function: { name: "search_story_entities", arguments: { query: "港口密钥", categories: ["timeline"] } }
+        }] } }] }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      observedToolResult = JSON.parse(String(toolMessage?.content ?? "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取可比较时间线。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "查询港口密钥交接在剧情中的时间。",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(observedToolResult).toMatchObject({
+      ok: true,
+      data: {
+        storyOrdering: expect.any(Object),
+        matches: [expect.objectContaining({
+          id: event.body.data.id,
+          sourceType: "timeline-event",
+          trackId: track.body.data.id,
+          track: { id: track.body.data.id, name: "港口主线", sortOrder: 3 },
+          timeSort: 42,
+          timeLabel: "远航第 42 日",
+          chapterIds: [chapterId],
+          chapterStoryOrders: [{
+            chapterId,
+            storyOrder: expect.objectContaining({
+              volume: expect.objectContaining({ storyOrder: 0 }),
+              chapter: expect.objectContaining({ order: 0 })
+            })
+          }],
+          orderEligible: true,
+          status: "confirmed"
+        })]
+      }
+    });
+    expect(response.body.data.content).toBe("已读取可比较时间线。");
+    expect(response.body.data.toolCalls).toEqual([expect.objectContaining({ name: "search_story_entities", status: "completed" })]);
+    expect(completionCount).toBe(2);
+  });
+
   it("覆盖所有查询工具的可选参数组合并把结构化结果交回模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -1182,14 +1406,33 @@ describe("AI 供应商、模型与建议 API", () => {
       }
       const results = new Map(body.messages.filter((message) => message.role === "tool").map((message) => [message.tool_call_id, JSON.parse(message.content ?? "{}") as Record<string, unknown>]));
       expect(results.size).toBe(calls.length);
-      expect(results.get("index-default")).toMatchObject({ ok: true, data: { offset: 0, totalChapters: 1, storyOrdering: expect.any(Object) } });
+      expect(results.get("index-default")).toMatchObject({
+        ok: true,
+        data: {
+          offset: 0,
+          totalChapters: 1,
+          storyOrdering: expect.any(Object),
+          latestChaptersByStructure: [{ id: chapterId, storyOrder: { chapter: { isLatestByStructure: true } } }]
+        }
+      });
       expect(results.get("index-page")).toMatchObject({ ok: true, data: { chapters: [{ title: "第一章", storyOrder: { volume: { storyOrder: 0 }, chapter: { order: 0 } } }] } });
       expect(results.get("chapter-summary")).toMatchObject({ ok: true, data: { storyOrdering: expect.any(Object), chapters: [{ chapterId, summary: "", storyOrder: { volume: { storyOrder: 0 }, chapter: { order: 0 } } }] } });
       expect(results.get("chapter-summary")).not.toHaveProperty("data.chapters.0.content");
       expect(results.get("chapter-content")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, content: "林舟启动了飞船。" }] } });
       expect(results.get("chapter-content")).not.toHaveProperty("data.chapters.0.summary");
       expect(results.get("chapter-both")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, summary: "", content: "林舟启动了飞船。" }] } });
-      expect(results.get("grep-default")).toMatchObject({ ok: true, data: { keyword: "林舟", limit: 20, storyOrdering: expect.any(Object), matches: [{ chapterId, chapterTitle: "第一章", paragraph: "林舟启动了飞船。", storyOrder: { volume: { storyOrder: 0 }, chapter: { order: 0 } } }] } });
+      expect(results.get("grep-default")).toMatchObject({
+        ok: true,
+        data: {
+          keyword: "林舟",
+          limit: 20,
+          storyOrdering: expect.any(Object),
+          latestOccurrences: {
+            byStructure: [{ chapterId, paragraphOrder: 0 }]
+          },
+          matches: [{ chapterId, chapterTitle: "第一章", paragraph: "林舟启动了飞船。", paragraphOrder: 0, storyOrder: { volume: { storyOrder: 0 }, chapter: { order: 0 } } }]
+        }
+      });
       expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
       expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "hybrid_exact_phonetic" } });
       expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matchMode: "hybrid_exact_phonetic", matches: expect.any(Array) } });
@@ -1431,6 +1674,7 @@ describe("AI 供应商、模型与建议 API", () => {
     runtime.store.saveChapter(chapterId, { content: "小窗口分页正文。".repeat(2_000) });
     let completionCount = 0;
     const returnedPages: Array<{ pagination: { maxChars: number; nextCursor: number | null } }> = [];
+    const requestTokenEstimates: number[] = [];
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
@@ -1444,7 +1688,7 @@ describe("AI 供应商、模型与建议 API", () => {
         }] } }] }), { status: 200 });
       }
       returnedPages.push(JSON.parse(toolMessage.content ?? "{}") as { pagination: { maxChars: number; nextCursor: number | null } });
-      expect(estimateAiTokens(JSON.stringify(body.messages))).toBeLessThan(6_000);
+      requestTokenEstimates.push(estimateAiTokens(JSON.stringify(body.messages)));
       return new Response(JSON.stringify({ choices: [{ message: { content: "已读取适配小窗口的结构化分页。" } }] }), { status: 200 });
     });
 
@@ -1453,12 +1697,14 @@ describe("AI 供应商、模型与建议 API", () => {
       instruction: "读取章节后回答。",
       scope: { type: "none" },
       modelId
-    }).expect(201);
+    });
 
+    expect(response.status, JSON.stringify(response.body)).toBe(201);
     expect(response.body.data.content).toBe("已读取适配小窗口的结构化分页。");
     expect(completionCount).toBe(2);
     expect(returnedPages[0]?.pagination.maxChars).toBeLessThan(10_000);
     expect(returnedPages[0]?.pagination.nextCursor).toEqual(expect.any(Number));
+    expect(Math.max(...requestTokenEstimates)).toBeLessThan(6_000);
   });
 
   it("模型最大输出达到上下文 95% 时工具上下文也会先压缩", async () => {
@@ -1720,8 +1966,13 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
       content: "林舟启动了飞船。\n\n顾潮独自藏起了只有自己知道的密钥。"
     }).expect(200);
+    const roleplayTrack = await request(runtime.app).post(`/api/works/${workId}/timeline-tracks`).send({
+      name: "远航主线",
+      sortOrder: 0
+    }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/timeline`).send({
       name: "顾潮藏起密钥",
+      trackId: roleplayTrack.body.data.id,
       timeLabel: "远航第 12 日",
       timeSort: 12,
       chapterIds: [chapterId],
@@ -1795,7 +2046,8 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).not.toContain("<current_time>");
       expect(systemPrompt).toContain("使用 calculate_time");
       expect(systemPrompt).toContain("使用 recall_story 按关键词查询当前正文");
-      expect(systemPrompt).toContain("storyOrdering 与 storyOrder");
+      expect(systemPrompt).toContain("latestOccurrences.byStructure");
+      expect(systemPrompt).toContain("latestOccurrences.byTimelineTrack");
       expect(JSON.stringify(body.messages)).toContain("<scene_context>");
       expect(JSON.stringify(body.messages)).toContain("<user_message>");
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
@@ -1841,6 +2093,9 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(toolMessages[2]).toContain("顾潮独自藏起了只有自己知道的密钥");
         expect(toolMessages[2]).toContain('"storyOrdering"');
         expect(toolMessages[2]).toContain('"storyOrder"');
+        expect(toolMessages[2]).toContain('"latestOccurrences"');
+        expect(toolMessages[2]).toContain('"byTimelineTrack"');
+        expect(toolMessages[2]).toContain(`"trackId":"${roleplayTrack.body.data.id}"`);
         expect(toolMessages[2]).toContain('"timeSort":12');
         expect(toolMessages[3]).toContain('"totalDays":7');
         expect(toolMessages[4]).toContain("TOOL_NOT_AVAILABLE");
