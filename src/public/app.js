@@ -3842,7 +3842,7 @@ function renderAiImageAttachments() {
     image.decoding = "async";
     const label = document.createElement("span");
     label.className = "ai-image-attachment-label";
-    label.textContent = `#${index + 1} 图片`;
+    label.textContent = `#${index + 1}`;
     preview.append(image, label);
     preview.addEventListener("click", () => openAiImagePreview(attachment));
     const remove = document.createElement("button");

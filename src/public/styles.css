@@ -2729,7 +2729,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .prompt-options .ai-roleplay-user-character { grid-column: 1 / -1; }
 .ai-panel.is-roleplaying .ai-roleplay-character { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-dark); }
 .prompt-composer { position: relative; }
-.ai-image-attachments { display: flex; gap: 5px; max-height: 38px; overflow-x: auto; overflow-y: hidden; padding: 5px 6px 0; }
+.ai-image-attachments { display: flex; gap: 5px; max-height: 38px; margin-bottom: 6px; overflow-x: auto; overflow-y: hidden; padding: 5px 0 0; }
 .ai-image-attachment { display: inline-flex; flex: 0 0 auto; align-items: center; width: auto; height: 28px; margin: 0; padding: 2px 3px 2px 4px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 5px; background: var(--paper); }
 .ai-image-attachment-preview { display: inline-flex; align-items: center; gap: 4px; width: auto; height: 22px; min-width: 0; padding: 0 3px 0 0; border: 0; background: transparent; color: var(--ink); font: 9px/1 var(--font-cjk), sans-serif; white-space: nowrap; cursor: zoom-in; }
 .ai-image-attachment-preview:hover, .ai-image-attachment-preview:focus-visible { color: var(--accent-dark); outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent); outline-offset: 1px; }

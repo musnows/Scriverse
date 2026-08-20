@@ -25,7 +25,7 @@ describe("AI 对话图片附件界面", () => {
     expect(application).toContain("function appendAiMessageImageAttachments(message, attachments)");
     expect(application).toContain('preview.className = "ai-message-image-preview"');
     expect(application).toContain("openAiImagePreview(attachment)");
-    expect(application).toContain("label.textContent = `#${index + 1} 图片`");
+    expect(application).toContain("label.textContent = `#${index + 1}`");
     expect(application).toContain("assertAiChatImageFileSize(file)");
     expect(application).toContain("clipboardImageFiles(event.clipboardData)");
     expect(application).toContain("event.stopImmediatePropagation();");
@@ -39,6 +39,7 @@ describe("AI 对话图片附件界面", () => {
     expect(styles).toContain(".ai-image-attachment-preview { display: inline-flex; align-items: center;");
     expect(styles).toContain(".ai-image-attachment-label");
     expect(styles).toContain(".ai-image-attachment-remove { display: grid; flex: 0 0 17px;");
+    expect(styles).toContain(".ai-image-attachments { display: flex; gap: 5px; max-height: 38px; margin-bottom: 6px;");
     expect(styles).toContain(".ai-image-preview-dialog { width: min(900px, 94vw);");
     expect(styles).toContain(".ai-message-image-preview { display: block; width: 68px; height: 68px;");
     expect(styles).toContain(".ai-image-button-icon { width: 17px; height: 17px;");
