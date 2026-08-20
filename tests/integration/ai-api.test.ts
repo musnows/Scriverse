@@ -374,6 +374,33 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(rejected.body.error.message).toContain("配置的供应商");
   });
 
+  it("日、月 Token 额度允许低用量正数但拒绝零和负数", async () => {
+    const { providerId } = await configureAi();
+    const workLowQuota = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      dailyTokenQuota: 1,
+      monthlyTokenQuota: 999_999
+    }).expect(200);
+    expect(workLowQuota.body.data).toMatchObject({ dailyTokenQuota: 1, monthlyTokenQuota: 999_999 });
+
+    const workZeroQuota = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ dailyTokenQuota: 0 }).expect(400);
+    expect(workZeroQuota.body.error.details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "dailyTokenQuota", message: "Token 额度必须设置大于 0" })
+    ]));
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ monthlyTokenQuota: -1 }).expect(400);
+
+    const providerLowQuota = await request(runtime.app).patch(`/api/providers/${providerId}`).send({
+      dailyTokenQuota: 1,
+      monthlyTokenQuota: 999_999
+    }).expect(200);
+    expect(providerLowQuota.body.data).toMatchObject({ dailyTokenQuota: 1, monthlyTokenQuota: 999_999 });
+
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ dailyTokenQuota: 0 }).expect(400);
+    const providerNegativeQuota = await request(runtime.app).patch(`/api/providers/${providerId}`).send({ monthlyTokenQuota: -1 }).expect(400);
+    expect(providerNegativeQuota.body.error.details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "monthlyTokenQuota", message: "Token 额度必须设置大于 0" })
+    ]));
+  });
+
   it("聊天模型和历史列表通过独立接口返回", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

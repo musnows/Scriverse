@@ -1641,10 +1641,10 @@ export class Store {
       systemPrompt: String(row?.system_prompt ?? ""),
       dailyTokenQuota: row?.daily_token_quota === null || row?.daily_token_quota === undefined
         ? null
-        : Math.max(10_000, Number(row.daily_token_quota)),
+        : Math.max(1, Number(row.daily_token_quota)),
       monthlyTokenQuota: row?.monthly_token_quota === null || row?.monthly_token_quota === undefined
         ? null
-        : Math.max(10_000, Number(row.monthly_token_quota)),
+        : Math.max(1, Number(row.monthly_token_quota)),
       autoRunEnabled: Number(row?.auto_run_enabled ?? 0) === 1,
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),

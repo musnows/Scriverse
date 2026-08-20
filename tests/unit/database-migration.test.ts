@@ -1013,6 +1013,63 @@ describe("数据库版本化迁移", () => {
     migrated.close();
   });
 
+  it("迁移 108 将日、月 Token 额度约束调整为正整数并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-positive-quota-"));
+    roots.push(root);
+    const filename = join(root, "positive-quota.db");
+    const timestamp = "2026-08-21T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
+       VALUES ('work-positive-quota', '正额度迁移', '', '', 'zh-CN', '[]', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO work_ai_settings (work_id, daily_token_quota, monthly_token_quota, updated_at)
+       VALUES ('work-positive-quota', 12345, 67890, ?)`,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO providers (id, work_id, name, base_url, encrypted_key, key_iv, key_tag, key_hint, created_at, updated_at)
+       VALUES ('provider-positive-quota', '__scriverse_platform_ai__', '正额度供应商', 'https://mock-ai.test/v1', 'encrypted', 'iv', 'tag', 'hint', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      PRAGMA foreign_keys = OFF;
+      DELETE FROM schema_migrations WHERE version = 108;
+      CREATE TABLE work_ai_settings_v107 AS SELECT * FROM work_ai_settings;
+      DROP TABLE work_ai_settings;
+      ALTER TABLE work_ai_settings_v107 RENAME TO work_ai_settings;
+      CREATE TABLE providers_v107 AS SELECT * FROM providers;
+      DROP TABLE providers;
+      ALTER TABLE providers_v107 RENAME TO providers;
+      PRAGMA foreign_keys = ON;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT daily_token_quota, monthly_token_quota FROM work_ai_settings WHERE work_id = 'work-positive-quota'")).toEqual({
+      daily_token_quota: 12345,
+      monthly_token_quota: 67890
+    });
+    expect(migrated.get("SELECT name FROM providers WHERE id = 'provider-positive-quota'")).toEqual({ name: "正额度供应商" });
+    expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_ai_settings'")?.sql)).toContain("daily_token_quota IS NULL OR daily_token_quota >= 1");
+    expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'providers'")?.sql)).toContain("monthly_token_quota IS NULL OR monthly_token_quota >= 1");
+    migrated.run("UPDATE work_ai_settings SET daily_token_quota = 1, monthly_token_quota = 1 WHERE work_id = 'work-positive-quota'");
+    migrated.run("UPDATE providers SET daily_token_quota = 1, monthly_token_quota = 1 WHERE id = 'provider-positive-quota'");
+    expect(() => migrated.run("UPDATE work_ai_settings SET daily_token_quota = 0 WHERE work_id = 'work-positive-quota'")).toThrow();
+    expect(() => migrated.run("UPDATE providers SET monthly_token_quota = -1 WHERE id = 'provider-positive-quota'")).toThrow();
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 108")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 40 将 query_story_knowledge 重命名为 search_story_entities", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-tool-rename-"));
     roots.push(root);
