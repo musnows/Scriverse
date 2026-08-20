@@ -503,6 +503,14 @@ const aiUsageQuerySchema = z.object({
   timezoneOffset: z.coerce.number().int().min(-840).max(840).default(0)
 }).strict();
 
+const adminAiConversationQuerySchema = z.object({
+  page: z.string().optional(),
+  limit: z.string().optional(),
+  q: z.string().trim().max(200).optional(),
+  workId: identifier.optional(),
+  userId: identifier.optional()
+}).strict();
+
 const platformPageSizesSchema = z.object({
   drafts: z.number().int().min(10).max(100).optional(),
   settings: z.number().int().min(10).max(100).optional(),
@@ -1320,6 +1328,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const resolvedWorkId = workId ?? auth.resolveWorkId(request.path) ?? undefined;
     if (!resolvedWorkId) return fullWorkModulePermissions();
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
+  };
+  const assertRequestAiConversationOwner = (request: Request, conversationId: string): void => {
+    if (request.authUser) store.assertAiConversationOwner(conversationId, request.authUser.userId);
   };
   const resolveConversationModelId = (workId: string, conversationId: string | undefined, requestedModelId: string | undefined): string | undefined => {
     if (!conversationId) return requestedModelId;
@@ -2675,6 +2686,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
   });
+  app.get("/api/platform/ai-conversations", (request, response) => {
+    const query = parse(adminAiConversationQuerySchema, request.query);
+    const pagination = parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 };
+    data(response, store.listAdminAiConversationsPage(pagination, {
+      query: query.q,
+      workId: query.workId,
+      userId: query.userId
+    }));
+  });
   app.get("/api/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
   app.get("/api/platform/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
   app.patch("/api/platform/ui-settings", (request, response) => {
@@ -2761,7 +2781,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       limit: request.query.limit ?? "20"
     }) ?? { page: 1, limit: 20, offset: 0 };
     const permissions = requestPermissions(request, request.params.workId);
-    data(response, mapRecords(store.listAiConversationsPage(request.params.workId, pagination), (conversation) => (
+    data(response, mapRecords(store.listAiConversationsPage(
+      request.params.workId,
+      pagination,
+      request.authUser?.userId
+    ), (conversation) => (
       redactAiConversation(conversation, permissions)
     )));
   });
@@ -2771,6 +2795,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       taskType: aiConversationTaskTypeSchema.optional()
     }).strict(), request.body ?? {});
     data(response, store.createAiConversation(request.params.workId, input.title, input.taskType), 201);
+  });
+  app.use("/api/ai-conversations/:conversationId", (request, _response, next) => {
+    assertRequestAiConversationOwner(request, request.params.conversationId);
+    next();
   });
   app.get("/api/ai-conversations/:conversationId", (request, response) => {
     const pagination = parsePagination(request.query);
@@ -2968,6 +2996,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
     }
+    if (input.conversationId) assertRequestAiConversationOwner(request, input.conversationId);
     const modelId = resolveConversationModelId(request.params.workId, input.conversationId, input.modelId);
     data(response, redactSuggestion(await ai.createSuggestion({
       workId: request.params.workId,
@@ -3011,6 +3040,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       : input.conversationId
         ? store.getAiConversationSummary(input.conversationId)
         : store.createAiConversation(request.params.workId);
+    assertRequestAiConversationOwner(request, String(conversation.id));
     if (String(conversation.workId) !== request.params.workId) {
       throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
     }
@@ -3269,7 +3299,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, await ai.searchWork(request.params.workId, query.q, {
       type: query.type,
       limit: query.limit,
-      allowedTypes: readableHybridSearchTypes(permissions)
+      allowedTypes: readableHybridSearchTypes(permissions),
+      conversationOwnerUserId: request.authUser?.userId
     }));
   });
   app.head("/api/works/:workId/export", (request, response) => {

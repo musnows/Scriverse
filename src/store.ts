@@ -53,6 +53,12 @@ type WorkListBatch = {
   covers: Map<string, Row>;
 };
 
+export type AdminAiConversationFilters = {
+  query?: string;
+  workId?: string;
+  userId?: string;
+};
+
 const WORK_LIST_BATCH_SIZE = 500;
 const ENTITY_LIST_BATCH_SIZE = 400;
 export const RECYCLE_BIN_RETENTION_DAYS = 30;
@@ -7916,7 +7922,7 @@ export class Store {
     return this.getAiConversation(conversationId);
   }
 
-  listAiConversations(workId: string): Record<string, unknown>[] {
+  listAiConversations(workId: string, userId?: string): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db.all(
       `SELECT conversation.*,
@@ -7924,13 +7930,16 @@ export class Store {
         COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
        FROM ai_conversations conversation
        WHERE conversation.work_id = ?
+         AND (? IS NULL OR conversation.created_by_user_id = ?)
        ORDER BY conversation.is_favorite DESC, conversation.updated_at DESC, conversation.created_at DESC
        LIMIT 100`,
-      workId
+      workId,
+      userId ?? null,
+      userId ?? null
     ).map((row) => this.mapAiConversation(row));
   }
 
-  listAiConversationsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+  listAiConversationsPage(workId: string, pagination: Pagination, userId?: string): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.db.all(
@@ -7939,11 +7948,89 @@ export class Store {
         COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
        FROM ai_conversations conversation
        WHERE conversation.work_id = ?
+         AND (? IS NULL OR conversation.created_by_user_id = ?)
        ORDER BY conversation.is_favorite DESC, conversation.updated_at DESC, conversation.created_at DESC${page.sql}`,
       workId,
+      userId ?? null,
+      userId ?? null,
       ...page.params
     );
     return paginated(rows.map((row) => this.mapAiConversation(row)), pagination);
+  }
+
+  assertAiConversationOwner(conversationId: string, userId: string): void {
+    const conversation = this.db.get("SELECT created_by_user_id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (optionalString(conversation, "created_by_user_id") !== userId) {
+      throw new AppError(403, "AI_CONVERSATION_ACCESS_DENIED", "你只能访问自己创建的 AI 对话");
+    }
+  }
+
+  listAdminAiConversationsPage(
+    pagination: Pagination,
+    filters: AdminAiConversationFilters = {}
+  ): PaginatedResult<Record<string, unknown>> {
+    const where: string[] = [];
+    const params: SQLInputValue[] = [];
+    if (filters.workId) {
+      where.push("conversation.work_id = ?");
+      params.push(filters.workId);
+    }
+    if (filters.userId) {
+      where.push("conversation.created_by_user_id = ?");
+      params.push(filters.userId);
+    }
+    const normalizedQuery = filters.query?.normalize("NFKC").trim() ?? "";
+    if (normalizedQuery) {
+      const pattern = `%${escapeSqlLikePattern(normalizedQuery)}%`;
+      where.push(`(
+        conversation.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+        OR work.title LIKE ? ESCAPE '\\' COLLATE NOCASE
+        OR creator.username LIKE ? ESCAPE '\\' COLLATE NOCASE
+        OR creator.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
+        OR EXISTS (
+          SELECT 1 FROM ai_conversation_messages searched_message
+          WHERE searched_message.conversation_id = conversation.id
+            AND searched_message.content LIKE ? ESCAPE '\\' COLLATE NOCASE
+        )
+      )`);
+      params.push(pattern, pattern, pattern, pattern, pattern);
+    }
+    const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT conversation.*,
+        work.title AS work_title,
+        work.deleted_at AS work_deleted_at,
+        creator.username AS creator_username,
+        creator.display_name AS creator_display_name,
+        creator.role AS creator_role,
+        creator.status AS creator_status,
+        (SELECT COUNT(*) FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id) AS message_count,
+        COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
+       FROM ai_conversations conversation
+       JOIN works work ON work.id = conversation.work_id
+       LEFT JOIN users creator ON creator.id = conversation.created_by_user_id
+       ${whereSql}
+       ORDER BY conversation.updated_at DESC, conversation.created_at DESC${page.sql}`,
+      ...params,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({
+      ...this.mapAiConversation(row),
+      work: {
+        id: requiredString(row, "work_id"),
+        title: requiredString(row, "work_title"),
+        deleted: Boolean(optionalString(row, "work_deleted_at"))
+      },
+      creator: optionalString(row, "created_by_user_id") ? {
+        userId: requiredString(row, "created_by_user_id"),
+        username: requiredString(row, "creator_username"),
+        displayName: requiredString(row, "creator_display_name"),
+        role: requiredString(row, "creator_role"),
+        status: requiredString(row, "creator_status")
+      } : null
+    })), pagination);
   }
 
   getAiConversationSummary(conversationId: string): Record<string, unknown> {
