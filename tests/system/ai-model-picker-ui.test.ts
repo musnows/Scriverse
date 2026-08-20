@@ -17,12 +17,18 @@ describe("AI 模型选择收纳界面", () => {
     expect(page).toContain('class="ai-model-picker-icon"');
     expect(page).toContain('id="ai-model-popover" class="ai-model-popover hidden" role="dialog"');
     expect(page).toContain('<label id="ai-model-popover-title" for="ai-model">实际使用模型</label>');
-    expect(page).toContain('<select id="ai-model" aria-label="实际使用模型">');
+    expect(page).toContain('<select id="ai-model" class="ai-model-native-select" aria-label="实际使用模型">');
+    expect(page).toContain('id="ai-model-options" class="ai-model-options" role="listbox"');
+    expect(page).toContain('id="ai-attachment-button" class="ai-attachment-button hidden"');
+    expect(page).toContain('id="ai-attachment-input" class="ai-attachment-input" type="file"');
     expect(page).toContain("feature=ai-model-picker-v1");
     expect(page).toContain("feature=ai-fork-model-unlock-v1");
 
     expect(application).toContain("function selectedAiModelLabel()");
     expect(application).toContain("function aiConversationModelLocked()");
+    expect(application).toContain("aiConversationHasImages");
+    expect(application).toContain("hasImageAttachments");
+    expect(application).toContain("modelLockedByImage");
     expect(application).toContain("function syncAiModelPicker()");
     expect(application).toContain("const modelLocked = aiConversationModelLocked();");
     expect(application).toContain('button.setAttribute("aria-label", label);');
@@ -36,11 +42,18 @@ describe("AI 模型选择收纳界面", () => {
     expect(application).toContain('!event.target.closest("#ai-model-picker") && !event.target.closest("#ai-model-popover")');
     expect(application).toContain('if (!$("#ai-model-popover").classList.contains("hidden")) {');
     expect(application).toContain("syncAiModelPicker();");
+    expect(application).toContain("function renderAiModelOptions()");
+    expect(application).toContain("model.multimodalEnabled === true");
+    expect(application).toContain("aiModelImageIconMarkup()");
+    expect(application).toContain("function syncAiImageAttachmentControl()");
 
     expect(styles).toContain(".ai-model-picker { display: grid; flex: 0 0 32px;");
     expect(styles).toContain(".ai-model-picker-icon { width: 18px; height: 18px;");
     expect(styles).toContain(".ai-model-popover { position: absolute; right: 0;");
     expect(styles).toContain(".ai-model-popover::after { position: absolute; right: 49px;");
     expect(styles).toContain(".ai-model-popover.hidden { display: none; }");
+    expect(styles).toContain(".ai-model-options { display: grid;");
+    expect(styles).toContain(".ai-model-option-image-icon");
+    expect(styles).toContain(".ai-attachment-button { position: absolute; bottom: 8px; left: 8px;");
   });
 });

@@ -94,6 +94,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".chapter-stats { display: none; }");
     expect(styles.text).toContain(".editor-body { display: flex; grid-row: 3; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
+    expect(styles.text).toContain(".user-message { width: fit-content; max-width: 60%; margin-left: auto;");
+    expect(styles.text).toContain(".ai-prompt { display: block; width: 100%; min-height: 104px; margin: 0;");
+    expect(styles.text).toContain(".ai-feed { flex: 1; min-height: 0; overflow-y: auto;");
     expect(application.text).toContain("function renderChapterLineNumbers({ targetLineIndex = null } = {})");
     expect(application.text).toContain("syncChapterLineNumberScroll");
     expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style, layout, lineWindow, getLineBounds, totalHeight)");
@@ -439,6 +442,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("async function openAvatarCropDialog(file)");
     expect(application.text).toContain("const defaultImageUploadLimits = {");
     expect(application.text).toContain("imageUploadLimits.attachmentBytes");
+    expect(application.text).toContain("imageUploadLimits.chatImageBytes");
     expect(application.text).toContain("封面不支持 GIF 图片");
     expect(application.text).toContain("支持 PNG、JPEG、WebP；文件不超过");
     expect(application.text).toContain("uploadWithProgress");
@@ -927,14 +931,18 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { flex: 1 1 auto; height: auto; min-height: 0; }");
     expect(application.text).toContain('field("protocol", "接口协议", "select", protocol');
+    expect(application.text).toContain('api("/api/platform/ai/protocols")');
+    expect(application.text).toContain('const providerProtocolFieldOptions = protocolOptions.map((option) => [option.value, option.label])');
     expect(application.text).toContain('name="useMaxCompletionTokens"');
     expect(application.text).toContain('maxTokensParameter: form.get("useMaxCompletionTokens") === "on" ? "max_completion_tokens" : "max_tokens"');
-    expect(application.text).toContain('maxTokensParameterFieldElement.hidden = anthropic');
-    expect(application.text).toContain('maxTokensParameterFieldElement.classList.toggle("hidden", anthropic)');
+    expect(application.text).toContain('const supportsMaxCompletionTokens = selectedProtocolOption(protocolSelect.value)?.supportsMaxCompletionTokens !== false');
+    expect(application.text).toContain('maxTokensParameterFieldElement.hidden = !supportsMaxCompletionTokens');
+    expect(application.text).toContain('maxTokensParameterFieldElement.classList.toggle("hidden", !supportsMaxCompletionTokens)');
     expect(application.text).toContain('最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}');
     expect(application.text).not.toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain('item && item.providerStatus === "enabled"');
     expect(application.text).toContain('class="model-connection-test"');
+    expect(application.text).toContain('supportsMultimodalModelProtocol(provider?.protocol, protocolOptions)');
     expect(application.text).toContain('data-test-model="${esc(item.id)}"');
     expect(application.text).toContain('provider.status === "enabled" ? `<button data-test-provider=');
     expect(application.text).not.toContain("model-test-button");

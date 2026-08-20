@@ -83,7 +83,7 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ChapterAnnotationKind = "note" | "todo";
 type ImportMode = "append" | "overwrite";
 
-export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations", "ai-chat"] as const satisfies readonly WorkPermissionModule[];
 export const WORK_AGENT_TOOL_IDS = [
   "story_index",
   "read_chapters",
@@ -577,6 +577,7 @@ type AiConversationMessageInput = {
     processSteps?: unknown[];
     reasoningContent?: string;
     anthropicContent?: unknown[];
+    chatImageAttachmentIds?: string[];
   };
 };
 
@@ -599,7 +600,7 @@ type BeginAiConversationStreamRequestInput = {
   userMessage: {
     content: string;
     citations?: unknown[];
-    metadata?: { mentionCharacterIds?: string[]; mentionRaceIds?: string[]; mentionOrganizationIds?: string[]; modelId?: string };
+    metadata?: { mentionCharacterIds?: string[]; mentionRaceIds?: string[]; mentionOrganizationIds?: string[]; modelId?: string; chatImageAttachmentIds?: string[] };
     existingMessageId?: string;
   };
 };
@@ -6504,9 +6505,16 @@ export class Store {
       ["chapter_versions", "content"],
       ["file_versions", "snapshot_json"]
     ] as const;
-    return sources.reduce((count, [table, column]) => count + Number(
+    const historicalCount = sources.reduce((count, [table, column]) => count + Number(
       this.db.get(`SELECT COUNT(*) AS count FROM ${table} WHERE instr(${column}, ?) > 0`, needle)?.count ?? 0
     ), 0);
+    const conversationCount = Number(
+      this.db.get(
+        "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE instr(metadata_json, ?) > 0",
+        attachmentId
+      )?.count ?? 0
+    );
+    return historicalCount + conversationCount;
   }
 
   queueUnreferencedAttachments(retentionMs = 24 * 60 * 60_000, limit = 100): number {
@@ -8159,6 +8167,13 @@ export class Store {
     return this.aiConversationLockedModelId(conversationId);
   }
 
+  getAiConversationHasImageAttachments(conversationId: string, workId: string): boolean {
+    const conversation = this.db.get("SELECT work_id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    return this.aiConversationHasImageAttachments(conversationId);
+  }
+
   private aiConversationLockedModelId(conversationId: string): string | null {
     const messages = this.db.all(
       `SELECT metadata_json FROM ai_conversation_messages
@@ -8171,6 +8186,20 @@ export class Store {
       if (typeof metadata.modelId === "string" && metadata.modelId.trim()) return metadata.modelId.trim();
     }
     return null;
+  }
+
+  private aiConversationHasImageAttachments(conversationId: string): boolean {
+    const messages = this.db.all(
+      `SELECT metadata_json FROM ai_conversation_messages
+       WHERE conversation_id = ? AND role = 'user'
+       ORDER BY created_at, rowid`,
+      conversationId
+    );
+    return messages.some((message) => {
+      const metadata = json<Record<string, unknown>>(requiredString(message, "metadata_json"), {});
+      return Array.isArray(metadata.chatImageAttachmentIds)
+        && metadata.chatImageAttachmentIds.some((attachmentId) => typeof attachmentId === "string" && attachmentId.trim().length > 0);
+    });
   }
 
   getAiConversationInjectedEntities(conversationId: string, workId: string): AiInjectedEntities {
@@ -8798,6 +8827,8 @@ export class Store {
     const timestamp = now();
     const workId = requiredString(conversation, "work_id");
     const sourceTitle = requiredString(conversation, "title");
+    const sourceHasImageAttachments = this.aiConversationHasImageAttachments(conversationId);
+    const sourceLockedModelId = sourceHasImageAttachments ? this.aiConversationLockedModelId(conversationId) : null;
     const title = requestedTitle?.trim() || `${sourceTitle} · 分支`;
     const sourceCompactedCount = Math.max(0, numberValue(conversation, "compacted_message_count"));
     const forkCompactedCount = targetIndex + 1 >= sourceCompactedCount ? Math.min(sourceCompactedCount, targetIndex + 1) : 0;
@@ -8829,7 +8860,13 @@ export class Store {
       for (const message of messages.slice(0, targetIndex + 1)) {
         const role = requiredString(message, "role");
         const inheritedMetadata = json<Record<string, unknown>>(requiredString(message, "metadata_json"), {});
-        if (role === "user") delete inheritedMetadata.modelId;
+        if (role === "user") {
+          if (sourceHasImageAttachments && sourceLockedModelId && typeof inheritedMetadata.modelId !== "string") {
+            inheritedMetadata.modelId = sourceLockedModelId;
+          } else if (!sourceHasImageAttachments) {
+            delete inheritedMetadata.modelId;
+          }
+        }
         this.db.run(
           "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           id("message"),
@@ -8897,7 +8934,9 @@ export class Store {
   private mapAiConversation(row: Row): Record<string, unknown> {
     const roleplayCharacterId = optionalString(row, "roleplay_character_id");
     const roleplayUserCharacterId = optionalString(row, "roleplay_user_character_id");
-    const lockedModelId = this.aiConversationLockedModelId(requiredString(row, "id"));
+    const conversationId = requiredString(row, "id");
+    const lockedModelId = this.aiConversationLockedModelId(conversationId);
+    const hasImageAttachments = this.aiConversationHasImageAttachments(conversationId);
     const roleplayCharacter = roleplayCharacterId
       ? this.db.get("SELECT id, name, code FROM characters WHERE id = ? AND work_id = ?", roleplayCharacterId, requiredString(row, "work_id"))
       : undefined;
@@ -8916,6 +8955,7 @@ export class Store {
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
       taskType: optionalString(row, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat"),
       ...(lockedModelId ? { modelId: lockedModelId } : {}),
+      ...(hasImageAttachments ? { hasImageAttachments: true, modelLockedByImage: true } : {}),
       contextScope: json<ContextScope>(optionalString(row, "context_scope_json") ?? "", { type: "none" }),
       roleplayCharacter: roleplayCharacter ? {
         id: requiredString(roleplayCharacter, "id"),

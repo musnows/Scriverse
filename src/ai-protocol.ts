@@ -1,10 +1,54 @@
 import type { AiMessage } from "./domain.js";
 import { normalizeBaseUrl } from "./utils.js";
 
-export const AI_PROVIDER_PROTOCOLS = ["openai-chat-completions", "anthropic-messages", "google-vertex"] as const;
+export const AI_PROVIDER_PROTOCOLS = ["openai-chat-completions", "openai-responses", "anthropic-messages", "google-vertex"] as const;
 export type AiProviderProtocol = (typeof AI_PROVIDER_PROTOCOLS)[number];
 export const MAX_TOKENS_PARAMETERS = ["max_tokens", "max_completion_tokens"] as const;
 export type MaxTokensParameter = (typeof MAX_TOKENS_PARAMETERS)[number];
+
+export type AiProviderProtocolOption = {
+  value: AiProviderProtocol;
+  label: string;
+  defaultBaseUrl: string;
+  credentialKind: "api-key" | "service-account-json";
+  supportsMultimodal: boolean;
+  supportsMaxCompletionTokens: boolean;
+};
+
+export const AI_PROVIDER_PROTOCOL_OPTIONS: readonly AiProviderProtocolOption[] = Object.freeze([
+  {
+    value: "openai-chat-completions",
+    label: "OpenAI Chat Completions",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    credentialKind: "api-key",
+    supportsMultimodal: true,
+    supportsMaxCompletionTokens: true
+  },
+  {
+    value: "openai-responses",
+    label: "OpenAI Responses",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    credentialKind: "api-key",
+    supportsMultimodal: true,
+    supportsMaxCompletionTokens: false
+  },
+  {
+    value: "anthropic-messages",
+    label: "Anthropic Messages",
+    defaultBaseUrl: "https://api.anthropic.com",
+    credentialKind: "api-key",
+    supportsMultimodal: true,
+    supportsMaxCompletionTokens: false
+  },
+  {
+    value: "google-vertex",
+    label: "Google Vertex",
+    defaultBaseUrl: "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi",
+    credentialKind: "service-account-json",
+    supportsMultimodal: true,
+    supportsMaxCompletionTokens: true
+  }
+]);
 
 export function isAiProviderProtocol(value: string): value is AiProviderProtocol {
   return (AI_PROVIDER_PROTOCOLS as readonly string[]).includes(value);
@@ -14,10 +58,12 @@ export function usesOpenAiChatCompletionsShape(protocol: AiProviderProtocol): bo
   return protocol === "openai-chat-completions" || protocol === "google-vertex";
 }
 
+export function usesOpenAiResponsesShape(protocol: AiProviderProtocol): boolean {
+  return protocol === "openai-responses";
+}
+
 export function providerProtocolLabelText(protocol: AiProviderProtocol): string {
-  if (protocol === "anthropic-messages") return "Anthropic Messages";
-  if (protocol === "google-vertex") return "Google Vertex";
-  return "Chat Completions";
+  return AI_PROVIDER_PROTOCOL_OPTIONS.find((option) => option.value === protocol)?.label ?? "AI provider";
 }
 
 export type CompletionToolCall = {
@@ -62,7 +108,7 @@ export type CompletionPayload = {
 };
 
 export function normalizeProviderBaseUrl(value: string): string {
-  return normalizeBaseUrl(value).replace(/\/messages$/u, "");
+  return normalizeBaseUrl(value).replace(/\/(?:messages|responses)$/u, "");
 }
 
 function appendVersionedResource(baseUrl: string, resource: string): string {
@@ -72,14 +118,14 @@ function appendVersionedResource(baseUrl: string, resource: string): string {
 
 export function providerCompletionEndpoint(baseUrl: string, protocol: AiProviderProtocol): string {
   const normalized = normalizeProviderBaseUrl(baseUrl);
-  return protocol === "anthropic-messages"
-    ? appendVersionedResource(normalized, "messages")
-    : `${normalized}/chat/completions`;
+  if (protocol === "anthropic-messages") return appendVersionedResource(normalized, "messages");
+  if (protocol === "openai-responses") return appendVersionedResource(normalized, "responses");
+  return `${normalized}/chat/completions`;
 }
 
 export function providerModelEndpoints(baseUrl: string, protocol: AiProviderProtocol): string[] {
   const normalized = normalizeProviderBaseUrl(baseUrl);
-  if (usesOpenAiChatCompletionsShape(protocol)) return [`${normalized}/models`];
+  if (usesOpenAiChatCompletionsShape(protocol) || usesOpenAiResponsesShape(protocol)) return [`${normalized}/models`];
   const primary = appendVersionedResource(normalized, "models");
   const root = new URL("/v1/models", normalized).toString();
   return primary === root ? [primary] : [primary, root];
@@ -102,6 +148,50 @@ function textContent(value: CompletionMessageContent | null | undefined): Array<
   if (typeof value === "string") return value.length > 0 ? [{ type: "text", text: value }] : [];
   if (!Array.isArray(value)) return [];
   return value.filter((block) => block.type === "text" && typeof block.text === "string");
+}
+
+function anthropicContentBlocks(value: CompletionMessageContent | null | undefined): Array<Record<string, unknown>> {
+  if (typeof value === "string") return textContent(value);
+  if (!Array.isArray(value)) return [];
+  const translated = value.flatMap((block) => {
+    if (block.type === "text" && typeof block.text === "string") return [{ type: "text", text: block.text }];
+    if (block.type === "image" && block.source && typeof block.source === "object" && !Array.isArray(block.source)) {
+      return [structuredClone(block)];
+    }
+    if (block.type !== "image_url" || !block.image_url || typeof block.image_url !== "object" || Array.isArray(block.image_url)) return [];
+    const imageUrl = block.image_url as Record<string, unknown>;
+    if (typeof imageUrl.url !== "string" || imageUrl.url.length === 0) return [];
+    const dataUrl = imageUrl.url.match(/^data:([^;,]+);base64,(.*)$/u);
+    return [{
+      type: "image",
+      source: dataUrl
+        ? { type: "base64", media_type: dataUrl[1], data: dataUrl[2] }
+        : { type: "url", url: imageUrl.url }
+    }];
+  });
+  // Anthropic 官方建议先放图片再放文本；保留各自的相对顺序，兼容对块顺序敏感的代理。
+  return [
+    ...translated.filter((block) => block.type === "image"),
+    ...translated.filter((block) => block.type !== "image")
+  ];
+}
+
+function responseInputContent(value: CompletionMessageContent | null | undefined): Array<Record<string, unknown>> {
+  if (typeof value === "string") return textContent(value).map((block) => ({ type: "input_text", text: block.text }));
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((block) => {
+    if (block.type === "text" && typeof block.text === "string") return [{ type: "input_text", text: block.text }];
+    if (block.type === "input_text" && typeof block.text === "string") return [structuredClone(block)];
+    if (block.type === "input_image" && (typeof block.image_url === "string" || typeof block.file_id === "string")) return [structuredClone(block)];
+    if (block.type !== "image_url" || !block.image_url || typeof block.image_url !== "object" || Array.isArray(block.image_url)) return [];
+    const imageUrl = block.image_url as Record<string, unknown>;
+    if (typeof imageUrl.url !== "string" || imageUrl.url.length === 0) return [];
+    return [{
+      type: "input_image",
+      image_url: imageUrl.url,
+      ...(typeof imageUrl.detail === "string" ? { detail: imageUrl.detail } : {})
+    }];
+  });
 }
 
 function parsedToolInput(value: unknown): Record<string, unknown> {
@@ -163,8 +253,17 @@ function anthropicMessages(messages: CompletionMessage[]): {
   const append = (role: "user" | "assistant", content: Array<Record<string, unknown>>): void => {
     if (content.length === 0) return;
     const previous = output.at(-1);
-    if (previous?.role === role) previous.content.push(...content);
-    else output.push({ role, content });
+    if (previous?.role !== role) {
+      output.push({ role, content });
+      return;
+    }
+    const merged = [...previous.content, ...content];
+    previous.content = merged.some((block) => block.type === "image")
+      ? [
+        ...merged.filter((block) => block.type === "image"),
+        ...merged.filter((block) => block.type !== "image")
+      ]
+      : merged;
   };
   for (const message of messages) {
     if (message.role === "system") continue;
@@ -176,9 +275,41 @@ function anthropicMessages(messages: CompletionMessage[]): {
       append("assistant", anthropicAssistantContent(message));
       continue;
     }
-    append(message.role, textContent(message.content));
+    append(message.role, anthropicContentBlocks(message.content));
   }
   return { ...(system ? { system } : {}), messages: output };
+}
+
+function serializedToolArguments(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value ?? {}) ?? "{}";
+  } catch {
+    return "{}";
+  }
+}
+
+function responsesInput(messages: CompletionMessage[]): Array<Record<string, unknown>> {
+  const output: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    if (message.role === "tool") {
+      output.push({ type: "function_call_output", call_id: message.tool_call_id, output: message.content });
+      continue;
+    }
+    const content = responseInputContent(message.content);
+    if (content.length > 0) output.push({ type: "message", role: message.role, content });
+    if (message.role === "assistant" && "tool_calls" in message) {
+      for (const toolCall of message.tool_calls ?? []) {
+        output.push({
+          type: "function_call",
+          call_id: toolCall.id,
+          name: toolCall.function.name,
+          arguments: serializedToolArguments(toolCall.function.arguments)
+        });
+      }
+    }
+  }
+  return output;
 }
 
 function anthropicTools(tools: Record<string, unknown>[]): Record<string, unknown>[] {
@@ -197,6 +328,23 @@ function anthropicTools(tools: Record<string, unknown>[]): Record<string, unknow
   });
 }
 
+function responsesTools(tools: Record<string, unknown>[]): Record<string, unknown>[] {
+  return tools.flatMap((tool) => {
+    const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function)
+      ? tool.function as Record<string, unknown>
+      : null;
+    if (!fn || typeof fn.name !== "string") return [];
+    return [{
+      type: "function",
+      name: fn.name,
+      ...(typeof fn.description === "string" ? { description: fn.description } : {}),
+      parameters: fn.parameters && typeof fn.parameters === "object" && !Array.isArray(fn.parameters)
+        ? fn.parameters
+        : { type: "object", properties: {} }
+    }];
+  });
+}
+
 export function buildCompletionRequestBody(input: {
   protocol: AiProviderProtocol;
   model: string;
@@ -208,6 +356,25 @@ export function buildCompletionRequestBody(input: {
   stream?: boolean;
 }): Record<string, unknown> {
   const tools = input.toolChoice === "auto" ? input.tools ?? [] : [];
+  if (usesOpenAiResponsesShape(input.protocol)) {
+    const parameters = { ...input.parameters };
+    const maxTokens = parameters.max_tokens ?? parameters.max_completion_tokens;
+    delete parameters.max_tokens;
+    delete parameters.max_completion_tokens;
+    if (typeof maxTokens === "number") parameters.max_output_tokens = maxTokens;
+    const reasoningEffort = parameters.reasoning_effort;
+    delete parameters.reasoning_effort;
+    if (typeof reasoningEffort === "string") parameters.reasoning = { effort: reasoningEffort };
+    delete parameters.thinking;
+    delete parameters.output_config;
+    return {
+      model: input.model,
+      input: responsesInput(input.messages),
+      ...parameters,
+      ...(tools.length > 0 ? { tools: responsesTools(tools), tool_choice: "auto" } : {}),
+      ...(input.stream ? { stream: true } : {})
+    };
+  }
   if (usesOpenAiChatCompletionsShape(input.protocol)) {
     const parameters = { ...input.parameters };
     if (input.maxTokensParameter === "max_completion_tokens") {
@@ -260,7 +427,78 @@ function anthropicFinishReason(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function parseResponsesPayload(value: unknown): CompletionPayload {
+  const response = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const output = Array.isArray(response.output) ? response.output : [];
+  const outputText = typeof response.output_text === "string" ? response.output_text : "";
+  let text = outputText;
+  let reasoning = "";
+  const toolCalls: CompletionToolCall[] = [];
+  for (const value of output) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const item = value as Record<string, unknown>;
+    if (item.type === "message") {
+      const content = Array.isArray(item.content) ? item.content : [];
+      if (!text) {
+        text = content.flatMap((part) => {
+          if (!part || typeof part !== "object" || Array.isArray(part)) return [];
+          const record = part as Record<string, unknown>;
+          return record.type === "output_text" && typeof record.text === "string" ? [record.text] : [];
+        }).join("");
+      }
+      continue;
+    }
+    if (item.type === "reasoning") {
+      const parts = [
+        ...(Array.isArray(item.summary) ? item.summary : []),
+        ...(Array.isArray(item.content) ? item.content : [])
+      ];
+      reasoning += parts.flatMap((part) => {
+        if (!part || typeof part !== "object" || Array.isArray(part)) return [];
+        const record = part as Record<string, unknown>;
+        return (record.type === "summary_text" || record.type === "reasoning_text") && typeof record.text === "string"
+          ? [record.text]
+          : [];
+      }).join("");
+      continue;
+    }
+    if (item.type === "function_call") {
+      const callId = typeof item.call_id === "string" ? item.call_id : typeof item.id === "string" ? item.id : "";
+      const name = typeof item.name === "string" ? item.name : "";
+      if (!callId || !name) continue;
+      toolCalls.push({
+        id: callId,
+        type: "function",
+        function: { name, arguments: serializedToolArguments(item.arguments) }
+      });
+    }
+  }
+  const status = typeof response.status === "string" ? response.status : "";
+  const incompleteReason = response.incomplete_details && typeof response.incomplete_details === "object" && !Array.isArray(response.incomplete_details)
+    ? (response.incomplete_details as Record<string, unknown>).reason
+    : null;
+  const finishReason = toolCalls.length > 0
+    ? "tool_calls"
+    : status === "incomplete"
+      ? incompleteReason === "max_output_tokens" ? "length" : "incomplete"
+      : status === "completed" ? "stop" : null;
+  return {
+    ...(response.usage && typeof response.usage === "object" && !Array.isArray(response.usage)
+      ? { usage: response.usage as Record<string, unknown> }
+      : {}),
+    choices: [{
+      finish_reason: finishReason,
+      message: {
+        content: text || null,
+        reasoning_content: reasoning || null,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {})
+      }
+    }]
+  };
+}
+
 export function parseCompletionPayload(protocol: AiProviderProtocol, value: unknown): CompletionPayload {
+  if (usesOpenAiResponsesShape(protocol)) return parseResponsesPayload(value);
   if (usesOpenAiChatCompletionsShape(protocol)) {
     return value && typeof value === "object" && !Array.isArray(value) ? value as CompletionPayload : {};
   }

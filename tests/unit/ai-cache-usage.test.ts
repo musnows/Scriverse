@@ -38,6 +38,16 @@ describe("AI 输入缓存命中率", () => {
     expect(resolveCacheHitPercent({ prompt_tokens_details: { cached_tokens: 600 } })).toBeUndefined();
   });
 
+  it("解析 Vertex usageMetadata 中的服务端输入用量", () => {
+    expect(resolveAiTokenUsage({
+      usageMetadata: { promptTokenCount: 1_234, candidatesTokenCount: 56 }
+    }, 700, 100)).toMatchObject({
+      inputTokens: 1_234,
+      outputTokens: 100,
+      source: "mixed"
+    });
+  });
+
   it("统一解析供应商用量并标记估算来源", () => {
     expect(resolveAiTokenUsage({
       prompt_tokens: 800,

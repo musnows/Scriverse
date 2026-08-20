@@ -31,14 +31,20 @@ describe("前端枚举中文标签", () => {
   });
 
   it("映射审核、任务、供应商和版本枚举", () => {
+    const protocolOptions = [
+      { value: "openai-responses", label: "OpenAI Responses" },
+      { value: "anthropic-messages", label: "Anthropic Messages" },
+      { value: "google-vertex", label: "Google Vertex" }
+    ];
     expect(reviewItemTypeLabel("timeline-conflict")).toBe("时间线冲突");
     expect(reviewItemTypeLabel("character-name-variant")).toBe("疑似人物名错字");
     expect(reviewStatusLabel("fixed")).toBe("已修复");
     expect(taskScopeLabel("book")).toBe("全书");
     expect(providerStatusLabel("enabled")).toBe("已启用");
     expect(providerConnectionLabel("success")).toBe("连接正常");
-    expect(providerProtocolLabel("anthropic-messages")).toBe("Anthropic Messages");
-    expect(providerProtocolLabel("google-vertex")).toBe("Google Vertex");
+    expect(providerProtocolLabel("openai-responses", protocolOptions)).toBe("OpenAI Responses");
+    expect(providerProtocolLabel("anthropic-messages", protocolOptions)).toBe("Anthropic Messages");
+    expect(providerProtocolLabel("google-vertex", protocolOptions)).toBe("Google Vertex");
     expect(chapterVersionSourceLabel("ai-suggestion")).toBe("AI 建议");
     expect(searchResultTypeLabel("chapter")).toBe("正文章节");
     expect(searchResultTypeLabel("timeline-event")).toBe("时间线事件");

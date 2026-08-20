@@ -565,7 +565,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(tested.body.data).toMatchObject({ ok: true, multimodalTested: true });
   });
 
-  it("非 Chat Completions 供应商不能启用多模态模型", async () => {
+  it("Anthropic Messages 供应商可以启用多模态模型", async () => {
     const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
       name: "Anthropic 测试供应商",
       protocol: "anthropic-messages",
@@ -573,12 +573,12 @@ describe("AI 供应商、模型与建议 API", () => {
       apiKey: "sk-anthropic-test",
       status: "enabled"
     }).expect(201);
-    const rejected = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
-      displayName: "不支持的多模态模型",
+    const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "Anthropic 多模态模型",
       modelId: "claude-test",
       multimodalEnabled: true
-    }).expect(400);
-    expect(rejected.body.error.code).toBe("MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED");
+    }).expect(201);
+    expect(model.body.data.multimodalEnabled).toBe(true);
   });
 
   it("模型默认开启 thinking，可独立设置思考强度并按模型关闭", async () => {
@@ -2020,6 +2020,40 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(reforkedReloaded.body.data.modelId).toBe(sourceModelId);
     expect((await request(runtime.app).get(`/api/ai-conversations/${source.body.data.id}`).expect(200)).body.data.modelId)
       .toBe(sourceModelId);
+  });
+
+  it("包含图片的对话及其分支始终锁定原模型", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "chat" }).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    const userMessage = runtime.store.addAiConversationMessage(conversationId, {
+      role: "user",
+      content: "请描述这张图片",
+      metadata: { modelId: "image-model-a", chatImageAttachmentIds: ["chat-image-1"] }
+    });
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data).toMatchObject({ modelId: "image-model-a", hasImageAttachments: true, modelLockedByImage: true });
+
+    const forked = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/fork`).send({
+      messageId: userMessage.id
+    }).expect(201);
+    expect(forked.body.data).toMatchObject({ modelId: "image-model-a", hasImageAttachments: true, modelLockedByImage: true });
+    expect(forked.body.data.messages[0].metadata).toMatchObject({
+      modelId: "image-model-a",
+      chatImageAttachmentIds: ["chat-image-1"]
+    });
+
+    const changed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "尝试切换图片对话模型",
+      scope: { type: "none" },
+      modelId: "image-model-b",
+      conversationId: forked.body.data.id
+    }).expect(409);
+    expect(changed.body.error.code).toBe("AI_CONVERSATION_MODEL_LOCKED");
+
+    const reforked = await request(runtime.app).post(`/api/ai-conversations/${forked.body.data.id}/fork`).send({
+      messageId: forked.body.data.messages[0].id
+    }).expect(201);
+    expect(reforked.body.data).toMatchObject({ modelId: "image-model-a", hasImageAttachments: true, modelLockedByImage: true });
   });
 
   it("对话开始后锁定实际上下文引用并在分支中保留", async () => {

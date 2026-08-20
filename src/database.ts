@@ -7,9 +7,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 103;
+export const DATABASE_SCHEMA_VERSION = 104;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -3811,7 +3811,8 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
-    if (!applied.has(103)) {
+    const aiConversationUserIndexPresent = this.all("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_ai_conversations_work_creator'").length > 0;
+    if (!applied.has(103) || !aiConversationUserIndexPresent) {
       this.transaction(() => {
         this.run(`UPDATE ai_conversations
           SET created_by_user_id = (
@@ -3824,8 +3825,63 @@ export class Database {
             )`);
         this.run(`CREATE INDEX IF NOT EXISTS idx_ai_conversations_work_creator
           ON ai_conversations(work_id, created_by_user_id, is_favorite, updated_at DESC, created_at DESC)`);
-        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (103, ?)", new Date().toISOString());
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (103, ?)", new Date().toISOString());
       });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(104)) {
+      this.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.transaction(() => {
+          this.run(`CREATE TABLE providers_v104 (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            base_url TEXT NOT NULL,
+            protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'openai-responses', 'anthropic-messages', 'google-vertex')),
+            encrypted_key TEXT NOT NULL,
+            key_iv TEXT NOT NULL,
+            key_tag TEXT NOT NULL,
+            key_hint TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'disabled',
+            connection_status TEXT NOT NULL DEFAULT 'unchecked',
+            concurrency_limit INTEGER NOT NULL DEFAULT 10 CHECK(concurrency_limit BETWEEN 1 AND 100),
+            rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
+            max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
+            max_tokens_parameter TEXT NOT NULL DEFAULT 'max_tokens' CHECK(max_tokens_parameter IN ('max_tokens', 'max_completion_tokens')),
+            default_model_id TEXT,
+            note TEXT NOT NULL DEFAULT '',
+            last_error TEXT,
+            last_success_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )`);
+          this.run(`INSERT INTO providers_v104 (
+            id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
+            connection_status, concurrency_limit, rpm_limit, max_tokens, max_tokens_parameter, default_model_id, note,
+            last_error, last_success_at, created_at, updated_at
+          )
+          SELECT
+            id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
+            connection_status, concurrency_limit, rpm_limit, max_tokens, max_tokens_parameter, default_model_id, note,
+            last_error, last_success_at, created_at, updated_at
+          FROM providers`);
+          this.run("DROP TABLE providers");
+          this.run("ALTER TABLE providers_v104 RENAME TO providers");
+          this.run(`CREATE TRIGGER IF NOT EXISTS ai_connectivity_test_states_provider_delete
+            AFTER DELETE ON providers BEGIN
+              DELETE FROM ai_connectivity_test_states WHERE object_type = 'provider' AND object_id = OLD.id;
+            END`);
+          this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (104, ?)", new Date().toISOString());
+        });
+      } finally {
+        this.raw.exec("PRAGMA foreign_keys = ON");
+      }
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
         throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
