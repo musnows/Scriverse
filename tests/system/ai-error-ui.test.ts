@@ -49,6 +49,8 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain("lines.push(`模型 ID：${modelId}`)");
     expect(application).toContain("lines.push(`调用 ID：${callId}`)");
     expect(application).toContain("lines.push(`详细原因：${failure}`)");
+    expect(application).toContain("叙界平台限制来源：${limitSource}");
+    expect(application).toContain("details.platformLimited === true");
     expect(application).toContain('return lines.join("\\n");');
     expect(application).not.toContain('return lines.join("\\n\\n");');
     expect(application).toContain("function isAgentToolCallLimitFailure(text)");

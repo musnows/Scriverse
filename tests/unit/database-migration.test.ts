@@ -137,7 +137,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA index_list(drafts)").some((index) => index.name === "idx_drafts_work")).toBe(true);
     expect(first.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'drafts'").map((row) => row.name)).toEqual(expect.arrayContaining(["drafts_binding_insert", "drafts_binding_update"]));
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
-    expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
+    expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "daily_token_quota", "monthly_token_quota", "max_tokens"].includes(String(column.name)))).toHaveLength(5);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_connectivity_test_states)").map((column) => column.name)).toEqual([
       "object_type",
@@ -978,6 +978,36 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT sort_order, story_order FROM volumes WHERE id = 'volume-story-order'"))
       .toEqual({ sort_order: 6, story_order: 6 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 105")?.count).toBe(1);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 107 为已有供应商增加日、月 Token 额度", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-provider-quota-"));
+    roots.push(root);
+    const filename = join(root, "provider-quota.db");
+    const current = new Database(filename);
+    expect(current.all("PRAGMA table_info(providers)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "daily_token_quota",
+      "monthly_token_quota"
+    ]));
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DELETE FROM schema_migrations WHERE version = 107;
+      ALTER TABLE providers DROP COLUMN daily_token_quota;
+      ALTER TABLE providers DROP COLUMN monthly_token_quota;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.all("PRAGMA table_info(providers)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "daily_token_quota",
+      "monthly_token_quota"
+    ]));
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 107")).toEqual({ count: 1 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();

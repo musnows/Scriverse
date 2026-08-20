@@ -432,7 +432,9 @@ const providerBaseSchema = z.object({
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),
   concurrencyLimit: z.number().int().min(1).max(100).optional(),
-  rpmLimit: z.number().int().min(1).max(10_000).optional()
+  rpmLimit: z.number().int().min(1).max(10_000).optional(),
+  dailyTokenQuota: z.number().int().min(10_000).max(2_000_000_000).nullable().optional(),
+  monthlyTokenQuota: z.number().int().min(10_000).max(2_000_000_000).nullable().optional()
 });
 
 function refineProviderApiKey(
@@ -1167,6 +1169,7 @@ export function publicAiStreamError(error: unknown): {
   code: string;
   message: string;
   status?: number;
+  details?: Record<string, unknown>;
   failure?: string;
   callId?: string;
   providerName?: string;
@@ -1180,10 +1183,30 @@ export function publicAiStreamError(error: unknown): {
     const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
       ? error.details as Record<string, unknown>
       : null;
+    const publicQuotaDetails = details?.platformLimited === true
+      ? Object.fromEntries([
+        "platformLimited",
+        "limitScope",
+        "limitPeriod",
+        "workId",
+        "providerId",
+        "providerName",
+        "dailyTokenQuota",
+        "monthlyTokenQuota",
+        "usedTokens",
+        "remainingTokens",
+        "estimatedInputTokens",
+        "resetsAt",
+        "timezone",
+        "dayStartedAt",
+        "monthStartedAt"
+      ].filter((key) => details[key] !== undefined).map((key) => [key, details[key]]))
+      : undefined;
     return {
       code: error.code,
       message: error.message,
       status: error.status,
+      ...(publicQuotaDetails ? { details: publicQuotaDetails } : {}),
       ...((error.status < 500 || error.code === "AI_CALL_FAILED") && typeof details?.failure === "string" ? { failure: details.failure } : {}),
       ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),

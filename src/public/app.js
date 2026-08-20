@@ -4656,6 +4656,12 @@ function formatAiFailureMessage(error) {
   const modelId = typeof error?.modelId === "string" ? error.modelId : typeof details.modelId === "string" ? details.modelId : "";
   if (code) lines.push(`错误码：${code}`);
   if (status) lines.push(`服务端状态：HTTP ${status}`);
+  if (details.platformLimited === true) {
+    const limitSource = details.limitScope === "provider"
+      ? `配置的供应商额度${providerName ? `（${providerName}）` : ""}`
+      : "单个小说额度";
+    lines.push(`叙界平台限制来源：${limitSource}`);
+  }
   if (providerName || providerId) lines.push(`模型供应商：${providerName || providerId}`);
   if (modelId) lines.push(`模型 ID：${modelId}`);
   if (callId) lines.push(`调用 ID：${callId}`);
@@ -11095,7 +11101,7 @@ function renderProviderCards(providers, models, protocolOptions) {
       : "";
     return `
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol, protocolOptions))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
-    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}\n每日 Token 额度：${provider.dailyTokenQuota === null || provider.dailyTokenQuota === undefined ? "未限制" : Number(provider.dailyTokenQuota).toLocaleString("zh-CN")} · 每月 Token 额度：${provider.monthlyTokenQuota === null || provider.monthlyTokenQuota === undefined ? "未限制" : Number(provider.monthlyTokenQuota).toLocaleString("zh-CN")}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
@@ -15272,6 +15278,9 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
     && protocolOptions.find((option) => option.value === protocol)?.supportsMaxCompletionTokens !== false;
   const providerProtocolFieldOptions = protocolOptions.map((option) => [option.value, option.label]);
   const maxTokensParameterField = `<div class="form-field provider-max-tokens-parameter-field" data-provider-max-tokens-parameter-field><span>最大输出令牌参数</span><label class="checkbox-field"><input name="useMaxCompletionTokens" type="checkbox" ${useMaxCompletionTokens ? "checked" : ""} aria-describedby="provider-max-tokens-parameter-hint"><span>使用 max_completion_tokens</span></label><small id="provider-max-tokens-parameter-hint" data-provider-max-tokens-parameter-hint>默认使用 max_tokens；OpenAI 新版模型可按需切换。</small></div>`;
+  const dailyTokenQuota = item?.dailyTokenQuota ?? null;
+  const monthlyTokenQuota = item?.monthlyTokenQuota ?? null;
+  const providerTokenQuotaFields = `<div class="form-field provider-token-quota-fields" data-provider-token-quota-fields><span>供应商 Token 额度</span><small>按服务器部署时区统计该供应商跨所有小说的输入与输出 Token；与单个小说额度独立。额度最低为 10,000。</small><div class="provider-token-quota-row"><label class="checkbox-field provider-token-quota-toggle"><input name="dailyTokenQuotaEnabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}><span>启用每日额度</span></label><label class="provider-token-quota-input">每日额度<input name="dailyTokenQuota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="供应商每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label></div><div class="provider-token-quota-row"><label class="checkbox-field provider-token-quota-toggle"><input name="monthlyTokenQuotaEnabled" type="checkbox" ${monthlyTokenQuota === null ? "" : "checked"}><span>启用每月额度</span></label><label class="provider-token-quota-input">每月额度<input name="monthlyTokenQuota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(monthlyTokenQuota ?? 10000))}" aria-label="供应商每月 Token 额度" ${monthlyTokenQuota === null ? "disabled" : ""}></label></div></div>`;
   openDialog(
     item ? "编辑 AI 供应商" : "新建 AI 供应商",
     field("name", "显示名称", "text", item?.name)
@@ -15281,6 +15290,7 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
       + maxTokensParameterField
       + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
       + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
+      + providerTokenQuotaFields
       + field("note", "用途备注", "textarea", item?.note)
       + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true),
     async (form) => {
@@ -15291,6 +15301,8 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
         maxTokensParameter: form.get("useMaxCompletionTokens") === "on" ? "max_completion_tokens" : "max_tokens",
         concurrencyLimit: Number(form.get("concurrencyLimit")),
         rpmLimit: Number(form.get("rpmLimit")),
+        dailyTokenQuota: form.get("dailyTokenQuotaEnabled") === "on" ? Number(form.get("dailyTokenQuota")) : null,
+        monthlyTokenQuota: form.get("monthlyTokenQuotaEnabled") === "on" ? Number(form.get("monthlyTokenQuota")) : null,
         note: form.get("note"),
         status: form.get("enabled") === "on" ? "enabled" : "disabled"
       };
@@ -15309,6 +15321,13 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
   const credentialHost = $("#dialog-fields [data-provider-credential-field]");
   const maxTokensParameterFieldElement = $("#dialog-fields [data-provider-max-tokens-parameter-field]");
   const maxTokensParameterInput = $("#dialog-fields input[name='useMaxCompletionTokens']");
+  const syncProviderTokenQuotaFields = () => {
+    for (const period of ["daily", "monthly"]) {
+      const enabled = $(`#dialog-fields input[name='${period}TokenQuotaEnabled']`);
+      const input = $(`#dialog-fields input[name='${period}TokenQuota']`);
+      input.disabled = !enabled.checked;
+    }
+  };
   const syncMaxTokensParameter = () => {
     const supportsMaxCompletionTokens = selectedProtocolOption(protocolSelect.value)?.supportsMaxCompletionTokens !== false;
     maxTokensParameterFieldElement.hidden = !supportsMaxCompletionTokens;
@@ -15322,8 +15341,11 @@ function openProviderDialog(item, protocolOptions = platformAiProtocolOptions) {
     if (!item) baseUrlInput.value = defaultBaseUrlForProtocol(nextProtocol);
     syncMaxTokensParameter();
   };
+  $("#dialog-fields input[name='dailyTokenQuotaEnabled']").addEventListener("change", syncProviderTokenQuotaFields);
+  $("#dialog-fields input[name='monthlyTokenQuotaEnabled']").addEventListener("change", syncProviderTokenQuotaFields);
   protocolSelect.addEventListener("change", syncProviderCredentialField);
   syncMaxTokensParameter();
+  syncProviderTokenQuotaFields();
 }
 
 function openModelDialog(providerId, item = null, provider = null, protocolOptions = platformAiProtocolOptions) {

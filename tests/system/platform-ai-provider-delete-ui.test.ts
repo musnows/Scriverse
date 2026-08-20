@@ -24,5 +24,10 @@ describe("平台 AI 供应商删除界面", () => {
     const dialogStart = application.indexOf("function openProviderDialog");
     const dialogSource = application.slice(dialogStart, application.indexOf("function openModelDialog", dialogStart));
     expect(dialogSource).toContain('dangerAction: item ? { label: "删除供应商", onClick: () => deletePlatformProvider(item) } : null');
+    expect(dialogSource).toContain('name="dailyTokenQuotaEnabled"');
+    expect(dialogSource).toContain('name="monthlyTokenQuotaEnabled"');
+    expect(dialogSource).toContain("与单个小说额度独立");
+    expect(dialogSource).toContain('dailyTokenQuota: form.get("dailyTokenQuotaEnabled") === "on" ? Number(form.get("dailyTokenQuota")) : null');
+    expect(dialogSource).toContain('monthlyTokenQuota: form.get("monthlyTokenQuotaEnabled") === "on" ? Number(form.get("monthlyTokenQuota")) : null');
   });
 });
