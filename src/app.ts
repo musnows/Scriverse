@@ -20,6 +20,7 @@ import {
   normalizeAiStreamIdleTimeoutSeconds
 } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
 import { AiManager } from "./ai.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import {
@@ -2276,8 +2277,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该附件所属资料模块的权限");
     }
     const content = await attachmentStorage.read(String(attachment.storageKey));
+    const fileName = attachmentDownloadFileName(
+      store.getAttachmentDownloadContextName(String(attachment.id)),
+      String(attachment.originalName)
+    );
     response.setHeader("Content-Type", String(attachment.storedMimeType));
     response.setHeader("Content-Length", String(attachment.storedByteLength));
+    response.setHeader("Content-Disposition", inlineContentDisposition(fileName));
     response.setHeader("ETag", `"${String(attachment.storedSha256)}"`);
     response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     response.setHeader("X-Content-Type-Options", "nosniff");
