@@ -693,8 +693,8 @@ export type ConfirmedTimelineOrderEvent = {
 
 export type ChapterStoryOrderDetails = {
   volume: {
-    id: string;
-    title: string;
+    volumeId: string;
+    volumeTitle: string;
     directoryOrder: number;
     storyOrder: number;
   };
@@ -2223,8 +2223,8 @@ export class Store {
     for (const row of rows) {
       result.set(requiredString(row, "chapter_id"), {
         volume: {
-          id: requiredString(row, "volume_id"),
-          title: requiredString(row, "volume_title"),
+          volumeId: requiredString(row, "volume_id"),
+          volumeTitle: requiredString(row, "volume_title"),
           directoryOrder: numberValue(row, "volume_directory_order"),
           storyOrder: numberValue(row, "volume_story_order")
         },

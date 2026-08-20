@@ -49,7 +49,7 @@ describe("story_index 目录读取", () => {
           versionNo: 1,
           summary: "第 2 章摘要",
           storyOrder: {
-            volume: { id: firstVolume.id, title: "第一卷", directoryOrder: 0, storyOrder: 0 },
+            volume: { volumeId: firstVolume.id, volumeTitle: "第一卷", directoryOrder: 0, storyOrder: 0 },
             chapter: { order: 1, type: "正文", isLatestByStructure: false }
           }
         },
@@ -59,7 +59,7 @@ describe("story_index 目录读取", () => {
           versionNo: 1,
           summary: "第 3 章摘要",
           storyOrder: {
-            volume: { id: secondVolume.id, title: "第二卷", directoryOrder: 1, storyOrder: 1 },
+            volume: { volumeId: secondVolume.id, volumeTitle: "第二卷", directoryOrder: 1, storyOrder: 1 },
             chapter: { order: 0, type: "正文", isLatestByStructure: false }
           }
         }
@@ -151,12 +151,12 @@ describe("story_index 目录读取", () => {
 
     expect(page.chapters.map((chapter) => chapter.id)).toEqual([earlierChapter.id, laterChapter.id]);
     expect(page.chapters[0]?.storyOrder).toMatchObject({
-      volume: { id: directorySecond.id, directoryOrder: 1, storyOrder: 1 },
+      volume: { volumeId: directorySecond.id, directoryOrder: 1, storyOrder: 1 },
       chapter: { order: 0, isLatestByStructure: false },
       confirmedTimelineEvents: [{ name: "离港", timeSort: 1, trackId: track.id, trackName: "主线" }]
     });
     expect(page.chapters[1]?.storyOrder).toMatchObject({
-      volume: { id: directoryFirst.id, directoryOrder: 0, storyOrder: 8 },
+      volume: { volumeId: directoryFirst.id, directoryOrder: 0, storyOrder: 8 },
       chapter: { order: 0, isLatestByStructure: true },
       confirmedTimelineEvents: [{ name: "返港", timeSort: 9, trackId: track.id, trackName: "主线" }]
     });

@@ -105,7 +105,7 @@ describe("章节段落关键字索引", () => {
     expect(matches[0]).toMatchObject({
       chapterId: chapter.id,
       storyOrder: {
-        volume: { id: volume.id, directoryOrder: 0, storyOrder: 6 },
+        volume: { volumeId: volume.id, directoryOrder: 0, storyOrder: 6 },
         chapter: { order: 0, isLatestByStructure: true },
         confirmedTimelineEvents: [{ name: "港口重逢", timeSort: 12, trackId: null }]
       }
