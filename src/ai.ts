@@ -5996,15 +5996,15 @@ export class AiManager {
 
   private async executeAgentTool(
     workId: string,
-    model: ModelRow,
-    provider: ProviderRow,
     toolCall: CompletionToolCall,
     maximumResultChars = AGENT_TOOL_RESULT_MAX_CHARS,
     roleplayCharacterId: string | null = null,
     allowedToolIds?: ReadonlySet<AgentToolId>,
     signal?: AbortSignal,
     onUsage?: (usage: ResolvedAiTokenUsage) => void,
-    scope?: ContextScope
+    scope?: ContextScope,
+    model?: ModelRow,
+    provider?: ProviderRow
   ): Promise<AgentToolCallExecution> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -6167,7 +6167,7 @@ export class AiManager {
     if (name === "image") {
       const { attachmentId } = args as z.infer<typeof imageArguments>;
       try {
-        if (boolValue(model, "multimodal_enabled") && supportsMultimodalProviderProtocol(provider)) {
+        if (model && provider && boolValue(model, "multimodal_enabled") && supportsMultimodalProviderProtocol(provider)) {
           const prepared = await this.loadImageAttachment(workId, attachmentId, permissions);
           const fileName = String(prepared.attachment.originalName);
           return {
@@ -7415,15 +7415,15 @@ export class AiManager {
         for (const toolCall of toolCalls) {
           const execution = await this.executeAgentTool(
             input.workId,
-            model,
-            provider,
             toolCall,
             maximumResultChars,
             generationRoleplayCharacterId,
             allowedToolIds,
             input.signal,
             trackUsage,
-            input.scope
+            input.scope,
+            model,
+            provider
           );
           const { nativeImage, ...toolExecution } = execution;
           logger.info("ai.tool_call.completed", {
