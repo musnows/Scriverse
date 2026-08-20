@@ -191,6 +191,10 @@ export function createPreMigrationBackup(
   if (existsSync(attachmentsPath)) {
     cpSync(attachmentsPath, join(incompleteDirectory, "attachments"), { recursive: true, preserveTimestamps: true });
   }
+  const characterAvatarsPath = join(options.dataDirectory, "character-avatars");
+  if (existsSync(characterAvatarsPath)) {
+    cpSync(characterAvatarsPath, join(incompleteDirectory, "character-avatars"), { recursive: true, preserveTimestamps: true });
+  }
   writeFileSync(join(incompleteDirectory, "backup.json"), JSON.stringify({
     createdAt: new Date().toISOString(),
     fromSchemaVersion: schemaVersion,
@@ -223,6 +227,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
     runtime = createRuntime({
       databasePath: options.databasePath,
       attachmentDirectory: join(options.dataDirectory, "attachments"),
+      characterAvatarDirectory: join(options.dataDirectory, "character-avatars"),
       masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),
       publicPath,
       security,

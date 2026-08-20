@@ -110,6 +110,7 @@ export type S3BackupManagerOptions = {
   now?: () => Date;
   logger?: Logger;
   encryptionConfirmationTtlMs?: number;
+  characterAvatarStorage?: AttachmentStorage;
 };
 
 export type S3BackupQueueReceipt = {
@@ -366,6 +367,7 @@ export class S3BackupManager {
   private readonly now: () => Date;
   private readonly log: Logger;
   private readonly encryptionConfirmationTtlMs: number;
+  private readonly characterAvatarStorage: AttachmentStorage | null;
   private readonly queuedTargetIds = new Set<string>();
   private executionChain: Promise<void> = Promise.resolve();
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
@@ -393,6 +395,7 @@ export class S3BackupManager {
     this.encryptionConfirmationTtlMs = Number.isFinite(encryptionConfirmationTtlMs) && encryptionConfirmationTtlMs > 0
       ? Math.floor(encryptionConfirmationTtlMs)
       : 10 * 60_000;
+    this.characterAvatarStorage = options.characterAvatarStorage ?? null;
   }
 
   listTargets(): S3BackupTarget[] {
@@ -1035,6 +1038,26 @@ export class S3BackupManager {
           contentType,
           sha256,
           read: () => this.attachmentStorage.read(storageKey)
+        });
+      }
+    }
+    const characterAvatarStorage = this.characterAvatarStorage;
+    for (const row of this.database.all(
+      "SELECT storage_key, mime_type, sha256 FROM character_avatars ORDER BY storage_key"
+    )) {
+      const storageKey = requiredString(row, "storage_key");
+      const contentType = requiredString(row, "mime_type");
+      const sha256 = requiredString(row, "sha256");
+      const objectKey = `${rootPrefix}/img/character-avatars/${storageKey}`;
+      if (!sources.has(objectKey)) {
+        sources.set(objectKey, {
+          objectKey,
+          contentType,
+          sha256,
+          read: async () => {
+            if (!characterAvatarStorage) throw new AppError(500, "BACKUP_CHARACTER_AVATAR_STORAGE_UNAVAILABLE", "角色头像存储不可用");
+            return characterAvatarStorage.read(storageKey);
+          }
         });
       }
     }
