@@ -11,7 +11,7 @@ describe("AI 供应商、模型与建议 API", () => {
   let chapterId: string;
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
   let expectedMaxTokens: number;
-  let expectedThinkingType: "enabled" | "disabled";
+  let expectedThinkingType: "enabled" | "adaptive" | "disabled";
   let expectedThinkingEffort: "low" | "medium" | "high" | "xhigh" | "max" | undefined;
 
   beforeEach(async () => {
@@ -63,7 +63,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const providerId = provider.body.data.id;
     expect(provider.body.data.apiKey).toBe("sk-se************lue");
     expect(provider.body.data.baseUrl).toBe("https://mock-ai.test/v1");
-    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10, maxTokensParameter: "max_tokens" });
+    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10, maxTokensParameter: "max_tokens", thinkingType: "enabled" });
     expect(provider.body.data).not.toHaveProperty("maxTokens");
     const databaseRow = runtime.database.get<Record<string, unknown>>("SELECT encrypted_key FROM providers WHERE id = ?", providerId);
     expect(databaseRow?.encrypted_key).not.toContain("sk-sensitive-test-value");
@@ -617,6 +617,32 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
       instruction: "验证关闭思考参数",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+  });
+
+  it("供应商可切换 thinking.type 的 enabled 与 adaptive", async () => {
+    const { providerId, modelId } = await configureAi();
+    const invalid = await request(runtime.app).patch(`/api/providers/${providerId}`).send({ thinkingType: "unsupported" }).expect(400);
+    expect(invalid.body.error.code).toBe("VALIDATION_ERROR");
+
+    const updated = await request(runtime.app).patch(`/api/providers/${providerId}`).send({ thinkingType: "adaptive" }).expect(200);
+    expect(updated.body.data.thinkingType).toBe("adaptive");
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expectedThinkingType = "adaptive";
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证自适应思考参数",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEnabled: false }).expect(200);
+    expectedThinkingType = "disabled";
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证关闭思考仍发送 disabled",
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(201);

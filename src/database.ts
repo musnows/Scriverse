@@ -7,9 +7,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段；版本 98 增加正文稳定等待配置；版本 99 持久化关系扮演中的用户角色；版本 100 增加平台 AI 流事件空闲超时配置；版本 101 将平台 AI 流事件空闲超时上限提升至 600 秒；版本 102 创建角色头像元数据表；版本 103 回填历史 AI 对话归属并建立用户列表索引；版本 104 扩大供应商协议约束以支持 OpenAI Responses；版本 105 增加独立分卷剧情顺序；版本 106 增加供应商思考类型配置。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 105;
+export const DATABASE_SCHEMA_VERSION = 106;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -462,6 +462,7 @@ export class Database {
         rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
         max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
         max_tokens_parameter TEXT NOT NULL DEFAULT 'max_tokens' CHECK(max_tokens_parameter IN ('max_tokens', 'max_completion_tokens')),
+        thinking_type TEXT NOT NULL DEFAULT 'enabled' CHECK(thinking_type IN ('enabled', 'adaptive')),
         default_model_id TEXT,
         note TEXT NOT NULL DEFAULT '',
         last_error TEXT,
@@ -3900,6 +3901,22 @@ export class Database {
         }
         this.run("CREATE INDEX IF NOT EXISTS idx_volumes_story_order ON volumes(work_id, story_order)");
         this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (105, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const providerThinkingTypePresent = this.all("PRAGMA table_info(providers)").some((row) => String(row.name) === "thinking_type");
+    if (!applied.has(106) || !providerThinkingTypePresent) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(providers)").map((row) => String(row.name)));
+        if (!columns.has("thinking_type")) {
+          this.run("ALTER TABLE providers ADD COLUMN thinking_type TEXT NOT NULL DEFAULT 'enabled' CHECK(thinking_type IN ('enabled', 'adaptive'))");
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (106, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

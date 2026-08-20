@@ -9,6 +9,7 @@ import {
 } from "./domain.js";
 import {
   buildCompletionRequestBody,
+  AI_THINKING_TYPES,
   isAiProviderProtocol,
   normalizeProviderBaseUrl,
   parseCompletionPayload,
@@ -17,6 +18,7 @@ import {
   providerProtocolLabelText,
   providerRequestHeaders,
   type AiProviderProtocol,
+  type AiThinkingType,
   type CompletionMessage,
   type CompletionMessageContent,
   type CompletionPayload,
@@ -109,6 +111,7 @@ type ProviderInput = {
   baseUrl: string;
   apiKey: string;
   protocol?: AiProviderProtocol;
+  thinkingType?: AiThinkingType;
   maxTokensParameter?: MaxTokensParameter;
   status?: "enabled" | "disabled";
   note?: string;
@@ -555,6 +558,11 @@ function providerProtocol(provider: Row): AiProviderProtocol {
   throw new AppError(500, "INVALID_PROVIDER_PROTOCOL", `不支持的供应商协议：${value || "(empty)"}`);
 }
 
+function providerThinkingType(provider: Row): AiThinkingType {
+  const value = stringValue(provider, "thinking_type");
+  return (AI_THINKING_TYPES as readonly string[]).includes(value) ? value as AiThinkingType : "enabled";
+}
+
 function supportsMultimodalProviderProtocol(provider: Row): boolean {
   return ["openai-chat-completions", "openai-responses", "anthropic-messages", "google-vertex"].includes(providerProtocol(provider));
 }
@@ -592,6 +600,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   const thinkingEnabled = boolValue(model, "thinking_enabled");
   const thinkingEffort = stringValue(model, "thinking_effort");
   const protocol = providerProtocol(provider);
+  const thinkingType = providerThinkingType(provider);
   if (protocol === "openai-responses" && !thinkingEnabled) return { reasoning_effort: "none" };
   const effortParameters = thinkingEnabled && ["low", "medium", "high", "xhigh", "max"].includes(thinkingEffort)
     ? protocol === "anthropic-messages"
@@ -600,10 +609,10 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
     : {};
   if (isGeminiProviderOrModel(provider, model)) return effortParameters;
   if (protocol === "anthropic-messages" && isZhipuProvider(provider)) {
-    return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
+    return { thinking: { type: thinkingEnabled ? thinkingType : "disabled" }, ...effortParameters };
   }
   if (protocol === "anthropic-messages" && !isLongCatProvider(provider)) return effortParameters;
-  return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
+  return { thinking: { type: thinkingEnabled ? thinkingType : "disabled" }, ...effortParameters };
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
@@ -1453,6 +1462,7 @@ const providerConnectivityConfigurationFields = [
   "rpm_limit",
   "max_tokens",
   "max_tokens_parameter",
+  "thinking_type",
   "default_model_id",
   "note"
 ] as const;
@@ -3264,8 +3274,8 @@ export class AiManager {
     if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, max_tokens_parameter, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, max_tokens_parameter, thinking_type, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -3279,11 +3289,12 @@ export class AiManager {
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
       maxTokensParameter,
+      input.thinkingType ?? "enabled",
       input.note ?? "",
       timestamp,
       timestamp
     );
-    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol, maxTokensParameter });
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol, maxTokensParameter, thinkingType: input.thinkingType ?? "enabled" });
     return this.getProvider(providerId);
   }
 
@@ -3305,6 +3316,8 @@ export class AiManager {
     const row = this.getProviderRow(providerId);
     const nextProtocol = input.protocol ?? providerProtocol(row);
     const currentMaxTokensParameter = providerMaxTokensParameter(row);
+    const currentThinkingType = providerThinkingType(row);
+    const nextThinkingType = input.thinkingType ?? currentThinkingType;
     if (nextProtocol === "anthropic-messages" && input.maxTokensParameter === "max_completion_tokens") {
       throw new AppError(400, "INVALID_MAX_TOKENS_PARAMETER", "Anthropic Messages 协议仅支持 max_tokens");
     }
@@ -3333,9 +3346,10 @@ export class AiManager {
       this.vertexTokenCache.clear(providerId);
     }
     if (nextMaxTokensParameter !== currentMaxTokensParameter) connectionStatus = "unchecked";
+    if (nextThinkingType !== currentThinkingType) connectionStatus = "unchecked";
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens_parameter = ?, note = ?, updated_at = ? WHERE id = ?`,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens_parameter = ?, thinking_type = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       nextBaseUrl,
       nextProtocol,
@@ -3348,6 +3362,7 @@ export class AiManager {
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
       nextMaxTokensParameter,
+      nextThinkingType,
       input.note ?? stringValue(row, "note"),
       now(),
       providerId
@@ -12128,6 +12143,7 @@ export class AiManager {
       baseUrl: stringValue(row, "base_url"),
       protocol: providerProtocol(row),
       maxTokensParameter: providerMaxTokensParameter(row),
+      thinkingType: providerThinkingType(row),
       apiKey: apiKeyHint,
       status: stringValue(row, "status"),
       connectionStatus: stringValue(row, "connection_status"),

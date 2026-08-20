@@ -3,6 +3,8 @@ import { normalizeBaseUrl } from "./utils.js";
 
 export const AI_PROVIDER_PROTOCOLS = ["openai-chat-completions", "openai-responses", "anthropic-messages", "google-vertex"] as const;
 export type AiProviderProtocol = (typeof AI_PROVIDER_PROTOCOLS)[number];
+export const AI_THINKING_TYPES = ["enabled", "adaptive"] as const;
+export type AiThinkingType = (typeof AI_THINKING_TYPES)[number];
 export const MAX_TOKENS_PARAMETERS = ["max_tokens", "max_completion_tokens"] as const;
 export type MaxTokensParameter = (typeof MAX_TOKENS_PARAMETERS)[number];
 
