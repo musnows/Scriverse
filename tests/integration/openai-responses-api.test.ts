@@ -175,6 +175,7 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
       if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "gpt-5-chat-vision" }] }), { status: 200 });
       const body = JSON.parse(String(init?.body)) as {
         input?: Array<Record<string, unknown>>;
+        tools?: Array<{ name?: string }>;
         max_output_tokens?: number;
         stream?: boolean;
       };
@@ -190,6 +191,7 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
       const imagePart = (userMessage?.content as Array<Record<string, unknown>> | undefined)
         ?.find((part) => part.type === "input_image");
       expect(imagePart?.image_url).toMatch(/^data:image\/(?:png|webp);base64,/u);
+      expect(body.tools?.some((tool) => tool.name === "image")).not.toBe(true);
       imageRequestSeen = true;
       if (!body.stream) throw new Error("聊天请求必须使用流式模式");
       return new Response([
@@ -218,7 +220,7 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
     }).expect(201);
     const modelId = String(model.body.data.id);
     await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
-    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: ["image"] }).expect(200);
 
     const stream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
       instruction: "请描述这张图片。",

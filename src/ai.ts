@@ -6761,16 +6761,27 @@ export class AiManager {
     };
     const configuredOutputTokens = Number(requestedParameters.max_tokens) || DEFAULT_MAX_TOKENS;
     const contextCompactThreshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
-    let effectiveInput = input;
+    const directImageAttachmentToolIds = input.imageAttachments?.length
+      ? this.enabledAgentToolIds(
+        input.workId,
+        input.taskType,
+        input.agentToolIds,
+        input.conversationId,
+        generationRoleplayCharacterId
+      ).filter((toolId) => toolId !== "image")
+      : undefined;
+    let effectiveInput = directImageAttachmentToolIds
+      ? { ...input, agentToolIds: directImageAttachmentToolIds }
+      : input;
     let effectiveBudget = this.contextBudget(effectiveInput, model, conversation);
     let context = this.buildContext(effectiveInput, model, effectiveBudget);
     let messages = this.buildMessages(effectiveInput, context, conversation);
-    const allowedToolIds = new Set(input.disableTools
+    const allowedToolIds = new Set(effectiveInput.disableTools
       ? []
-      : this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId, generationRoleplayCharacterId));
-    let tools = input.disableTools
+      : this.enabledAgentToolIds(effectiveInput.workId, effectiveInput.taskType, effectiveInput.agentToolIds, effectiveInput.conversationId, generationRoleplayCharacterId));
+    let tools = effectiveInput.disableTools
       ? []
-      : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId, generationRoleplayCharacterId);
+      : this.enabledAgentTools(effectiveInput.workId, effectiveInput.taskType, effectiveInput.agentToolIds, effectiveInput.conversationId, generationRoleplayCharacterId);
     let parameters: Record<string, unknown>;
     try {
       parameters = this.constrainParametersForContext(model, messages, requestedParameters, tools);
