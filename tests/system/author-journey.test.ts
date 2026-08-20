@@ -359,6 +359,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('/page-route.js?v=20260812-reader-preview-v1');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain("formatEstimatedCost");
+    expect(application.text).toContain("预估价格");
     expect(application.text).toContain("有 ${unpricedModelCount.toLocaleString(\"zh-CN\")} 个模型在价格表中未找到对应价格");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
