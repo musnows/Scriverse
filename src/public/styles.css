@@ -2814,7 +2814,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   display: grid;
   gap: 8px;
   z-index: 2147483647;
-  pointer-events: none;
+  pointer-events: auto;
   box-shadow: none;
 }
 .toast-region::backdrop { display: none; }
@@ -2833,7 +2833,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   font-size: 12px;
   line-height: 1.55;
   animation: toast-appear-top .18s ease;
+  pointer-events: auto;
 }
+.toast:not(.toast-confirmation):not(.chapter-insight-toast) { cursor: pointer; }
 .toast.ai-new-conversation-toast { white-space: pre-line; }
 .toast-region[data-position="bottom-right"] .toast { animation-name: toast-appear-bottom; }
 .toast.error {

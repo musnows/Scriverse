@@ -4817,6 +4817,14 @@ function raiseToastRegion() {
   region.showPopover();
 }
 
+function dismissToastElement(element) {
+  element.remove();
+  const region = $("#toast-region");
+  if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+    region.hidePopover();
+  }
+}
+
 function dismissDeleteToasts() {
   const region = $("#toast-region");
   region.querySelectorAll(".delete-toast").forEach((element) => element.remove());
@@ -4847,15 +4855,13 @@ function toast(message, type = "info", extraClass = "") {
   element.className = `toast ${type}${extraClass ? ` ${extraClass}` : ""}`;
   element.setAttribute("role", type === "error" ? "alert" : "status");
   element.setAttribute("aria-atomic", "true");
-  element.textContent = message;
+  const messageContent = document.createElement("span");
+  messageContent.textContent = message;
+  element.append(messageContent);
+  element.addEventListener("click", () => dismissToastElement(element), { once: true });
   region.append(element);
   raiseToastRegion();
-  setTimeout(() => {
-    element.remove();
-    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
-      region.hidePopover();
-    }
-  }, 3600);
+  setTimeout(() => dismissToastElement(element), 3600);
 }
 
 async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
@@ -4908,15 +4914,13 @@ function persistentToast(message, type = "info") {
   const element = document.createElement("div");
   element.className = `toast ${type}`;
   element.setAttribute("role", "status");
-  element.textContent = message;
+  const messageContent = document.createElement("span");
+  messageContent.textContent = message;
+  element.append(messageContent);
+  element.addEventListener("click", () => dismissToastElement(element), { once: true });
   region.append(element);
   raiseToastRegion();
-  return () => {
-    element.remove();
-    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
-      region.hidePopover();
-    }
-  };
+  return () => dismissToastElement(element);
 }
 
 function restoreToastFocus(previousFocus) {

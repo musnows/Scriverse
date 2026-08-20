@@ -14,6 +14,9 @@ describe("系统 Toast 图层", () => {
     expect(page).toContain('id="toast-region"');
     expect(page).toContain('popover="manual"');
     expect(application).toContain("function raiseToastRegion()");
+    expect(application).toContain("function dismissToastElement(element)");
+    expect(application).toContain('element.addEventListener("click", () => dismissToastElement(element), { once: true })');
+    expect(application).toContain("setTimeout(() => dismissToastElement(element), 3600)");
     expect(application).toContain('function persistentToast(message, type = "info")');
     expect(application).toContain('element.setAttribute("role", type === "error" ? "alert" : "status")');
     expect(application).toContain('element.setAttribute("aria-atomic", "true")');
@@ -49,6 +52,11 @@ describe("系统 Toast 图层", () => {
     expect(styles).toContain(".toast-region:popover-open");
     expect(styles).toContain(".toast-region::backdrop { display: none; }");
     expect(styles).toContain("background: var(--toast-bg)");
+    expect(styles).toContain("pointer-events: auto");
+    expect(styles).toContain(".toast:not(.toast-confirmation):not(.chapter-insight-toast)");
+    const toastRegionStyles = styles.match(/\.toast-region,\s*\.toast-region:popover-open\s*\{([\s\S]*?)\n\}/u)?.[1] ?? "";
+    expect(toastRegionStyles).toContain("pointer-events: auto");
+    expect(styles).not.toContain(".toast-close");
     expect(styles).toContain(".toast-confirmation");
     expect(styles).toContain(".toast-input");
     expect(styles).toContain("white-space: pre-line");
