@@ -1,13 +1,25 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LiteLlmPriceCache } from "../../src/ai-model-pricing.js";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime, createWork } from "../helpers.js";
 
 describe("AI Token 用量统计 API", () => {
   let runtime: Runtime;
 
-  beforeEach(() => {
-    runtime = createTestRuntime();
+  beforeEach(async () => {
+    const priceCache = new LiteLlmPriceCache({
+      schedule: false,
+      fetchImpl: async () => new Response(JSON.stringify({
+        "deepseek-chat": {
+          input_cost_per_token: 2.8e-7,
+          output_cost_per_token: 4.2e-7,
+          cache_read_input_token_cost: 2.8e-8
+        }
+      }))
+    });
+    expect(await priceCache.refresh()).toBe(true);
+    runtime = createTestRuntime(undefined, { liteLlmPriceCache: priceCache });
   });
 
   afterEach(async () => {
@@ -118,5 +130,35 @@ describe("AI Token 用量统计 API", () => {
 
   it("拒绝越界时区偏移", async () => {
     await request(runtime.app).get("/api/platform/ai/usage?timezoneOffset=900").expect(400);
+  });
+
+  it("没有成功价格缓存时不返回可展示的估价", async () => {
+    const emptyRuntime = createTestRuntime();
+    try {
+      const work = await createWork(emptyRuntime, "无价格缓存作品");
+      emptyRuntime.database.run(
+        `INSERT INTO ai_calls (
+           id, work_id, task_type, provider_id, model_id, context_scope_json, status,
+           input_tokens, output_tokens, created_at, completed_at
+         ) VALUES (?, ?, 'chat', 'provider', 'deepseek-chat', '{}', 'completed', ?, ?, ?, ?)`,
+        "call-without-price-cache",
+        String(work.id),
+        100,
+        20,
+        "2026-08-21T00:00:00.000Z",
+        "2026-08-21T00:00:00.000Z"
+      );
+      const platform = await request(emptyRuntime.app)
+        .get("/api/platform/ai/usage?timezoneOffset=480")
+        .expect(200);
+      expect(platform.body.data.summary).toMatchObject({
+        estimatedCost: null,
+        pricingAvailable: false,
+        pricedModelCount: 0,
+        unpricedModelCount: 1
+      });
+    } finally {
+      await emptyRuntime.close();
+    }
   });
 });

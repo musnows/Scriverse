@@ -2,7 +2,7 @@ import { createRuntime, type Runtime, type RuntimeOptions } from "../src/app.js"
 
 export function createTestRuntime(
   fetchImpl?: typeof fetch,
-  options: Pick<RuntimeOptions, "aiRetryPolicy" | "aiRetrySleep"> = {}
+  options: Pick<RuntimeOptions, "aiRetryPolicy" | "aiRetrySleep" | "liteLlmPriceCache"> = {}
 ): Runtime {
   const runtime = createRuntime({
     databasePath: ":memory:",

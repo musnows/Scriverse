@@ -309,6 +309,9 @@ describe("Anthropic Messages 供应商", () => {
       inputTokens: 30,
       outputTokens: 6,
       cachedInputTokens: 10,
+      directInputTokens: 20,
+      cacheReadInputTokens: 10,
+      cacheWriteInputTokens: 0,
       cacheEligibleInputTokens: 30,
       cacheHitRate: 33.3
     });

@@ -25,7 +25,7 @@ import {
   type CompletionToolCall,
   type MaxTokensParameter
 } from "./ai-protocol.js";
-import { estimateLiteLlmUsageCost, type ModelTokenUsage } from "./ai-model-pricing.js";
+import { estimateLiteLlmUsageCost, type LiteLlmPriceCache, type ModelTokenUsage } from "./ai-model-pricing.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
@@ -180,6 +180,7 @@ type InteractiveStreamWaitPhase = "first_event" | "between_events";
 type AiManagerOptions = {
   interactiveStreamIdleTimeoutMs?: number;
   aiChatImageMaxBytes?: number;
+  liteLlmPriceCache?: LiteLlmPriceCache;
   retryPolicy?: Partial<AiRetryPolicy>;
   retrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 };
@@ -2308,6 +2309,7 @@ export class AiManager {
   private readonly aiChatImageMaxBytes: number;
   private readonly retryPolicy: AiRetryPolicy;
   private readonly retrySleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  private readonly liteLlmPriceCache?: LiteLlmPriceCache;
   private readonly taskControllers = new Map<string, AbortController>();
   private readonly autoRunStarting = new Map<string, Set<string>>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2360,6 +2362,7 @@ export class AiManager {
       && Number(options.aiChatImageMaxBytes) > 0
       ? Number(options.aiChatImageMaxBytes)
       : DEFAULT_AI_CHAT_IMAGE_MAX_BYTES;
+    this.liteLlmPriceCache = options.liteLlmPriceCache;
     this.retryPolicy = normalizeAiRetryPolicy(options.retryPolicy);
     this.retrySleep = options.retrySleep ?? waitForAiRetry;
     this.contextBuilder = new ContextBuilder(store);
@@ -2940,7 +2943,7 @@ export class AiManager {
       cachedInputTokens: numberValue(row, "cached_input_tokens"),
       cacheWriteInputTokens: numberValue(row, "cache_write_input_tokens")
     }));
-    const pricing = estimateLiteLlmUsageCost(modelUsages);
+    const pricing = estimateLiteLlmUsageCost(modelUsages, this.liteLlmPriceCache?.getPriceTable() ?? new Map());
     const works = includeWorks
       ? this.store.db.all(
         `SELECT
