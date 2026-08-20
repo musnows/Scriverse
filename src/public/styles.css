@@ -2726,12 +2726,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .prompt-options .ai-roleplay-user-character { grid-column: 1 / -1; }
 .ai-panel.is-roleplaying .ai-roleplay-character { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-dark); }
 .prompt-composer { position: relative; }
-.ai-image-attachments { display: flex; gap: 6px; max-height: 82px; overflow-x: auto; overflow-y: hidden; padding: 6px 6px 0; }
-.ai-image-attachment { position: relative; flex: 0 0 66px; width: 66px; height: 66px; margin: 0; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 5px; background: var(--paper); }
-.ai-image-attachment img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.ai-image-attachment figcaption { position: absolute; right: 0; bottom: 0; left: 0; overflow: hidden; padding: 12px 4px 3px; background: linear-gradient(transparent, rgba(24, 20, 17, .78)); color: #fff; font: 8px/1.2 var(--font-cjk), sans-serif; text-overflow: ellipsis; white-space: nowrap; }
-.ai-image-attachment-remove { position: absolute; top: 3px; right: 3px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 1px solid rgba(255, 255, 255, .72); border-radius: 50%; background: rgba(24, 20, 17, .68); color: #fff; font: 15px/1 var(--font-latin), sans-serif; }
+.ai-image-attachments { display: flex; gap: 5px; max-height: 38px; overflow-x: auto; overflow-y: hidden; padding: 5px 6px 0; }
+.ai-image-attachment { position: relative; display: flex; flex: 0 0 42px; align-items: center; justify-content: center; width: 42px; height: 28px; margin: 0; padding: 2px 3px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 999px; background: var(--paper); }
+.ai-image-attachment-preview { display: block; width: 24px; height: 24px; padding: 0; overflow: hidden; border: 0; border-radius: 50%; background: var(--surface); cursor: zoom-in; }
+.ai-image-attachment-preview:hover, .ai-image-attachment-preview:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent); outline-offset: 1px; }
+.ai-image-attachment-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.ai-image-attachment-remove { position: absolute; top: -5px; right: -5px; z-index: 1; display: grid; place-items: center; width: 15px; height: 15px; padding: 0; border: 1px solid var(--panel); border-radius: 50%; background: var(--ink); color: var(--panel); font: 12px/1 var(--font-latin), sans-serif; }
 .ai-image-attachment-remove:hover, .ai-image-attachment-remove:focus-visible { background: var(--accent); outline: 0; }
+.ai-image-preview-dialog { width: min(900px, 94vw); max-width: calc(100vw - 24px); }
+.ai-image-preview-body { display: grid; place-items: center; min-height: 180px; max-height: calc(88vh - 106px); padding: 16px 20px 20px; overflow: auto; background: color-mix(in srgb, var(--ink) 92%, var(--panel)); }
+.ai-image-preview-body img { display: block; max-width: 100%; max-height: calc(88vh - 150px); width: auto; height: auto; object-fit: contain; border-radius: 3px; }
 .ai-attachment-input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 .ai-attachment-button { position: absolute; bottom: 8px; left: 8px; z-index: 2; display: grid; place-items: center; width: 32px; min-width: 32px; min-height: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); }
 .ai-attachment-button:hover, .ai-attachment-button:focus-visible { border-color: color-mix(in srgb, var(--accent) 56%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-dark); outline: 0; }

@@ -13,19 +13,27 @@ describe("AI 对话图片附件界面", () => {
 
     expect(page).toContain('id="ai-image-attachments" class="ai-image-attachments hidden"');
     expect(page).toContain('id="ai-attachment-button" class="ai-attachment-button hidden"');
+    expect(page).toContain('id="ai-image-preview-dialog" class="dialog ai-image-preview-dialog"');
+    expect(page).toContain('id="ai-image-preview-image"');
     expect(page).toContain('class="ai-image-button-icon"');
     expect(page).toContain('<rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect>');
     expect(page).toContain('<circle cx="9" cy="10" r="1.5"></circle>');
     expect(page).toContain('accept="image/png,image/jpeg,.jpg,.jpeg"');
     expect(application).toContain("function aiModelSupportsImageInput()");
     expect(application).toContain("function addAiImageFiles(files)");
+    expect(application).toContain("function openAiImagePreview(attachment)");
+    expect(application).toContain("assertAiChatImageFileSize(file)");
     expect(application).toContain("clipboardImageFiles(event.clipboardData)");
     expect(application).toContain("event.stopImmediatePropagation();");
     expect(application).toContain('toast("当前选择的模型不是多模态模型，无法粘贴图片附件", "error")');
     expect(application).toContain('module=ai-chat');
     expect(application).toContain("imageAttachmentIds");
     expect(application).toContain('toast("图片附件仅支持 PNG、JPG、JPEG", "error")');
+    expect(application).toContain("imageUploadLimits.chatImageBytes");
     expect(styles).toContain(".ai-attachment-button { position: absolute; bottom: 8px; left: 8px;");
+    expect(styles).toContain(".ai-image-attachment { position: relative; display: flex; flex: 0 0 42px;");
+    expect(styles).toContain(".ai-image-attachment-preview { display: block; width: 24px; height: 24px;");
+    expect(styles).toContain(".ai-image-preview-dialog { width: min(900px, 94vw);");
     expect(styles).toContain(".ai-image-button-icon { width: 17px; height: 17px;");
     expect(styles).toContain(".ai-image-attachment { position: relative;");
   });

@@ -69,7 +69,7 @@ describe("人物 Markdown 章节与附件", () => {
       masterSecret: "test-master-secret-with-at-least-32-characters",
       disableUserAuth: true,
       serveUi: false,
-      uploadLimits: { avatarBytes: 100, coverBytes: 100, attachmentBytes: 100 }
+      uploadLimits: { avatarBytes: 100, coverBytes: 100, attachmentBytes: 100, chatImageBytes: 1_048_576 }
     });
     try {
       const work = await createWork(limitedRuntime);

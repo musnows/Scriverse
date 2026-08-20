@@ -442,6 +442,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("async function openAvatarCropDialog(file)");
     expect(application.text).toContain("const defaultImageUploadLimits = {");
     expect(application.text).toContain("imageUploadLimits.attachmentBytes");
+    expect(application.text).toContain("imageUploadLimits.chatImageBytes");
     expect(application.text).toContain("封面不支持 GIF 图片");
     expect(application.text).toContain("支持 PNG、JPEG、WebP；文件不超过");
     expect(application.text).toContain("uploadWithProgress");

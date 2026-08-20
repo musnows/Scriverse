@@ -276,6 +276,17 @@ describe("OpenAI Responses 与 Anthropic 多模态请求层", () => {
     }
   });
 
+  it("聊天图片上传使用独立的 5 MB 默认上限", async () => {
+    const rejected = await request(runtime.app)
+      .post(`/api/works/${workId}/attachments?module=ai-chat`)
+      .attach("file", Buffer.alloc(5 * 1024 * 1024 + 1), { filename: "超大聊天图片.png", contentType: "image/png" })
+      .expect(413);
+    expect(rejected.body.error).toEqual({
+      code: "ATTACHMENT_TOO_LARGE",
+      message: "图片附件不能超过 5 MB"
+    });
+  });
+
   it("OpenAI Responses 的 image 工具发送附件图片并保留工具调用上下文", async () => {
     let requestedAttachmentId = "";
     let generationCount = 0;

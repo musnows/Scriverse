@@ -22,6 +22,7 @@ import { AI_CHAT_TAB_LIMIT_ENV } from "../../src/ai-chat-tab-limit.js";
 import { loadMasterSecret } from "../../src/credential-vault.js";
 import { DATABASE_SCHEMA_VERSION, Database, readDatabaseSchemaVersion } from "../../src/database.js";
 import {
+  AI_CHAT_IMAGE_MAX_BYTES_ENV,
   ATTACHMENT_IMAGE_MAX_BYTES_ENV,
   AVATAR_IMAGE_MAX_BYTES_ENV,
   COVER_IMAGE_MAX_BYTES_ENV
@@ -94,15 +95,16 @@ describe("本地服务运行时", () => {
         NODE_ENV: "test",
         [AVATAR_IMAGE_MAX_BYTES_ENV]: "1024",
         [COVER_IMAGE_MAX_BYTES_ENV]: "2048",
-        [ATTACHMENT_IMAGE_MAX_BYTES_ENV]: "4096"
+        [ATTACHMENT_IMAGE_MAX_BYTES_ENV]: "4096",
+        [AI_CHAT_IMAGE_MAX_BYTES_ENV]: "1048576"
       }
     });
     runningServers.push(running);
 
     const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as {
-      data: { uploadLimits: { avatarBytes: number; coverBytes: number; attachmentBytes: number } };
+      data: { uploadLimits: { avatarBytes: number; coverBytes: number; attachmentBytes: number; chatImageBytes: number } };
     };
-    expect(health.data.uploadLimits).toEqual({ avatarBytes: 1024, coverBytes: 2048, attachmentBytes: 4096 });
+    expect(health.data.uploadLimits).toEqual({ avatarBytes: 1024, coverBytes: 2048, attachmentBytes: 4096, chatImageBytes: 1048576 });
   });
 
   it("通过环境变量将 Beta 提交版本传入运行时健康接口", async () => {

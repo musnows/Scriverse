@@ -49,6 +49,7 @@ import {
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS, normalizeAiStreamIdleTimeoutSeconds } from "./ai-stream-timeout.js";
 import { CredentialVault } from "./credential-vault.js";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { DEFAULT_AI_CHAT_IMAGE_MAX_BYTES, formatUploadLimit } from "./upload-limits.js";
 import {
   characterExtractionHash,
   characterExtractionSelectionFingerprint,
@@ -174,6 +175,7 @@ type InteractiveStreamWaitPhase = "first_event" | "between_events";
 
 type AiManagerOptions = {
   interactiveStreamIdleTimeoutMs?: number;
+  aiChatImageMaxBytes?: number;
   retryPolicy?: Partial<AiRetryPolicy>;
   retrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 };
@@ -2200,6 +2202,7 @@ export class ContextBuilder {
 export class AiManager {
   readonly contextBuilder: ContextBuilder;
   private interactiveStreamIdleTimeoutMs: number;
+  private readonly aiChatImageMaxBytes: number;
   private readonly retryPolicy: AiRetryPolicy;
   private readonly retrySleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   private readonly taskControllers = new Map<string, AbortController>();
@@ -2250,6 +2253,10 @@ export class AiManager {
       && Number(options.interactiveStreamIdleTimeoutMs) > 0
       ? Number(options.interactiveStreamIdleTimeoutMs)
       : DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS;
+    this.aiChatImageMaxBytes = Number.isSafeInteger(options.aiChatImageMaxBytes)
+      && Number(options.aiChatImageMaxBytes) > 0
+      ? Number(options.aiChatImageMaxBytes)
+      : DEFAULT_AI_CHAT_IMAGE_MAX_BYTES;
     this.retryPolicy = normalizeAiRetryPolicy(options.retryPolicy);
     this.retrySleep = options.retrySleep ?? waitForAiRetry;
     this.contextBuilder = new ContextBuilder(store);
@@ -5259,12 +5266,12 @@ export class AiManager {
         throw new AppError(415, "AI_CHAT_ANIMATED_IMAGE_UNSUPPORTED", "AI 对话暂不支持动画图片附件");
       }
       const byteLength = Number(attachment.storedByteLength);
-      if (!Number.isInteger(byteLength) || byteLength <= 0 || byteLength > IMAGE_TOOL_MAX_BYTES) {
-        throw new AppError(413, "AI_CHAT_IMAGE_TOO_LARGE", "图片附件超过 AI 对话大小限制");
+      if (!Number.isInteger(byteLength) || byteLength <= 0 || byteLength > this.aiChatImageMaxBytes) {
+        throw new AppError(413, "AI_CHAT_IMAGE_TOO_LARGE", `图片附件不能超过 ${formatUploadLimit(this.aiChatImageMaxBytes)}`);
       }
       const image = await this.attachmentStorage.read(String(attachment.storageKey));
-      if (image.byteLength > IMAGE_TOOL_MAX_BYTES) {
-        throw new AppError(413, "AI_CHAT_IMAGE_TOO_LARGE", "图片附件超过 AI 对话大小限制");
+      if (image.byteLength > this.aiChatImageMaxBytes) {
+        throw new AppError(413, "AI_CHAT_IMAGE_TOO_LARGE", `图片附件不能超过 ${formatUploadLimit(this.aiChatImageMaxBytes)}`);
       }
       prepared.push({
         id: attachmentId,

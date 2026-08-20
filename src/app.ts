@@ -115,13 +115,16 @@ function assertImageUploadSize(byteLength: number, maximumBytes: number, message
   throw new AppError(413, "IMAGE_TOO_LARGE", message);
 }
 
-function uploadSizeError(pathname: string, limits: ImageUploadLimits): { code: string; message: string } | null {
+function uploadSizeError(pathname: string, limits: ImageUploadLimits, module = ""): { code: string; message: string } | null {
   if (pathname === "/api/auth/avatar") return { code: "IMAGE_TOO_LARGE", message: `头像图片不能超过 ${formatUploadLimit(limits.avatarBytes)}` };
   if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) {
     return { code: "IMAGE_TOO_LARGE", message: `封面图片不能超过 ${formatUploadLimit(limits.coverBytes)}` };
   }
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
-    return { code: "ATTACHMENT_TOO_LARGE", message: `图片附件不能超过 ${formatUploadLimit(limits.attachmentBytes)}` };
+    const maximumBytes = module === "ai-chat"
+      ? limits.chatImageBytes
+      : limits.attachmentBytes;
+    return { code: "ATTACHMENT_TOO_LARGE", message: `图片附件不能超过 ${formatUploadLimit(maximumBytes)}` };
   }
   return null;
 }
@@ -1352,7 +1355,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     {
       interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? platformAiStreamIdleTimeoutMs,
       retryPolicy: options.aiRetryPolicy,
-      retrySleep: options.aiRetrySleep
+      retrySleep: options.aiRetrySleep,
+      aiChatImageMaxBytes: uploadLimits.chatImageBytes
     }
   );
   const app = express();
@@ -1374,7 +1378,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       destination: attachmentStorage.temporaryDirectory,
       filename: (_request, _file, callback) => callback(null, randomUUID())
     }),
-    limits: { fileSize: uploadLimits.attachmentBytes + 1, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
+    limits: { fileSize: Math.max(uploadLimits.attachmentBytes, uploadLimits.chatImageBytes) + 1, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
 
   app.disable("x-powered-by");
@@ -2137,11 +2141,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!canWriteWorkModule(requestPermissions(request, String(request.params.workId)), accessModule)) {
       throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有编辑该资料模块的权限");
     }
+    const maximumUploadBytes = accessModule === "ai-chat" ? uploadLimits.chatImageBytes : uploadLimits.attachmentBytes;
     let storageKey: string | null = null;
     try {
+      if (request.file.size > maximumUploadBytes) {
+        throw new AppError(413, "ATTACHMENT_TOO_LARGE", `图片附件不能超过 ${formatUploadLimit(maximumUploadBytes)}`);
+      }
       const stored = await attachmentStorage.ingest(
         request.file.path,
-        accessModule === "ai-chat" ? aiChatAttachmentIngestOptions : undefined
+        accessModule === "ai-chat"
+          ? { ...aiChatAttachmentIngestOptions, maximumUploadBytes }
+          : undefined
       );
       storageKey = stored.storageKey;
       const result = store.createAttachment(String(request.params.workId), {
@@ -3300,7 +3310,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (error instanceof multer.MulterError) {
       logger.warn("http.request.upload_rejected", { ...commonFields, uploadCode: error.code });
       if (error.code === "LIMIT_FILE_SIZE") {
-        const sizeError = uploadSizeError(request.path, uploadLimits);
+        const sizeError = uploadSizeError(request.path, uploadLimits, String(request.query.module ?? ""));
         if (sizeError) {
           response.status(413).json({ error: sizeError });
           return;

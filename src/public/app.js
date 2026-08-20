@@ -488,7 +488,8 @@ document.addEventListener("scroll", (event) => showScrollbarWhileScrolling(event
 const defaultImageUploadLimits = {
   avatarBytes: 2 * 1024 * 1024,
   coverBytes: 5 * 1024 * 1024,
-  attachmentBytes: 30 * 1024 * 1024
+  attachmentBytes: 30 * 1024 * 1024,
+  chatImageBytes: 5 * 1024 * 1024
 };
 let imageUploadLimits = { ...defaultImageUploadLimits };
 
@@ -503,9 +504,10 @@ function applyImageUploadLimits(nextLimits) {
   const next = {
     avatarBytes: Number(nextLimits.avatarBytes),
     coverBytes: Number(nextLimits.coverBytes),
-    attachmentBytes: Number(nextLimits.attachmentBytes)
+    attachmentBytes: Number(nextLimits.attachmentBytes),
+    chatImageBytes: Number(nextLimits.chatImageBytes ?? defaultImageUploadLimits.chatImageBytes)
   };
-  if (![next.avatarBytes, next.coverBytes, next.attachmentBytes].every((value) => Number.isSafeInteger(value) && value > 0)) return;
+  if (![next.avatarBytes, next.coverBytes, next.attachmentBytes, next.chatImageBytes].every((value) => Number.isSafeInteger(value) && value > 0)) return;
   imageUploadLimits = next;
   const avatarCopy = document.querySelector(".avatar-settings-copy small");
   if (avatarCopy) avatarCopy.textContent = `支持 PNG、JPEG、WebP、GIF，文件不超过 ${formatUploadLimit(next.avatarBytes)}。选择后可框选正方形选区再裁剪上传。`;
@@ -521,6 +523,10 @@ function coverFileSizeMessage(file) {
 
 function assertAttachmentFileSize(file) {
   if (file.size > imageUploadLimits.attachmentBytes) throw new Error(`图片附件不能超过 ${formatUploadLimit(imageUploadLimits.attachmentBytes)}`);
+}
+
+function assertAiChatImageFileSize(file) {
+  if (file.size > imageUploadLimits.chatImageBytes) throw new Error(`图片附件不能超过 ${formatUploadLimit(imageUploadLimits.chatImageBytes)}`);
 }
 
 function uploadProgressHtml(label, fileName, progress = 0) {
@@ -3774,14 +3780,18 @@ function renderAiImageAttachments() {
     const card = document.createElement("figure");
     card.className = "ai-image-attachment";
     card.dataset.attachmentId = attachment.id;
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "ai-image-attachment-preview";
+    preview.setAttribute("aria-label", `查看图片附件：${attachment.originalName}`);
+    preview.title = "点击查看原图";
     const image = document.createElement("img");
     image.src = attachment.contentUrl;
     image.alt = attachment.originalName;
     image.loading = "lazy";
     image.decoding = "async";
-    const caption = document.createElement("figcaption");
-    caption.textContent = attachment.originalName;
-    caption.title = attachment.originalName;
+    preview.append(image);
+    preview.addEventListener("click", () => openAiImagePreview(attachment));
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ai-image-attachment-remove";
@@ -3799,9 +3809,19 @@ function renderAiImageAttachments() {
         /* 待发送附件从当前输入移除即可，未被历史消息引用的文件会由服务端回收。 */
       }
     });
-    card.append(image, caption, remove);
+    card.append(preview, remove);
     host.append(card);
   }
+}
+
+function openAiImagePreview(attachment) {
+  const dialog = $("#ai-image-preview-dialog");
+  const image = $("#ai-image-preview-image");
+  if (!dialog || !image) return;
+  image.src = attachment.contentUrl;
+  image.alt = attachment.originalName;
+  $("#ai-image-preview-meta").textContent = attachment.originalName;
+  if (!dialog.open) dialog.showModal();
 }
 
 async function discardAiImageAttachments(attachments) {
@@ -3827,7 +3847,7 @@ async function addAiImageFiles(files) {
   if (candidates.length > remaining) toast(`一次最多添加 ${AI_CHAT_IMAGE_ATTACHMENT_MAX_COUNT} 张图片附件`, "error");
   for (const file of candidates.slice(0, remaining)) {
     try {
-      assertAttachmentFileSize(file);
+      assertAiChatImageFileSize(file);
       const body = new FormData();
       body.append("file", file, file.name || "pasted-image.png");
       const uploaded = await uploadWithProgress(
@@ -17221,6 +17241,7 @@ $("#work-recycle-bin-close").addEventListener("click", () => $("#work-recycle-bi
 $("#chapter-recycle-bin-close").addEventListener("click", () => $("#chapter-recycle-bin-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
+$("#ai-image-preview-close").addEventListener("click", () => $("#ai-image-preview-dialog").close());
 document.querySelectorAll("[data-ai-tool-call-copy]").forEach((button) => {
   setAiToolCallCopyButtonState(button, false);
   button.addEventListener("click", () => void copyAiToolCallCode(button));

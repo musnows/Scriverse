@@ -15,6 +15,7 @@ const allowedFormats = new Set(["png", "jpeg", "webp", "gif"]);
 type AttachmentIngestOptions = {
   allowedFormats?: ReadonlySet<string>;
   preserveFormat?: boolean;
+  maximumUploadBytes?: number;
   unsupportedMessage?: string;
 };
 
@@ -124,8 +125,9 @@ export class AttachmentStorage {
   async ingest(sourcePath: string, options: AttachmentIngestOptions = {}): Promise<StoredAttachmentFile> {
     await this.prepare();
     const originalStats = await stat(sourcePath);
-    if (originalStats.size > this.maximumUploadBytes) {
-      throw new AppError(413, "ATTACHMENT_TOO_LARGE", `图片附件不能超过 ${formatUploadLimit(this.maximumUploadBytes)}`);
+    const maximumUploadBytes = options.maximumUploadBytes ?? this.maximumUploadBytes;
+    if (originalStats.size > maximumUploadBytes) {
+      throw new AppError(413, "ATTACHMENT_TOO_LARGE", `图片附件不能超过 ${formatUploadLimit(maximumUploadBytes)}`);
     }
     const originalSha256 = await sha256File(sourcePath);
     const isGif = await hasGifSignature(sourcePath);
