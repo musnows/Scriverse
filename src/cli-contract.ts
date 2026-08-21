@@ -73,9 +73,10 @@ export const cliResourceDefinitions = {
         title: "分卷标题，最多 200 字",
         kind: "main | prequel | extra | epilogue | appendix",
         description: "分卷说明，最多 5000 字",
-        keywords: "字符串数组，最多 100 项"
+        keywords: "字符串数组，最多 100 项",
+        storyOrder: "故事顺序，非负整数；与目录排序 sortOrder 独立"
       },
-      example: { title: "第一卷 星港", kind: "main", description: "主角离开故乡的开端", keywords: ["启程", "星港"] }
+      example: { title: "第一卷 星港", kind: "main", description: "主角离开故乡的开端", keywords: ["启程", "星港"], storyOrder: 0 }
     },
     update: {
       properties: {
@@ -83,9 +84,10 @@ export const cliResourceDefinitions = {
         kind: "分卷类型",
         description: "新说明",
         keywords: "完整替换关键词数组",
-        sortOrder: "非负整数排序值"
+        sortOrder: "非负整数目录排序值",
+        storyOrder: "故事顺序，非负整数；与目录排序 sortOrder 独立"
       },
-      example: { description: "补充星港政治冲突", keywords: ["启程", "星港", "议会"] }
+      example: { description: "补充星港政治冲突", keywords: ["启程", "星港", "议会"], storyOrder: 1 }
     },
     notes: ["分卷修改会生成版本历史；更新或删除时可提供 expectedVersionNo，版本不匹配会拒绝写入。"]
   },

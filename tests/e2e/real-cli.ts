@@ -290,12 +290,16 @@ async function run(): Promise<void> {
   const volume = createResource("volume", workId, {
     title: "第一卷",
     kind: "main",
-    description: "初始分卷"
+    description: "初始分卷",
+    storyOrder: 3
   });
   const volumeId = String(volume.id);
   assert.ok(listResource("volume", workId).some((item) => (item as Record<string, unknown>).id === volumeId));
   assert.equal(getResource("volume", volumeId)?.id, volumeId);
-  assert.equal(updateResource("volume", volumeId, { description: "更新后的分卷", keywords: ["启程"] }).description, "更新后的分卷");
+  assert.equal(Number(volume.storyOrder), 3);
+  const updatedVolume = updateResource("volume", volumeId, { description: "更新后的分卷", keywords: ["启程"], storyOrder: 5 });
+  assert.equal(updatedVolume.description, "更新后的分卷");
+  assert.equal(Number(updatedVolume.storyOrder), 5);
 
   const chapter = cliJson([
     "resource", "create", "chapter", workId, "--input", "-"
