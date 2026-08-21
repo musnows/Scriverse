@@ -25,9 +25,10 @@ describe("AI HTTP 重试策略", () => {
     expect(aiHttpRetryCount(502, policy)).toBe(10);
   });
 
-  it("403 始终不重试，其他 HTTP 错误使用普通重试配置", () => {
+  it("403 和 404 始终不重试，其他 HTTP 错误使用普通重试配置", () => {
     const policy = { retryCount: 4, backoffRetryCount: 12 };
     expect(aiHttpRetryCount(403, policy)).toBe(0);
+    expect(aiHttpRetryCount(404, policy)).toBe(0);
     expect(aiHttpRetryCount(400, policy)).toBe(4);
     expect(aiHttpRetryCount(401, policy)).toBe(4);
     expect(aiHttpRetryCount(500, policy)).toBe(4);

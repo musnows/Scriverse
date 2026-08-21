@@ -13,7 +13,9 @@ import {
   isAiProviderProtocol,
   normalizeProviderBaseUrl,
   parseCompletionPayload,
+  parseProviderModelListPage,
   providerCompletionEndpoint,
+  providerModelListPageEndpoint,
   providerModelEndpoints,
   providerProtocolLabelText,
   providerRequestHeaders,
@@ -23,7 +25,8 @@ import {
   type CompletionMessageContent,
   type CompletionPayload,
   type CompletionToolCall,
-  type MaxTokensParameter
+  type MaxTokensParameter,
+  type ProviderModelListItem
 } from "./ai-protocol.js";
 import { estimateLiteLlmUsageCost, type LiteLlmPriceCache, type ModelTokenUsage } from "./ai-model-pricing.js";
 import {
@@ -510,6 +513,8 @@ const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presen
 const DEFAULT_MAX_TOKENS = 32_000;
 const MAX_MODEL_OUTPUT_TOKENS = 2_000_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
+const MAX_IMPORTED_PROVIDER_MODELS = 10_000;
+const MAX_PROVIDER_MODEL_LIST_PAGES = 100;
 const RELATIONSHIP_MAX_FUZZY_REFERENCES = 32;
 const RELATIONSHIP_MAX_FUZZY_SOURCES = 200;
 const RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS = 4_000_000;
@@ -3594,6 +3599,164 @@ export class AiManager {
     this.vertexTokenCache.clear(providerId);
   }
 
+  async importProviderModels(providerId: string): Promise<Record<string, unknown>> {
+    const row = this.getProviderRow(providerId);
+    const protocol = providerProtocol(row);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
+    const startedAt = process.hrtime.bigint();
+    let credentialSecret = "";
+    let accessToken = "";
+    let modelListFetched = false;
+    logger.info("ai.provider_models_import.started", { providerId, protocol });
+    try {
+      ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(row));
+      const endpoints = providerModelEndpoints(stringValue(row, "base_url"), protocol);
+      let discoveredModels: ProviderModelListItem[] | null = null;
+      let invalidItemCount = 0;
+      for (const endpoint of endpoints) {
+        const endpointModels: ProviderModelListItem[] = [];
+        const visitedCursors = new Set<string>();
+        let cursor: string | undefined;
+        let endpointFound = false;
+        for (let pageIndex = 0; pageIndex < MAX_PROVIDER_MODEL_LIST_PAGES; pageIndex += 1) {
+          const pageEndpoint = providerModelListPageEndpoint(endpoint, protocol, cursor);
+          const response = await this.outboundFetchWithRetry(pageEndpoint, {
+            headers: providerRequestHeaders(protocol, accessToken, "application/json"),
+            signal: controller.signal
+          });
+          if (!response.ok) {
+            const status = response.status;
+            await response.body?.cancel().catch(() => undefined);
+            if (status === 404 && pageIndex === 0) break;
+            throw new AppError(502, "PROVIDER_MODELS_FETCH_FAILED", `供应商 /models 请求失败（HTTP ${status}）`);
+          }
+          endpointFound = true;
+          const body = await readResponseTextLimited(response);
+          let payload: unknown;
+          try {
+            payload = JSON.parse(body) as unknown;
+          } catch {
+            throw new AppError(502, "PROVIDER_MODELS_INVALID_RESPONSE", `${providerProtocolLabelText(protocol)} /models 返回了无效 JSON`);
+          }
+          let page: ReturnType<typeof parseProviderModelListPage>;
+          try {
+            page = parseProviderModelListPage(protocol, payload);
+          } catch (error) {
+            throw new AppError(
+              502,
+              "PROVIDER_MODELS_INVALID_RESPONSE",
+              error instanceof Error ? error.message : `${providerProtocolLabelText(protocol)} /models 返回结构无效`
+            );
+          }
+          invalidItemCount += page.invalidItemCount;
+          endpointModels.push(...page.models);
+          if (endpointModels.length > MAX_IMPORTED_PROVIDER_MODELS) {
+            throw new AppError(422, "PROVIDER_MODELS_LIMIT_EXCEEDED", `供应商返回的模型超过 ${MAX_IMPORTED_PROVIDER_MODELS} 个，未执行导入`);
+          }
+          if (!page.nextCursor) break;
+          if (visitedCursors.has(page.nextCursor)) {
+            throw new AppError(502, "PROVIDER_MODELS_INVALID_RESPONSE", "供应商 /models 返回了重复分页游标");
+          }
+          visitedCursors.add(page.nextCursor);
+          cursor = page.nextCursor;
+          if (pageIndex === MAX_PROVIDER_MODEL_LIST_PAGES - 1) {
+            throw new AppError(422, "PROVIDER_MODELS_LIMIT_EXCEEDED", "供应商 /models 分页过多，未执行导入");
+          }
+        }
+        if (endpointFound) {
+          discoveredModels = endpointModels;
+          break;
+        }
+      }
+      if (discoveredModels === null) {
+        throw new AppError(
+          400,
+          "PROVIDER_MODELS_ENDPOINT_UNSUPPORTED",
+          "当前供应商 Base URL 不支持 /models 端点，请手动添加模型"
+        );
+      }
+      const uniqueModels = [...new Map(discoveredModels.map((model) => [model.modelId, model])).values()];
+      if (uniqueModels.length === 0) {
+        throw new AppError(
+          422,
+          invalidItemCount > 0 ? "PROVIDER_MODELS_INVALID_RESPONSE" : "PROVIDER_MODELS_EMPTY",
+          invalidItemCount > 0 ? "供应商 /models 未返回格式有效的模型" : "供应商 /models 没有返回可导入模型"
+        );
+      }
+      modelListFetched = true;
+      const existingIds = new Set(this.store.db.all<{ model_id: string }>(
+        "SELECT model_id FROM models WHERE provider_id = ?",
+        providerId
+      ).map((model) => model.model_id));
+      const importedModels = uniqueModels.filter((model) => !existingIds.has(model.modelId));
+      if (importedModels.length > 0) {
+        const timestamp = now();
+        this.store.db.transaction(() => {
+          for (const model of importedModels) {
+            this.store.db.run(
+              `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
+               preset_json, thinking_enabled, thinking_effort, multimodal_enabled, enabled, note, created_at, updated_at)
+               VALUES (?, ?, ?, ?, '[]', '', ?, '', ?, 1, 'default', ?, 1, '', ?, ?)`,
+              id("model"),
+              providerId,
+              model.displayName,
+              model.modelId,
+              model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+              JSON.stringify(normalizeModelPreset(
+                model.maxOutputTokens === undefined ? {} : { max_tokens: model.maxOutputTokens },
+                model.modelId
+              )),
+              model.multimodalEnabled === true ? 1 : 0,
+              timestamp,
+              timestamp
+            );
+          }
+          this.store.audit(PLATFORM_AI_WORK_ID, "provider.models-imported", "provider", providerId, {
+            protocol,
+            availableCount: uniqueModels.length,
+            importedCount: importedModels.length,
+            existingCount: uniqueModels.length - importedModels.length,
+            invalidItemCount
+          });
+        });
+      }
+      logger.info("ai.provider_models_import.completed", {
+        providerId,
+        protocol,
+        availableCount: uniqueModels.length,
+        importedCount: importedModels.length,
+        existingCount: uniqueModels.length - importedModels.length,
+        invalidItemCount,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
+      });
+      return {
+        availableCount: uniqueModels.length,
+        importedCount: importedModels.length,
+        existingCount: uniqueModels.length - importedModels.length,
+        invalidItemCount
+      };
+    } catch (error) {
+      logger.warn("ai.provider_models_import.failed", {
+        providerId,
+        protocol,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        error: aiErrorForLog(error)
+      });
+      if (error instanceof AppError) throw error;
+      if (modelListFetched) throw error;
+      if (controller.signal.aborted) {
+        throw new AppError(504, "PROVIDER_MODELS_TIMEOUT", "获取供应商模型列表超时，请稍后重试");
+      }
+      const message = error instanceof Error
+        ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
+        : "获取供应商模型列表失败";
+      throw new AppError(502, "PROVIDER_MODELS_FETCH_FAILED", `获取供应商模型列表失败：${message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async testProvider(providerId: string): Promise<Record<string, unknown>> {
     const { row, configFingerprint, claim } = this.acquireProviderConnectivityTest(providerId);
     const protocol = providerProtocol(row);
@@ -3605,7 +3768,7 @@ export class AiManager {
     logger.info("ai.provider_test.started", { providerId });
     try {
       ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(row));
-      let payload: { data?: Array<{ id?: string }> } | null = null;
+      let payload: unknown | null = null;
       let lastFailure = "AI 供应商没有返回模型列表";
       const endpoints = providerModelEndpoints(stringValue(row, "base_url"), protocol);
       for (let index = 0; index < endpoints.length; index += 1) {
@@ -3616,18 +3779,26 @@ export class AiManager {
           signal: controller.signal
         });
         if (response.ok) {
-          payload = JSON.parse(await readResponseTextLimited(response)) as { data?: Array<{ id?: string }> };
+          const body = await readResponseTextLimited(response);
+          try {
+            payload = JSON.parse(body) as unknown;
+          } catch {
+            throw new Error(`${providerProtocolLabelText(protocol)} /models 返回了无效 JSON`);
+          }
           break;
         }
         const message = await readResponseTextLimited(response);
         lastFailure = `HTTP ${response.status}: ${message.slice(0, 300)}`;
         if (response.status !== 404 || index === endpoints.length - 1) break;
       }
-      const availableModels = payload && Array.isArray(payload.data)
-        ? payload.data
-          .map((item) => typeof item.id === "string" ? item.id.trim() : "")
-          .filter((modelId): modelId is string => Boolean(modelId))
-        : [];
+      let availableModels: string[] = [];
+      if (payload !== null) {
+        try {
+          availableModels = parseProviderModelListPage(protocol, payload).models.map((model) => model.modelId);
+        } catch {
+          // 保留已有模型探测回退：部分兼容服务的 /models 结构不标准，但已配置模型仍可直接测试。
+        }
+      }
       const localModels = this.store.db.all<ModelRow>(
         "SELECT * FROM models WHERE provider_id = ? AND enabled = 1 ORDER BY created_at",
         providerId

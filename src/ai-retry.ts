@@ -38,7 +38,7 @@ export function normalizeAiRetryPolicy(policy: Partial<AiRetryPolicy> | undefine
 }
 
 export function aiHttpRetryCount(status: number, policy: AiRetryPolicy): number {
-  if (status === 403) return 0;
+  if (status === 403 || status === 404) return 0;
   if (status === 429 || status === 502) return policy.backoffRetryCount;
   return policy.retryCount;
 }

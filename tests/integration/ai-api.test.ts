@@ -90,6 +90,142 @@ describe("AI 供应商、模型与建议 API", () => {
     runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", contextWindow, modelId);
   }
 
+  it.each([
+    ["openai-chat-completions", "OpenAI Chat"],
+    ["openai-responses", "OpenAI Responses"]
+  ] as const)("通过 %s /models 幂等导入模型", async (protocol, name) => {
+    fetchMock.mockImplementation(async (input) => {
+      expect(String(input)).toBe("https://models.example/v1/models");
+      return new Response(JSON.stringify({
+        object: "list",
+        data: [{ id: "model-one" }, { id: "model-two" }, { object: "model" }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name,
+      protocol,
+      baseUrl: "https://models.example/v1",
+      apiKey: "sk-import-models",
+      status: "enabled"
+    }).expect(201);
+    const providerId = String(provider.body.data.id);
+
+    const imported = await request(runtime.app).post(`/api/providers/${providerId}/models/import`).send({}).expect(200);
+    expect(imported.body.data).toEqual({
+      availableCount: 2,
+      importedCount: 2,
+      existingCount: 0,
+      invalidItemCount: 1
+    });
+    const models = await request(runtime.app).get(`/api/providers/${providerId}/models`).expect(200);
+    expect(models.body.data).toHaveLength(2);
+    expect(models.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: "model-one", displayName: "model-one", contextWindow: 128_000, preset: { max_tokens: 32_000 } }),
+      expect.objectContaining({ modelId: "model-two", displayName: "model-two", contextWindow: 128_000, preset: { max_tokens: 32_000 } })
+    ]));
+
+    const repeated = await request(runtime.app).post(`/api/providers/${providerId}/models/import`).send({}).expect(200);
+    expect(repeated.body.data).toMatchObject({ availableCount: 2, importedCount: 0, existingCount: 2 });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'provider.models-imported' AND entity_id = ?",
+      providerId
+    )).toEqual({ count: 1 });
+  });
+
+  it("分页导入 Anthropic 模型元数据并携带协议鉴权头", async () => {
+    const requestedUrls: string[] = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-api-key")).toBe("sk-anthropic-import");
+      expect(headers.get("anthropic-version")).toBe("2023-06-01");
+      if (!url.includes("after_id=")) {
+        return new Response(JSON.stringify({
+          data: [{
+            id: "claude-sonnet",
+            display_name: "Claude Sonnet",
+            max_input_tokens: 200_000,
+            max_tokens: 64_000,
+            capabilities: { image_input: { supported: true } }
+          }],
+          has_more: true,
+          last_id: "claude-sonnet"
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        data: [{ id: "claude-haiku", display_name: "Claude Haiku" }],
+        has_more: false,
+        last_id: "claude-haiku"
+      }), { status: 200 });
+    });
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "Anthropic",
+      protocol: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "sk-anthropic-import",
+      status: "enabled"
+    }).expect(201);
+    const providerId = String(provider.body.data.id);
+
+    const imported = await request(runtime.app).post(`/api/providers/${providerId}/models/import`).send({}).expect(200);
+    expect(imported.body.data).toMatchObject({ availableCount: 2, importedCount: 2, existingCount: 0 });
+    expect(requestedUrls).toEqual([
+      "https://api.anthropic.com/v1/models?limit=1000",
+      "https://api.anthropic.com/v1/models?limit=1000&after_id=claude-sonnet"
+    ]);
+    const models = await request(runtime.app).get(`/api/providers/${providerId}/models`).expect(200);
+    expect(models.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        modelId: "claude-sonnet",
+        displayName: "Claude Sonnet",
+        contextWindow: 200_000,
+        preset: { max_tokens: 64_000 },
+        multimodalEnabled: true
+      }),
+      expect.objectContaining({ modelId: "claude-haiku", displayName: "Claude Haiku", contextWindow: 128_000 })
+    ]));
+  });
+
+  it("在供应商不支持 /models 时给出明确提示且不写入模型", async () => {
+    fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "无模型端点",
+      protocol: "openai-chat-completions",
+      baseUrl: "https://no-models.example/v1",
+      apiKey: "sk-no-models",
+      status: "enabled"
+    }).expect(201);
+    const providerId = String(provider.body.data.id);
+
+    const response = await request(runtime.app).post(`/api/providers/${providerId}/models/import`).send({}).expect(400);
+    expect(response.body.error).toEqual({
+      code: "PROVIDER_MODELS_ENDPOINT_UNSUPPORTED",
+      message: "当前供应商 Base URL 不支持 /models 端点，请手动添加模型"
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM models WHERE provider_id = ?", providerId)).toEqual({ count: 0 });
+  });
+
+  it("批量导入审计失败时回滚全部模型", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "rollback-one" }, { id: "rollback-two" }] }), { status: 200 }));
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "回滚供应商",
+      baseUrl: "https://rollback.example/v1",
+      apiKey: "sk-rollback",
+      status: "enabled"
+    }).expect(201);
+    const providerId = String(provider.body.data.id);
+    runtime.database.raw.exec(`
+      CREATE TRIGGER reject_provider_models_import_audit BEFORE INSERT ON audit_logs
+      WHEN NEW.action = 'provider.models-imported'
+      BEGIN SELECT RAISE(ABORT, 'reject provider model import audit'); END
+    `);
+
+    await request(runtime.app).post(`/api/providers/${providerId}/models/import`).send({}).expect(500);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM models WHERE provider_id = ?", providerId)).toEqual({ count: 0 });
+  });
+
   function streamedDeltas(value: string): string {
     return value.split(/\r?\n\r?\n/u).flatMap((eventText) => {
       const lines = eventText.split(/\r?\n/u);
@@ -629,6 +765,19 @@ describe("AI 供应商、模型与建议 API", () => {
 
     const minimum = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 32_768 }).expect(200);
     expect(minimum.body.data.contextWindow).toBe(32_768);
+  });
+
+  it("供应商模型列表结构不标准时仍可回退测试已配置模型", async () => {
+    const { providerId } = await configureAi();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ models: [] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { model?: string; max_tokens?: number };
+      expect(body).toMatchObject({ model: "mock-novel-model", max_tokens: 10 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200 });
+    });
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({ ok: true, availableModels: [], provider: { connectionStatus: "success" } });
   });
 
   it("连接测试必须用 max_tokens=10 收到正文或 thinking", async () => {

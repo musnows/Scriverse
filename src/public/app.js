@@ -11122,7 +11122,7 @@ function renderProviderCards(providers, models, protocolOptions) {
       const thinkingEffortLabel = MODEL_THINKING_EFFORT_OPTIONS.find(([value]) => value === model.thinkingEffort)?.[1] ?? "模型默认";
       return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 思考强度 ${esc(thinkingEffortLabel)} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
     }).join("")}</div>
-    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
+    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-import-provider-models="${esc(provider.id)}">获取模型</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加后端返回的供应商协议、接口地址和凭据，测试成功后再添加模型。");
 }
@@ -11187,6 +11187,29 @@ function bindPlatformProviderActions(host, providers, models, protocolOptions) {
       button.disabled = false;
       button.textContent = "测试连接";
       const focusTarget = button.isConnected ? button : host.querySelector(`[data-test-provider="${CSS.escape(providerId)}"]`);
+      focusTarget?.focus({ preventScroll: true });
+    }
+  }));
+  host.querySelectorAll("[data-import-provider-models]").forEach((button) => button.addEventListener("click", async () => {
+    const providerId = button.dataset.importProviderModels;
+    button.disabled = true;
+    button.textContent = "获取中";
+    try {
+      const result = await api(`/api/providers/${encodeURIComponent(providerId)}/models/import`, { method: "POST", body: {} });
+      const ignored = Number(result.invalidItemCount ?? 0);
+      const ignoredMessage = ignored > 0 ? `，忽略 ${ignored} 条无效记录` : "";
+      const message = Number(result.importedCount ?? 0) > 0
+        ? `已获取 ${result.availableCount} 个模型，新增 ${result.importedCount} 个${ignoredMessage}`
+        : `已获取 ${result.availableCount} 个模型，供应商列表中均已存在${ignoredMessage}`;
+      await renderPlatformAiConfig();
+      await loadModels();
+      toast(message);
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+      button.textContent = "获取模型";
+      const focusTarget = button.isConnected ? button : host.querySelector(`[data-import-provider-models="${CSS.escape(providerId)}"]`);
       focusTarget?.focus({ preventScroll: true });
     }
   }));
