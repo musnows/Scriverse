@@ -1,7 +1,14 @@
 import { analysisTasks, works as sourceWorks } from "./data.js";
 import { buildBrowserAiMessages, createBrowserAiStore, normalizeProviderBaseUrl, publicProvider, requestBrowserAi, testBrowserAiModel, testBrowserAiProvider } from "./browser-ai.js";
 import { DEMO_CREDENTIALS as demoCredentials, isValidDemoLogin } from "./demo-auth.js";
-import { DEMO_COVER_VERSIONS, DEMO_VERSION } from "./demo-version.js";
+
+let DEMO_VERSION = "test";
+let DEMO_COVER_VERSIONS = {};
+try {
+  ({ DEMO_COVER_VERSIONS, DEMO_VERSION } = await import("./demo-version.js"));
+} catch (error) {
+  if (typeof process === "undefined") throw error;
+}
 
 const now = "2026-07-25T10:00:00.000Z";
 const nativeFetch = window.fetch.bind(window);
@@ -24,6 +31,10 @@ let demoBackupEncryptionConfirmationToken = null;
 let demoBackupTargets = [];
 let demoBackupRuns = [];
 let demoBackupRunSequence = 0;
+const demoAttachmentBlobs = new Map();
+const demoCharacterAvatarBlobs = new Map();
+let demoActiveWorkId = sourceWorks[0]?.id ?? null;
+let demoActiveVolumeId = sourceWorks[0]?.volumes?.[0] ? `${sourceWorks[0].id}-volume-1` : null;
 const demoDirectoryUsers = [
   { userId: "demo-editor", username: "demo-editor", displayName: "演示协作者", role: "writer", status: "active", avatarUrl: null }
 ];
@@ -158,7 +169,7 @@ function buildWork(source) {
         createdAt: now
       }];
     });
-    return { id: volumeId, workId: id, title: volume.name, kind: "main", order: index + 1, sortOrder: index, versionNo: 1, chapters: volumeChapters, versions: [] };
+    return { id: volumeId, workId: id, title: volume.name, kind: "main", order: index + 1, sortOrder: index, storyOrder: index, versionNo: 1, deletedAt: null, chapters: volumeChapters, versions: [] };
   });
   const races = source.races.map((race, index) => ({
     id: `${id}-race-${index + 1}`,
@@ -196,7 +207,7 @@ function buildWork(source) {
     versions: [],
     versionNo: 1
   }));
-  const characters = source.characters.map((character) => {
+  const characters = source.characters.map((character, index) => {
     const race = races.find((item) => item.name === character.race) ?? null;
     const organization = organizations.find((item) => item.name === character.org) ?? null;
     const item = {
@@ -214,6 +225,8 @@ function buildWork(source) {
       profileSections: [],
       organizations: organization ? [{ id: organization.id, name: organization.name }] : [],
       lockedFields: [],
+      gender: index % 3 === 0 ? "female" : index % 3 === 1 ? "male" : "unknown",
+      isDead: character.tags.some((tag) => /(?:死亡|人格副本|失踪者)/u.test(tag)),
       versions: [],
       profileSectionCount: 0,
       versionNo: 1,
@@ -293,9 +306,14 @@ function buildWork(source) {
     status: item.status === "已回收" ? "resolved" : "planted",
     unresolved: item.status !== "已回收",
     overdue: false,
-    plannedPayoffChapterId: null,
+    plannedPayoffChapterId: index === source.outlines.length - 1 ? chapters.at(-1)?.id ?? null : null,
     resolutionNote: item.status === "已回收" ? item.note : "",
-    occurrences: [],
+    occurrences: [{
+      id: `${id}-foreshadow-${index + 1}-occurrence`,
+      chapterId: chapters[Math.min(chapters.length - 1, index + 1)]?.id ?? null,
+      role: item.status === "已回收" ? "payoff" : "reminder",
+      note: item.note
+    }],
     versions: [],
     versionNo: 1
   }));
@@ -646,6 +664,7 @@ function createResourceRecord(work, resource, body) {
     organizationIds: Array.isArray(body.organizationIds) ? body.organizationIds : [],
     lockedFields: Array.isArray(body.lockedFields) ? body.lockedFields : [],
     mergedIntoCharacterId: null,
+    gender: ["male", "female", "none"].includes(body.gender) ? body.gender : "unknown",
     isDead: Boolean(body.isDead),
     profileSectionCount: 0
   });
@@ -745,7 +764,7 @@ function findChapterRecord(chapterId, includeDeleted = false) {
 function syncWorkChapters(work) {
   for (const volume of work.volumes) {
     volume.chapters = work.chapters
-      .filter((chapter) => !chapter.deletedAt && chapter.volumeId === volume.id)
+      .filter((chapter) => !volume.deletedAt && !chapter.deletedAt && chapter.volumeId === volume.id)
       .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
     volume.chapters.forEach((chapter, index) => { chapter.sortOrder = index; });
   }
@@ -759,7 +778,7 @@ function workView(work) {
   return {
     ...work,
     chapters: work.chapters.filter((chapter) => !chapter.deletedAt),
-    volumes: work.volumes.map((volume) => ({ ...volume, chapters: [...volume.chapters] }))
+    volumes: work.volumes.filter((volume) => !volume.deletedAt).map((volume) => ({ ...volume, chapters: [...volume.chapters] }))
   };
 }
 
@@ -1024,6 +1043,7 @@ function createDemoAttachment(work, init, module) {
     fileName,
     originalName: fileName,
     mimeType,
+    storedMimeType: mimeType,
     byteLength: Number(file?.size ?? 0),
     sha256: "demo-attachment",
     deduplicated: false,
@@ -1031,6 +1051,7 @@ function createDemoAttachment(work, init, module) {
     createdAt: new Date().toISOString()
   };
   attachment.contentUrl = `/api/attachments/${encodeURIComponent(attachment.id)}/content`;
+  if (file instanceof Blob) demoAttachmentBlobs.set(attachment.id, file);
   work.attachments.push(attachment);
   recordAudit(work, "attachment.created", "attachment", attachment.id, { module: attachment.module, fileName });
   return attachment;
@@ -1109,6 +1130,26 @@ function restoreEntityVersion(target, versionNo) {
   return target.item;
 }
 
+function demoUsagePricing(row) {
+  const cachedInputTokens = Math.min(Number(row.inputTokens ?? 0), Math.floor(Number(row.inputTokens ?? 0) * 0.15));
+  const cacheEligibleInputTokens = Number(row.inputTokens ?? 0);
+  const cacheWriteInputTokens = 0;
+  const directInputTokens = Math.max(0, Number(row.inputTokens ?? 0) - cachedInputTokens);
+  return {
+    ...row,
+    cachedInputTokens,
+    cacheReadInputTokens: cachedInputTokens,
+    cacheWriteInputTokens,
+    cacheEligibleInputTokens,
+    directInputTokens,
+    cacheHitRate: cacheEligibleInputTokens > 0 ? cachedInputTokens / cacheEligibleInputTokens * 100 : null,
+    estimatedCost: directInputTokens * 0.0000005 + cachedInputTokens * 0.0000001 + Number(row.outputTokens ?? 0) * 0.0000015,
+    pricingAvailable: true,
+    pricedModelCount: Number(row.requestCount ?? 0) > 0 ? 1 : 0,
+    unpricedModelCount: 0
+  };
+}
+
 function demoTokenUsage(workId = null, includeWorks = false) {
   const state = browserAiStore.read();
   const targetWorks = workId ? works.filter((work) => work.id === workId) : works;
@@ -1117,31 +1158,37 @@ function demoTokenUsage(workId = null, includeWorks = false) {
     const inputTokens = messages.filter((message) => message.role === "user").reduce((total, message) => total + Math.ceil(Array.from(String(message.content ?? "")).length / 2), 0);
     const outputTokens = messages.filter((message) => message.role === "assistant").reduce((total, message) => total + Number(message.metadata?.outputTokens ?? Math.ceil(Array.from(String(message.content ?? "")).length / 2)), 0);
     const timestamps = messages.map((message) => String(message.createdAt ?? "")).filter(Boolean).sort();
-    return {
+    return demoUsagePricing({
       workId: work.id,
       workTitle: work.title,
       totalTokens: inputTokens + outputTokens,
       inputTokens,
       outputTokens,
-      cachedInputTokens: 0,
-      cacheEligibleInputTokens: 0,
-      cacheHitRate: null,
       requestCount: messages.filter((message) => message.role === "assistant").length,
       estimatedRequestCount: messages.filter((message) => message.role === "assistant").length,
       firstUsedAt: timestamps[0] ?? null,
       lastUsedAt: timestamps.at(-1) ?? null
-    };
+    });
   });
   const summary = workRows.reduce((total, row) => ({
     ...total,
     totalTokens: total.totalTokens + row.totalTokens,
     inputTokens: total.inputTokens + row.inputTokens,
     outputTokens: total.outputTokens + row.outputTokens,
+    cachedInputTokens: total.cachedInputTokens + row.cachedInputTokens,
+    cacheReadInputTokens: total.cacheReadInputTokens + row.cacheReadInputTokens,
+    cacheWriteInputTokens: total.cacheWriteInputTokens + row.cacheWriteInputTokens,
+    cacheEligibleInputTokens: total.cacheEligibleInputTokens + row.cacheEligibleInputTokens,
+    directInputTokens: total.directInputTokens + row.directInputTokens,
+    estimatedCost: total.estimatedCost + row.estimatedCost,
+    pricedModelCount: total.pricedModelCount + row.pricedModelCount,
+    unpricedModelCount: 0,
     requestCount: total.requestCount + row.requestCount,
     estimatedRequestCount: total.estimatedRequestCount + row.estimatedRequestCount,
     firstUsedAt: [total.firstUsedAt, row.firstUsedAt].filter(Boolean).sort()[0] ?? null,
     lastUsedAt: [total.lastUsedAt, row.lastUsedAt].filter(Boolean).sort().at(-1) ?? null
-  }), { totalTokens: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheEligibleInputTokens: 0, cacheHitRate: null, requestCount: 0, estimatedRequestCount: 0, firstUsedAt: null, lastUsedAt: null });
+  }), { totalTokens: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheReadInputTokens: 0, cacheWriteInputTokens: 0, cacheEligibleInputTokens: 0, directInputTokens: 0, estimatedCost: 0, pricedModelCount: 0, unpricedModelCount: 0, pricingAvailable: true, requestCount: 0, estimatedRequestCount: 0, firstUsedAt: null, lastUsedAt: null });
+  summary.cacheHitRate = summary.cacheEligibleInputTokens > 0 ? summary.cachedInputTokens / summary.cacheEligibleInputTokens * 100 : null;
   const dailyByDate = new Map();
   for (const work of targetWorks) {
     for (const conversation of state.conversations[work.id] ?? []) {
@@ -1161,7 +1208,7 @@ function demoTokenUsage(workId = null, includeWorks = false) {
       }
     }
   }
-  const daily = [...dailyByDate.values()].sort((left, right) => left.date.localeCompare(right.date));
+  const daily = [...dailyByDate.values()].map(demoUsagePricing).sort((left, right) => left.date.localeCompare(right.date));
   const quotaSettings = workId ? { ...defaultWorkAiSettings(workId), ...(state.workSettings[workId] ?? {}) } : null;
   const today = new Date().toISOString().slice(0, 10);
   const month = today.slice(0, 7);
@@ -1181,6 +1228,22 @@ function demoTokenUsage(workId = null, includeWorks = false) {
     timezone: "UTC"
   } : undefined;
   return { summary, daily, ...(quota ? { quota } : {}), ...(includeWorks ? { works: workRows.sort((left, right) => right.totalTokens - left.totalTokens || left.workTitle.localeCompare(right.workTitle, "zh-CN")) } : {}), timezoneOffset: 0 };
+}
+
+async function demoBrowserImageAttachments(attachmentIds = []) {
+  const output = [];
+  for (const attachmentId of [...new Set(attachmentIds.map(String))].slice(0, 48)) {
+    const record = works.flatMap((work) => work.attachments).find((attachment) => attachment.id === attachmentId);
+    const blob = demoAttachmentBlobs.get(attachmentId);
+    if (!record || !blob || !/^image\/(?:png|jpe?g)$/u.test(record.storedMimeType)) continue;
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    output.push({ id: attachmentId, mimeType: record.storedMimeType, dataUrl: `data:${record.storedMimeType};base64,${btoa(binary)}` });
+  }
+  return output;
 }
 
 async function runBrowserAi(body, workId) {
@@ -1204,7 +1267,10 @@ async function runBrowserAi(body, workId) {
     roleplayCharacter: conversation?.roleplayCharacter ?? null,
     roleplayUserCharacter: conversation?.roleplayUserCharacter ?? null
   });
-  const result = await requestBrowserAi({ fetchImpl: nativeFetch, provider, model, messages });
+  const historicalImageAttachmentIds = (conversation?.messages ?? []).slice(-12)
+    .flatMap((message) => message.metadata?.chatImageAttachmentIds ?? []);
+  const imageAttachments = await demoBrowserImageAttachments([...historicalImageAttachmentIds, ...(body.imageAttachmentIds ?? [])]);
+  const result = await requestBrowserAi({ fetchImpl: nativeFetch, provider, model, messages, imageAttachments });
   return { ...result, model: modelWithProvider(model, state.providers) };
 }
 
@@ -1221,7 +1287,12 @@ async function runBrowserChat(body, workId) {
     conversationId = conversation.id;
     contextConversation = conversationSummary(conversation);
     if (!body.currentMessageId) {
-      userMessage = appendConversationMessage(conversation, { role: "user", content: body.instruction, citations: body.citations ?? [] });
+      userMessage = appendConversationMessage(conversation, {
+        role: "user",
+        content: body.instruction,
+        citations: body.citations ?? [],
+        metadata: { modelId: body.modelId, chatImageAttachmentIds: [...new Set((body.imageAttachmentIds ?? []).map(String))].slice(0, 4) }
+      });
     }
   });
   const result = await runBrowserAi({ ...body, conversationId }, workId);
@@ -1296,6 +1367,285 @@ function demoRecycleBinExpiresAt(deletedAt) {
   expiresAt.setUTCDate(expiresAt.getUTCDate() + 30);
   return expiresAt.toISOString();
 }
+
+function demoOutlineBoard(work, url) {
+  const filters = {
+    query: String(url.searchParams.get("q") ?? "").trim(),
+    volumeId: String(url.searchParams.get("volumeId") ?? ""),
+    outlineStatus: String(url.searchParams.get("outlineStatus") ?? "all"),
+    foreshadowStatus: String(url.searchParams.get("foreshadowStatus") ?? "all"),
+    sort: String(url.searchParams.get("sort") ?? "tree")
+  };
+  const activeVolumes = work.volumes.filter((volume) => !volume.deletedAt).sort((left, right) => Number(left.sortOrder) - Number(right.sortOrder));
+  const outlineByChapter = new Map(work.outlines.map((outline) => [outline.chapterId, outline]));
+  const foreshadowsForChapter = (chapterId) => work.foreshadows.flatMap((foreshadow) => {
+    const roles = [...new Set((foreshadow.occurrences ?? []).filter((occurrence) => occurrence.chapterId === chapterId).map((occurrence) => occurrence.role).filter(Boolean))];
+    const plannedPayoff = foreshadow.plannedPayoffChapterId === chapterId;
+    return roles.length || plannedPayoff ? [{ id: foreshadow.id, title: foreshadow.title, status: foreshadow.status, importance: foreshadow.importance, roles, plannedPayoff }] : [];
+  });
+  const candidates = activeVolumes.flatMap((volume) => work.chapters
+    .filter((chapter) => !chapter.deletedAt && chapter.volumeId === volume.id)
+    .map((chapter) => ({ volume, chapter, outline: outlineByChapter.get(chapter.id) ?? null, foreshadows: foreshadowsForChapter(chapter.id) })))
+    .filter(({ volume, chapter, outline, foreshadows }) => {
+      if (filters.volumeId && volume.id !== filters.volumeId) return false;
+      if (filters.outlineStatus === "empty" ? outline : filters.outlineStatus !== "all" && outline?.status !== filters.outlineStatus) return false;
+      if (filters.foreshadowStatus === "none" && foreshadows.length) return false;
+      if (filters.foreshadowStatus === "unresolved" && !foreshadows.some((item) => ["planned", "planted"].includes(item.status))) return false;
+      if (["resolved", "abandoned"].includes(filters.foreshadowStatus) && !foreshadows.some((item) => item.status === filters.foreshadowStatus)) return false;
+      if (!filters.query) return true;
+      return [chapter.title, chapter.chapterType, outline?.goal, outline?.conflict, outline?.turningPoint, outline?.notes, ...foreshadows.map((item) => item.title)]
+        .some((value) => String(value ?? "").toLocaleLowerCase("zh-CN").includes(filters.query.toLocaleLowerCase("zh-CN")));
+    });
+  const outlineRank = (outline) => outline ? ({ draft: 1, ready: 2, completed: 3 })[outline.status] ?? 1 : 0;
+  candidates.sort((left, right) => Number(left.volume.sortOrder) - Number(right.volume.sortOrder)
+    || (filters.sort === "status" ? outlineRank(left.outline) - outlineRank(right.outline) : 0)
+    || (filters.sort === "foreshadows" ? Number(right.foreshadows.some((item) => ["planned", "planted"].includes(item.status))) - Number(left.foreshadows.some((item) => ["planned", "planted"].includes(item.status))) : 0)
+    || (filters.sort === "title" ? left.chapter.title.localeCompare(right.chapter.title, "zh-CN") : 0)
+    || Number(left.chapter.sortOrder) - Number(right.chapter.sortOrder));
+  const paged = page(candidates, url);
+  const filteredCountByVolume = new Map(activeVolumes.map((volume) => [volume.id, candidates.filter((item) => item.volume.id === volume.id).length]));
+  const volumeOptions = activeVolumes.map((volume) => ({ id: volume.id, title: volume.title, sortOrder: volume.sortOrder, chapterCount: work.chapters.filter((chapter) => !chapter.deletedAt && chapter.volumeId === volume.id).length, filteredChapterCount: filteredCountByVolume.get(volume.id) ?? 0 }));
+  const volumes = volumeOptions.flatMap((volume) => {
+    const chapters = paged.items.filter((item) => item.volume.id === volume.id).map(({ chapter, outline, foreshadows }) => ({
+      id: chapter.id,
+      title: chapter.title,
+      chapterType: chapter.chapterType,
+      sortOrder: chapter.sortOrder,
+      outline: outline ? {
+        goal: String(outline.goal ?? "").slice(0, 600),
+        conflict: String(outline.conflict ?? "").slice(0, 600),
+        turningPoint: String(outline.turningPoint ?? "").slice(0, 600),
+        notes: String(outline.notes ?? "").slice(0, 600),
+        status: outline.status ?? "draft",
+        truncated: [outline.goal, outline.conflict, outline.turningPoint, outline.notes].some((value) => String(value ?? "").length > 600),
+        updatedAt: outline.updatedAt ?? null
+      } : null,
+      foreshadows
+    }));
+    const includeEmpty = paged.page === 1 && volume.chapterCount === 0 && (!filters.volumeId || filters.volumeId === volume.id) && (!filters.query || filters.volumeId === volume.id);
+    return chapters.length || includeEmpty ? [{ ...volume, chapters }] : [];
+  });
+  const activeChapters = work.chapters.filter((chapter) => !chapter.deletedAt && activeVolumes.some((volume) => volume.id === chapter.volumeId));
+  return {
+    workId: work.id,
+    volumes,
+    volumeOptions,
+    filters,
+    page: paged.page,
+    limit: paged.limit,
+    itemCount: paged.items.length,
+    total: candidates.length,
+    pageCount: Math.ceil(candidates.length / paged.limit),
+    hasMore: paged.hasMore,
+    nextPage: paged.nextPage,
+    stats: {
+      chapterCount: activeChapters.length,
+      outlinedChapterCount: activeChapters.filter((chapter) => outlineByChapter.has(chapter.id)).length,
+      foreshadowCount: work.foreshadows.length,
+      unresolvedForeshadowCount: work.foreshadows.filter((item) => ["planned", "planted"].includes(item.status)).length
+    }
+  };
+}
+
+function demoForeshadowReminders(work, chapter) {
+  return work.foreshadows.flatMap((foreshadow) => {
+    const occurrence = (foreshadow.occurrences ?? []).find((item) => item.chapterId === chapter.id && ["reminder", "payoff"].includes(item.role));
+    if (!occurrence || !["planned", "planted"].includes(foreshadow.status)) return [];
+    return [{
+      foreshadowId: foreshadow.id,
+      occurrenceId: occurrence.id,
+      title: foreshadow.title,
+      description: foreshadow.description,
+      role: occurrence.role,
+      note: occurrence.note ?? "",
+      importance: foreshadow.importance,
+      status: foreshadow.status,
+      versionNo: foreshadow.versionNo
+    }];
+  });
+}
+
+function demoGlobalReplace(work, body) {
+  const find = String(body.find ?? "");
+  const replacement = String(body.replacement ?? "");
+  const scope = ["prose", "settings", "prose-and-settings"].includes(body.scope) ? body.scope : "prose";
+  const volumeId = body.volumeId ? String(body.volumeId) : null;
+  let chapterCount = 0;
+  let settingCount = 0;
+  let totalMatches = 0;
+  const operationId = demoId("global-replace");
+  if (scope !== "settings") {
+    for (const chapter of work.chapters.filter((item) => !item.deletedAt && (!volumeId || item.volumeId === volumeId))) {
+      const matches = find ? chapter.content.split(find).length - 1 : 0;
+      if (!matches) continue;
+      chapter.content = chapter.content.replaceAll(find, replacement);
+      chapter.wordCount = wordCount(chapter.content);
+      chapter.versionNo += 1;
+      chapter.updatedAt = new Date().toISOString();
+      recordChapterVersion(chapter, "global-replace", operationId);
+      chapterCount += 1;
+      totalMatches += matches;
+    }
+  }
+  if (scope !== "prose") {
+    for (const setting of work.settings) {
+      const matches = find ? setting.content.split(find).length - 1 : 0;
+      if (!matches) continue;
+      setting.content = setting.content.replaceAll(find, replacement);
+      bumpEntity(work, setting, "setting", "全局替换设定库", "global-replace");
+      settingCount += 1;
+      totalMatches += matches;
+    }
+  }
+  syncWorkChapters(work);
+  if (totalMatches) recordAudit(work, "work.global-replace", "work", work.id, { operationId, scope, volumeId, chapterCount, settingCount, totalMatches });
+  return { operationId, scope, volumeId, chapterCount, settingCount, totalMatches, processedModules: scope === "prose-and-settings" ? ["prose", "settings"] : [scope], skippedModules: [], work: workView(work) };
+}
+
+const demoTextEncoder = new TextEncoder();
+const demoCrcTable = Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit += 1) crc = crc & 1 ? 0xedb88320 ^ crc >>> 1 : crc >>> 1;
+  return crc >>> 0;
+});
+
+function demoCrc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = demoCrcTable[(crc ^ byte) & 0xff] ^ crc >>> 8;
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function demoZipArchive(files) {
+  const localParts = [];
+  const centralParts = [];
+  let localOffset = 0;
+  const numberBytes = (value, size) => Array.from({ length: size }, (_, index) => value >>> index * 8 & 0xff);
+  for (const file of files) {
+    const name = demoTextEncoder.encode(file.name);
+    const content = typeof file.content === "string" ? demoTextEncoder.encode(file.content) : file.content;
+    const crc = demoCrc32(content);
+    const localHeader = new Uint8Array([
+      ...numberBytes(0x04034b50, 4), ...numberBytes(20, 2), 0, 8, 0, 0, 0, 0, 0, 0,
+      ...numberBytes(crc, 4), ...numberBytes(content.length, 4), ...numberBytes(content.length, 4),
+      ...numberBytes(name.length, 2), 0, 0, ...name
+    ]);
+    const centralHeader = new Uint8Array([
+      ...numberBytes(0x02014b50, 4), ...numberBytes(20, 2), ...numberBytes(20, 2), 0, 8, 0, 0, 0, 0, 0, 0,
+      ...numberBytes(crc, 4), ...numberBytes(content.length, 4), ...numberBytes(content.length, 4),
+      ...numberBytes(name.length, 2), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...numberBytes(localOffset, 4), ...name
+    ]);
+    localParts.push(localHeader, content);
+    centralParts.push(centralHeader);
+    localOffset += localHeader.length + content.length;
+  }
+  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
+  const end = new Uint8Array([
+    ...numberBytes(0x06054b50, 4), 0, 0, 0, 0,
+    ...numberBytes(files.length, 2), ...numberBytes(files.length, 2),
+    ...numberBytes(centralSize, 4), ...numberBytes(localOffset, 4), 0, 0
+  ]);
+  const output = new Uint8Array(localOffset + centralSize + end.length);
+  let offset = 0;
+  for (const part of [...localParts, ...centralParts, end]) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function demoManuscriptFiles(work, volumeId = null) {
+  const volumes = work.volumes.filter((volume) => !volume.deletedAt && (!volumeId || volume.id === volumeId));
+  return volumes.flatMap((volume) => work.chapters
+    .filter((chapter) => !chapter.deletedAt && chapter.volumeId === volume.id)
+    .sort((left, right) => Number(left.sortOrder) - Number(right.sortOrder))
+    .map((chapter) => ({ volume, chapter })));
+}
+
+function demoExportArtifact(work, format = "markdown", volumeId = null) {
+  const records = demoManuscriptFiles(work, volumeId);
+  const baseName = String(volumeId ? work.volumes.find((volume) => volume.id === volumeId)?.title : work.title).replace(/[\\/:*?"<>|]/gu, "_") || "Scriverse-Demo";
+  if (format === "markdown") {
+    const files = records.map(({ volume, chapter }, index) => ({
+      name: `${String(index + 1).padStart(3, "0")}-${chapter.title.replace(/[\\/:*?"<>|]/gu, "_")}.md`,
+      content: `# ${chapter.title}\n\n> ${volume.title}\n\n${chapter.content}\n`
+    }));
+    return { bytes: demoZipArchive(files), mimeType: "application/zip", fileName: `${baseName}.markdown.zip` };
+  }
+  if (format === "docx") {
+    const paragraphs = records.flatMap(({ volume, chapter }) => [
+      `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>${escapeXml(volume.title)} · ${escapeXml(chapter.title)}</w:t></w:r></w:p>`,
+      ...String(chapter.content).split(/\n+/u).filter(Boolean).map((line) => `<w:p><w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`)
+    ]).join("");
+    return {
+      bytes: demoZipArchive([
+        { name: "[Content_Types].xml", content: '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
+        { name: "_rels/.rels", content: '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
+        { name: "word/document.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs}<w:sectPr/></w:body></w:document>` }
+      ]),
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      fileName: `${baseName}.docx`
+    };
+  }
+  const chapterFiles = records.map(({ volume, chapter }, index) => ({
+    name: `OEBPS/chapter-${index + 1}.xhtml`,
+    content: `<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${escapeXml(chapter.title)}</title></head><body><h1>${escapeXml(volume.title)} · ${escapeXml(chapter.title)}</h1>${String(chapter.content).split(/\n+/u).filter(Boolean).map((line) => `<p>${escapeXml(line)}</p>`).join("")}</body></html>`
+  }));
+  const manifest = chapterFiles.map((_, index) => `<item id="chapter-${index + 1}" href="chapter-${index + 1}.xhtml" media-type="application/xhtml+xml"/>`).join("");
+  const spine = chapterFiles.map((_, index) => `<itemref idref="chapter-${index + 1}"/>`).join("");
+  return {
+    bytes: demoZipArchive([
+      { name: "mimetype", content: "application/epub+zip" },
+      { name: "META-INF/container.xml", content: '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>' },
+      { name: "OEBPS/content.opf", content: `<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">${escapeXml(work.id)}</dc:identifier><dc:title>${escapeXml(baseName)}</dc:title><dc:language>zh-CN</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>${manifest}</manifest><spine>${spine}</spine></package>` },
+      { name: "OEBPS/nav.xhtml", content: `<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${escapeXml(baseName)}</title></head><body><nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc"><ol>${records.map(({ chapter }, index) => `<li><a href="chapter-${index + 1}.xhtml">${escapeXml(chapter.title)}</a></li>`).join("")}</ol></nav></body></html>` },
+      ...chapterFiles
+    ]),
+    mimeType: "application/epub+zip",
+    fileName: `${baseName}.epub`
+  };
+}
+
+function demoArtifactResponse(artifact, method = "GET") {
+  return new Response(method === "HEAD" ? null : artifact.bytes, {
+    status: method === "HEAD" ? 204 : 200,
+    headers: { "content-type": artifact.mimeType, "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(artifact.fileName)}` }
+  });
+}
+
+function downloadDemoArtifact(artifact) {
+  const objectUrl = URL.createObjectURL(new Blob([artifact.bytes], { type: artifact.mimeType }));
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = artifact.fileName;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
+
+function installDemoExportAdapter() {
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const workTrigger = target?.closest?.("[data-open-work], [data-edit-work]");
+    const volumeTrigger = target?.closest?.("[data-volume-detail], [data-volume-toggle]");
+    if (workTrigger) demoActiveWorkId = workTrigger.dataset.openWork ?? workTrigger.dataset.editWork ?? demoActiveWorkId;
+    if (volumeTrigger) demoActiveVolumeId = volumeTrigger.dataset.volumeDetail ?? volumeTrigger.dataset.volumeToggle ?? demoActiveVolumeId;
+    const formatTrigger = target?.closest?.("[data-export-format]");
+    const volumeExportTrigger = target?.closest?.("[data-dialog-volume-export]");
+    if (!formatTrigger && !volumeExportTrigger) return;
+    const work = findWork(demoActiveWorkId);
+    const volume = work?.volumes.find((item) => item.id === demoActiveVolumeId && !item.deletedAt);
+    if (!work || volumeExportTrigger && !volume) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const format = volumeExportTrigger ? "epub" : ["docx", "epub"].includes(formatTrigger.dataset.exportFormat) ? formatTrigger.dataset.exportFormat : "markdown";
+    downloadDemoArtifact(demoExportArtifact(work, format, volumeExportTrigger ? volume.id : null));
+    document.querySelector("#manuscript-export-menu")?.classList.add("hidden");
+  }, true);
+}
+
+installDemoExportAdapter();
 
 async function mockApi(input, init = {}) {
   const requestUrl = typeof input === "string" ? input : input.url;
@@ -1590,7 +1940,7 @@ async function mockApi(input, init = {}) {
   }
   if (path === "/api/platform/ai/usage") return success(demoTokenUsage(null, true));
   if (path === "/api/platform/ai/usage/pricing/refresh" && method === "POST") {
-    return success({ refreshed: true, pricingAvailable: false, modelCount: 0, simulated: true });
+    return success({ refreshed: true, pricingAvailable: true, modelCount: Math.max(1, browserAiStore.read().models.length), simulated: true });
   }
   match = path.match(/^\/api\/works\/([^/]+)\/providers$/u);
   if (match) {
@@ -1671,7 +2021,7 @@ async function mockApi(input, init = {}) {
     }
     const body = await bodyOf(init);
     if (Number(body.contextWindow ?? 128_000) < minimumModelContextWindow) return failure("模型上下文不能低于 32768 Token", 400);
-    const model = { id: demoId("model"), providerId, displayName: String(body.displayName ?? "").trim(), modelId: String(body.modelId ?? "").trim(), purposes: body.purposes ?? ["chat"], contextNote: String(body.contextNote ?? ""), contextWindow: Number(body.contextWindow ?? 128000), outputNote: String(body.outputNote ?? ""), preset: body.preset ?? { temperature: 0.7, max_tokens: 32000 }, thinkingEnabled: body.thinkingEnabled !== false, multimodalEnabled: Boolean(body.multimodalEnabled), imageToolDefault: Boolean(body.imageToolDefault), enabled: body.enabled !== false, note: String(body.note ?? "") };
+    const model = { id: demoId("model"), providerId, displayName: String(body.displayName ?? "").trim(), modelId: String(body.modelId ?? "").trim(), purposes: body.purposes ?? ["chat"], contextNote: String(body.contextNote ?? ""), contextWindow: Number(body.contextWindow ?? 128000), outputNote: String(body.outputNote ?? ""), preset: body.preset ?? { temperature: 0.7, max_tokens: 32000 }, thinkingEnabled: body.thinkingEnabled !== false, thinkingEffort: ["low", "medium", "high", "xhigh", "max"].includes(body.thinkingEffort) ? body.thinkingEffort : "default", multimodalEnabled: Boolean(body.multimodalEnabled), imageToolDefault: Boolean(body.imageToolDefault), enabled: body.enabled !== false, note: String(body.note ?? "") };
     browserAiStore.update((current) => { current.models.push(model); });
     return success(modelWithProvider(model, state.providers), 201);
   }
@@ -1810,6 +2160,14 @@ async function mockApi(input, init = {}) {
     }
     return success(conversation);
   }
+  match = path.match(/^\/api\/ai-conversations\/([^/]+)\/export$/u);
+  if (match && method === "GET") {
+    const conversation = findConversation(browserAiStore.read(), decodeURIComponent(match[1]));
+    if (!conversation) return failure("未找到 AI 对话");
+    const work = findWork(conversation.workId) ?? findDeletedWork(conversation.workId);
+    const markdown = [`# ${conversation.title}`, "", `- 作品：${work?.title ?? "未知作品"}`, `- 会话 ID：${conversation.id}`, "", ...(conversation.messages ?? []).flatMap((message) => [`## ${message.role === "assistant" ? "Agent" : "作者"}`, "", message.content, ""])].join("\n");
+    return new Response(markdown, { headers: { "content-type": "text/markdown; charset=utf-8", "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(`${conversation.title || "AI 对话"}.md`)}` } });
+  }
   match = path.match(/^\/api\/ai-conversations\/([^/]+)\/favorite$/u);
   if (match && method === "PATCH") {
     const conversationId = decodeURIComponent(match[1]);
@@ -1852,6 +2210,8 @@ async function mockApi(input, init = {}) {
           id: character.id,
           name: character.name,
           code: character.code ?? "",
+          gender: character.gender ?? "unknown",
+          isDead: character.isDead === true,
           profile: character.profile ?? {},
           currentState: character.currentState ?? {}
         } : null;
@@ -2163,6 +2523,30 @@ async function mockApi(input, init = {}) {
       return success(current);
     }
   }
+  match = path.match(/^\/api\/works\/([^/]+)\/outline-board$/u);
+  if (match && method === "GET") {
+    const work = findWork(decodeURIComponent(match[1]));
+    return work ? success(demoOutlineBoard(work, url)) : failure("未找到作品");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/chapters\/([^/]+)\/foreshadow-reminders(?:\/([^/]+)\/resolve)?$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    const chapter = work?.chapters.find((item) => item.id === decodeURIComponent(match[2]) && !item.deletedAt);
+    if (!work || !chapter) return failure("未找到作品或章节");
+    if (!match[3] && method === "GET") return success(demoForeshadowReminders(work, chapter));
+    if (match[3] && method === "POST") {
+      const foreshadow = work.foreshadows.find((item) => item.id === decodeURIComponent(match[3]));
+      const reminder = demoForeshadowReminders(work, chapter).find((item) => item.foreshadowId === foreshadow?.id);
+      if (!foreshadow || !reminder) return failure("未找到当前章节的伏笔提醒");
+      const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(foreshadow.versionNo)) return failure("伏笔版本已变化，请刷新后重试", 409);
+      foreshadow.status = "resolved";
+      foreshadow.unresolved = false;
+      foreshadow.resolutionNote = `在《${chapter.title}》中标记已回收`;
+      bumpEntity(work, foreshadow, "foreshadow", "在编辑器标记伏笔已回收");
+      return success({ ...reminder, status: foreshadow.status, versionNo: foreshadow.versionNo });
+    }
+  }
   match = path.match(/^\/api\/chapters\/([^/]+)\/insights$/u);
   if (match && method === "GET") {
     const found = findChapterRecord(decodeURIComponent(match[1]), true);
@@ -2204,6 +2588,8 @@ async function mockApi(input, init = {}) {
     if (!work) return failure("仅回收站中的作品可以彻底删除", 409);
     const body = await bodyOf(init);
     if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(work.versionNo)) return failure("作品版本已变化，请刷新后重试", 409);
+    for (const attachment of work.attachments) demoAttachmentBlobs.delete(attachment.id);
+    for (const character of work.characters) demoCharacterAvatarBlobs.delete(character.id);
     works.splice(works.indexOf(work), 1);
     browserAiStore.update((state) => {
       delete state.conversations[work.id];
@@ -2221,7 +2607,7 @@ async function mockApi(input, init = {}) {
       description: formValue(init, "description")
     });
     const volume = {
-      id: demoId("volume"), workId: work.id, title: "正文", kind: "main", description: "", keywords: [], order: 1, sortOrder: 0, versionNo: 1, chapters: [], versions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+      id: demoId("volume"), workId: work.id, title: "正文", kind: "main", description: "", keywords: [], order: 1, sortOrder: 0, storyOrder: 0, versionNo: 1, deletedAt: null, chapters: [], versions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
     };
     ensureEntityHistory(volume);
     const content = file?.text ? await file.text() : "";
@@ -2255,7 +2641,7 @@ async function mockApi(input, init = {}) {
     }
     let volume = work.volumes.find((item) => item.kind === "main") ?? work.volumes[0];
     if (!volume) {
-      volume = { id: demoId("volume"), workId: work.id, title: "正文", kind: "main", description: "", keywords: [], order: 1, sortOrder: 0, versionNo: 1, chapters: [], versions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      volume = { id: demoId("volume"), workId: work.id, title: "正文", kind: "main", description: "", keywords: [], order: 1, sortOrder: 0, storyOrder: 0, versionNo: 1, deletedAt: null, chapters: [], versions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       ensureEntityHistory(volume);
       work.volumes.push(volume);
     }
@@ -2309,6 +2695,8 @@ async function mockApi(input, init = {}) {
     const attachmentId = decodeURIComponent(match[1]);
     const found = works.flatMap((work) => work.attachments.map((attachment) => ({ work, attachment }))).find(({ attachment }) => attachment.id === attachmentId);
     if (!found) return failure("未找到附件");
+    const blob = demoAttachmentBlobs.get(attachmentId);
+    if (blob) return new Response(blob, { headers: { "content-type": found.attachment.storedMimeType, "cache-control": "private, max-age=3600" } });
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="#eadfd3"/><text x="320" y="190" text-anchor="middle" fill="#6b4a3e" font-family="sans-serif" font-size="24">${escapeXml(found.attachment.fileName)}</text></svg>`;
     return new Response(svg, { headers: { "content-type": "image/svg+xml", "cache-control": "private, max-age=3600" } });
   }
@@ -2318,6 +2706,7 @@ async function mockApi(input, init = {}) {
     const found = works.flatMap((work) => work.attachments.map((attachment) => ({ work, attachment }))).find(({ attachment }) => attachment.id === attachmentId);
     if (!found) return failure("未找到附件");
     found.work.attachments = found.work.attachments.filter((attachment) => attachment.id !== attachmentId);
+    demoAttachmentBlobs.delete(attachmentId);
     recordAudit(found.work, "attachment.deleted", "attachment", attachmentId);
     return success(null, 204);
   }
@@ -2327,30 +2716,27 @@ async function mockApi(input, init = {}) {
     return work ? success([]) : failure("未找到作品");
   }
   match = path.match(/^\/api\/works\/([^/]+)\/export$/u);
-  if (match && method === "GET") {
+  if (match && (method === "GET" || method === "HEAD")) {
     const work = findWork(decodeURIComponent(match[1]));
     if (!work) return failure("未找到作品");
-    return success({
-      schemaVersion: 8,
-      exportedAt: new Date().toISOString(),
-      work: workView(work),
-      drafts: work.drafts.map((draft) => draftView(draft, true)),
-      settings: work.settings,
-      characters: work.characters,
-      races: work.races,
-      organizations: work.organizations,
-      timelineTracks: work.timelineTracks,
-      timeline: work.timeline,
-      relationships: work.relationships,
-      outlines: work.outlines
-    });
+    const format = ["docx", "epub"].includes(url.searchParams.get("format")) ? url.searchParams.get("format") : "markdown";
+    return demoArtifactResponse(demoExportArtifact(work, format), method);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/replace$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const body = await bodyOf(init);
+    if (!String(body.find ?? "")) return failure("查找内容不能为空", 400);
+    return success(demoGlobalReplace(work, body));
   }
   match = path.match(/^\/api\/works\/([^/]+)$/u);
   if (match) {
     const work = findWork(decodeURIComponent(match[1]));
     if (!work) return failure("未找到作品");
+    demoActiveWorkId = work.id;
     if (method === "GET") return success(url.searchParams.get("directory") === "volumes"
-      ? { id: work.id, title: work.title, author: work.author, wordCount: work.wordCount, chapterCount: work.chapterCount, versionNo: work.versionNo, volumes: work.volumes.map((volume) => ({ ...volume, chapters: [] })) }
+      ? { id: work.id, title: work.title, author: work.author, wordCount: work.wordCount, chapterCount: work.chapterCount, versionNo: work.versionNo, volumes: work.volumes.filter((volume) => !volume.deletedAt).map((volume) => ({ ...volume, chapters: [] })) }
       : workView(work));
     if (method === "PATCH") {
       const body = await bodyOf(init);
@@ -2623,6 +3009,30 @@ async function mockApi(input, init = {}) {
       return success(found.section);
     }
   }
+  match = path.match(/^\/api\/characters\/([^/]+)\/avatar$/u);
+  if (match) {
+    const found = findResourceRecord(decodeURIComponent(match[1]), true);
+    if (!found || found.resource !== "characters") return failure("未找到角色");
+    if (method === "PUT") {
+      const file = formFile(init);
+      if (!(file instanceof Blob) || !/^image\/(?:png|jpe?g|webp)$/u.test(file.type)) return failure("请选择 PNG、JPEG 或 WebP 角色头像", 415);
+      demoCharacterAvatarBlobs.set(found.item.id, file);
+      found.item.avatarUrl = `/api/characters/${encodeURIComponent(found.item.id)}/avatar?v=${Number(found.item.versionNo ?? 1) + 1}`;
+      bumpEntity(found.work, found.item, "character", "更新角色头像");
+      return success(found.item);
+    }
+    if (method === "DELETE") {
+      demoCharacterAvatarBlobs.delete(found.item.id);
+      found.item.avatarUrl = null;
+      bumpEntity(found.work, found.item, "character", "移除角色头像");
+      return success(found.item);
+    }
+    if (method === "GET") {
+      const blob = demoCharacterAvatarBlobs.get(found.item.id);
+      if (!blob) return failure("角色头像不存在");
+      return new Response(blob, { headers: { "content-type": blob.type, "cache-control": "private, max-age=31536000, immutable" } });
+    }
+  }
   match = path.match(/^\/api\/works\/([^/]+)\/tasks(?:\/relationship-source-preview)?$/u);
   if (match) {
     const work = findWork(decodeURIComponent(match[1]));
@@ -2664,6 +3074,81 @@ async function mockApi(input, init = {}) {
       work.tasks.unshift(task);
       recordAudit(work, "task.created", "analysis-task", task.id, { taskType: task.taskType });
       return success(task, 201);
+    }
+  }
+  match = path.match(/^\/api\/tasks\/([^/]+)\/character-extraction\/(preview|apply)$/u);
+  if (match) {
+    const taskId = decodeURIComponent(match[1]);
+    const found = works.map((work) => ({ work, task: work.tasks.find((item) => item.id === taskId) })).find((value) => value.task);
+    if (!found) return failure("未找到分析任务");
+    found.task.characterExtractionPreview ??= {
+      status: "pending",
+      totalCount: 2,
+      previewToken: demoId("character-preview"),
+      items: [
+        {
+          candidateId: `${taskId}-candidate-1`,
+          name: found.work.characters[0]?.name ?? "演示角色",
+          aliases: ["分析候选别名"],
+          species: found.work.characters[0]?.species ?? "",
+          identity: "从正文中提取的身份摘要",
+          stableCharacterId: found.work.characters[0]?.id ?? null,
+          suggestedAction: found.work.characters[0] ? "merge" : "create",
+          matchCandidates: found.work.characters[0] ? [{ characterId: found.work.characters[0].id, name: found.work.characters[0].name, versionNo: found.work.characters[0].versionNo, matchType: "stable" }] : [],
+          conflicts: found.work.characters[0] ? ["已有非空档案字段会保持不变"] : []
+        },
+        {
+          candidateId: `${taskId}-candidate-2`,
+          name: "新发现角色",
+          aliases: ["新人"],
+          species: "",
+          identity: "待作者确认的新角色",
+          suggestedAction: "create",
+          matchCandidates: [],
+          conflicts: []
+        }
+      ]
+    };
+    if (match[2] === "preview" && method === "GET") return success(found.task.characterExtractionPreview);
+    if (match[2] === "apply" && method === "POST") {
+      const body = await bodyOf(init);
+      if (body.previewToken !== found.task.characterExtractionPreview.previewToken) return failure("角色候选预览已过期，请重新加载", 409);
+      if (found.task.characterExtractionApplied?.previewToken === body.previewToken) return success(found.task.characterExtractionApplied.result);
+      const items = [];
+      for (const selection of Array.isArray(body.selections) ? body.selections : []) {
+        const candidate = found.task.characterExtractionPreview.items.find((item) => item.candidateId === selection.candidateId);
+        if (!candidate) continue;
+        if (selection.action === "skip") {
+          items.push({ candidateId: candidate.candidateId, status: "skipped", characterId: null, addedAliases: [], conflicts: [] });
+          continue;
+        }
+        if (selection.action === "merge") {
+          const character = found.work.characters.find((item) => item.id === selection.targetCharacterId);
+          if (!character) return failure("未找到要合并的角色", 400);
+          const aliases = [...new Set((selection.aliases ?? []).map(String).filter((alias) => alias && alias !== character.name && !(character.aliases ?? []).includes(alias)))];
+          character.aliases = [...(character.aliases ?? []), ...aliases];
+          bumpEntity(found.work, character, "character", "应用角色抽取候选", "ai-task");
+          items.push({ candidateId: candidate.candidateId, status: "merged", characterId: character.id, addedAliases: aliases, conflicts: [] });
+          continue;
+        }
+        const character = createResourceRecord(found.work, "characters", selection);
+        found.work.characters.unshift(character);
+        recordAudit(found.work, "character.created", "character", character.id, { taskId });
+        items.push({ candidateId: candidate.candidateId, status: "created", characterId: character.id, addedAliases: character.aliases, conflicts: [] });
+      }
+      const result = {
+        status: "applied",
+        totalCount: items.length,
+        createdCount: items.filter((item) => item.status === "created").length,
+        mergedCount: items.filter((item) => item.status === "merged").length,
+        unchangedCount: 0,
+        skippedCount: items.filter((item) => item.status === "skipped").length,
+        characterIds: items.map((item) => item.characterId).filter(Boolean),
+        items
+      };
+      found.task.characterExtractionPreview.status = "applied";
+      found.task.characterExtractionApplied = { previewToken: body.previewToken, result };
+      return success(result);
     }
   }
   match = path.match(/^\/api\/tasks\/([^/]+)(?:\/(detail|result|trace|run|rerun|cancel|relationship-changes\/(apply|discard)))?(?:\/calls\/([^/]+))?$/u);
@@ -2901,7 +3386,9 @@ async function mockApi(input, init = {}) {
       keywords: body.keywords ?? [],
       order: work.volumes.length + 1,
       sortOrder: work.volumes.length,
+      storyOrder: Number.isInteger(Number(body.storyOrder)) ? Number(body.storyOrder) : work.volumes.length,
       versionNo: 1,
+      deletedAt: null,
       chapters: [],
       versions: [],
       createdAt: timestamp,
@@ -2944,6 +3431,42 @@ async function mockApi(input, init = {}) {
     recordAudit(work, "chapter.created", "chapter", chapter.id);
     return success(chapter, 201);
   }
+  match = path.match(/^\/api\/volumes\/([^/]+)\/export$/u);
+  if (match && (method === "GET" || method === "HEAD")) {
+    const volumeId = decodeURIComponent(match[1]);
+    const work = works.find((item) => item.volumes.some((volume) => volume.id === volumeId && !volume.deletedAt));
+    if (!work) return failure("未找到分卷");
+    return demoArtifactResponse(demoExportArtifact(work, "epub", volumeId), method);
+  }
+  match = path.match(/^\/api\/volumes\/([^/]+)\/(restore|permanent)$/u);
+  if (match) {
+    const volumeId = decodeURIComponent(match[1]);
+    const work = works.find((item) => item.volumes.some((volume) => volume.id === volumeId));
+    const volume = work?.volumes.find((item) => item.id === volumeId);
+    if (!work || !volume?.deletedAt) return failure("未找到已删除分卷");
+    const body = await bodyOf(init);
+    if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(volume.versionNo)) return failure("分卷版本已变化，请刷新后重试", 409);
+    if (match[2] === "restore" && method === "POST") {
+      volume.deletedAt = null;
+      bumpEntity(work, volume, "volume", "从回收站恢复分卷", "restore");
+      for (const chapter of work.chapters.filter((item) => item.deletedViaVolumeId === volume.id)) {
+        chapter.deletedAt = null;
+        chapter.deletedViaVolumeId = null;
+        chapter.versionNo += 1;
+        chapter.updatedAt = new Date().toISOString();
+        recordChapterVersion(chapter, "restore", "随分卷从回收站恢复");
+      }
+      syncWorkChapters(work);
+      return success(volume);
+    }
+    if (match[2] === "permanent" && method === "DELETE") {
+      for (const chapter of [...work.chapters.filter((item) => item.volumeId === volume.id)]) permanentlyDeleteChapter(work, chapter);
+      work.volumes = work.volumes.filter((item) => item.id !== volume.id);
+      recordAudit(work, "volume.purged", "volume", volume.id, { title: volume.title, recoverable: false });
+      syncWorkChapters(work);
+      return success(null, 204);
+    }
+  }
   match = path.match(/^\/api\/volumes\/([^/]+)$/u);
   if (match) {
     const volumeId = decodeURIComponent(match[1]);
@@ -2953,10 +3476,20 @@ async function mockApi(input, init = {}) {
     if (method === "DELETE") {
       const body = await bodyOf(init);
       if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(volume.versionNo)) return failure("分卷版本已变化，请刷新后重试", 409);
-      if (work.chapters.some((chapter) => chapter.volumeId === volumeId && !chapter.deletedAt)) return failure("分卷中仍有章节，无法删除", 409);
-      if (work.chapters.some((chapter) => chapter.volumeId === volumeId && chapter.deletedAt)) return failure("分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷", 409);
-      work.volumes = work.volumes.filter((item) => item.id !== volumeId);
-      recordAudit(work, "volume.deleted", "volume", volumeId, { versionNo: volume.versionNo });
+      const timestamp = new Date().toISOString();
+      volume.versionNo += 1;
+      volume.deletedAt = timestamp;
+      volume.updatedAt = timestamp;
+      ensureEntityHistory(volume).unshift(entityVersion(volume, "delete", "删除分卷（可恢复）"));
+      for (const chapter of work.chapters.filter((item) => item.volumeId === volumeId && !item.deletedAt)) {
+        chapter.versionNo += 1;
+        chapter.deletedAt = timestamp;
+        chapter.deletedViaVolumeId = volumeId;
+        chapter.updatedAt = timestamp;
+        recordChapterVersion(chapter, "delete", "随分卷移入回收站");
+      }
+      syncWorkChapters(work);
+      recordAudit(work, "volume.deleted", "volume", volumeId, { versionNo: volume.versionNo, recoverable: true });
       return success(null, 204);
     }
     if (method === "PATCH") {
@@ -2966,9 +3499,42 @@ async function mockApi(input, init = {}) {
       if (typeof body.kind === "string") volume.kind = body.kind;
       if (typeof body.description === "string") volume.description = body.description;
       if (Array.isArray(body.keywords)) volume.keywords = body.keywords;
+      if (Number.isInteger(Number(body.storyOrder))) volume.storyOrder = Number(body.storyOrder);
       bumpEntity(work, volume, "volume", body.changeNote || "更新分卷");
     }
     return success(volume);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/recycle-bin$/u);
+  if (match && method === "GET") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    return success({
+      retentionDays: 30,
+      volumes: work.volumes.filter((volume) => volume.deletedAt).map((volume) => ({
+        id: volume.id,
+        workId: work.id,
+        title: volume.title,
+        description: volume.description ?? "",
+        chapterCount: work.chapters.filter((chapter) => chapter.volumeId === volume.id).length,
+        versionNo: volume.versionNo,
+        actor: demoUser.displayName,
+        deletedAt: volume.deletedAt,
+        expiresAt: demoRecycleBinExpiresAt(volume.deletedAt)
+      })),
+      chapters: work.chapters.filter((chapter) => chapter.deletedAt && !chapter.deletedViaVolumeId).map((chapter) => ({
+        id: chapter.id,
+        workId: work.id,
+        volumeId: chapter.volumeId,
+        volumeTitle: work.volumes.find((volume) => volume.id === chapter.volumeId)?.title ?? "原分卷",
+        title: chapter.title,
+        contentPreview: chapter.content.slice(0, 240),
+        wordCount: chapter.wordCount,
+        versionNo: chapter.versionNo,
+        actor: demoUser.displayName,
+        deletedAt: chapter.deletedAt,
+        expiresAt: demoRecycleBinExpiresAt(chapter.deletedAt)
+      }))
+    });
   }
   if (path === "/api/works" && method === "GET") {
     const items = works.filter((work) => !work.deletedAt).map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, drafts, relationships, reviews, tasks, suggestions, fileVersions, attachments, members, chapterAnnotations, auditLogs, writingGoal, deletedAt, ...work }) => work);
@@ -3119,4 +3685,57 @@ async function mockApi(input, init = {}) {
   return failure(`Demo 尚未预制接口：${path}`);
 }
 
+function installDemoUploadAdapter() {
+  class DemoUploadRequest {
+    constructor() {
+      this.upload = new EventTarget();
+      this.events = new EventTarget();
+      this.headers = {};
+      this.status = 0;
+      this.responseText = "";
+      this.aborted = false;
+    }
+
+    addEventListener(...args) { this.events.addEventListener(...args); }
+    removeEventListener(...args) { this.events.removeEventListener(...args); }
+    open(method, path) {
+      this.method = String(method ?? "GET").toUpperCase();
+      this.path = String(path ?? "");
+    }
+    setRequestHeader(name, value) { this.headers[String(name)] = String(value); }
+    abort() {
+      if (this.aborted) return;
+      this.aborted = true;
+      this.controller?.abort();
+      this.events.dispatchEvent(new Event("abort"));
+    }
+    async send(body) {
+      this.controller = new AbortController();
+      const progress = (loaded, total) => {
+        const event = new Event("progress");
+        Object.defineProperties(event, {
+          lengthComputable: { value: total > 0 },
+          loaded: { value: loaded },
+          total: { value: total }
+        });
+        this.upload.dispatchEvent(event);
+      };
+      const total = body instanceof FormData ? [...body.values()].reduce((size, value) => size + (value instanceof Blob ? value.size : String(value).length), 0) : 0;
+      progress(0, total);
+      try {
+        const response = await window.fetch(this.path, { method: this.method, headers: this.headers, body, signal: this.controller.signal });
+        if (this.aborted) return;
+        this.status = response.status;
+        this.responseText = await response.text();
+        progress(total, total);
+        this.events.dispatchEvent(new Event("load"));
+      } catch {
+        if (!this.aborted) this.events.dispatchEvent(new Event("error"));
+      }
+    }
+  }
+  window.XMLHttpRequest = DemoUploadRequest;
+}
+
 window.fetch = mockApi;
+installDemoUploadAdapter();

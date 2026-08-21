@@ -29,8 +29,8 @@ export function versionModuleSource(version, coverVersions = {}) {
 
 export function versionedDemoAdapterSource(source, version) {
   return source.replace(
-    'from "./demo-version.js"',
-    `from "./demo-version.js?v=${encodeURIComponent(version)}"`
+    '"./demo-version.js"',
+    `"./demo-version.js?v=${encodeURIComponent(version)}"`
   );
 }
 
