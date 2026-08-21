@@ -411,7 +411,7 @@ test("浏览器直连模式支持 OpenAI Responses 与关系角色扮演回忆",
       return new Response(JSON.stringify({ output_text: "角色回应", usage: { output_tokens: 7 } }), { status: 200, headers: { "content-type": "application/json" } });
     },
     provider: { protocol: "openai-responses", baseUrl: "https://example.test/v1/responses", apiKey: "sk-local" },
-    model: { modelId: "response-model", preset: { temperature: 0.4, max_tokens: 800 } },
+    model: { modelId: "response-model", thinkingEnabled: false, preset: { temperature: 0.4, max_tokens: 800 } },
     messages
   });
   const body = JSON.parse(request.init.body);
@@ -419,6 +419,9 @@ test("浏览器直连模式支持 OpenAI Responses 与关系角色扮演回忆",
   assert.equal(body.model, "response-model");
   assert.equal(body.instructions, messages[0].content);
   assert.deepEqual(body.input, messages.slice(1));
+  assert.equal(body.reasoning_effort, "none");
+  assert.equal(body.reasoning, undefined);
+  assert.equal(body.thinking, undefined);
   assert.deepEqual(result, { content: "角色回应", outputTokens: 7 });
 });
 

@@ -198,17 +198,38 @@ function completionText(payload) {
   throw new Error("模型响应中没有可用文本");
 }
 
+function isGeminiProviderOrModel(provider, model) {
+  const endpoint = String(provider.baseUrl ?? "").toLowerCase();
+  const modelId = String(model.modelId ?? "").toLowerCase();
+  return provider.protocol === "google-vertex"
+    || endpoint.includes("gemini")
+    || endpoint.includes("generativelanguage.googleapis.com")
+    || endpoint.includes("aiplatform.googleapis.com")
+    || modelId.includes("gemini");
+}
+
+function providerHostname(provider) {
+  try {
+    return new URL(provider.baseUrl).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 function browserThinkingParameters(provider, model) {
   const thinkingEnabled = model.thinkingEnabled !== false;
   const effort = ["low", "medium", "high", "xhigh", "max"].includes(model.thinkingEffort) ? model.thinkingEffort : null;
-  if (provider.protocol === "openai-responses") return {
-    ...(!thinkingEnabled ? { reasoning: { effort: "none" } } : effort ? { reasoning: { effort } } : {})
-  };
-  if (provider.protocol === "anthropic-messages") return effort ? { output_config: { effort } } : {};
-  return {
-    thinking: { type: thinkingEnabled ? provider.thinkingType ?? "enabled" : "disabled" },
-    ...(thinkingEnabled && effort ? { reasoning_effort: effort } : {})
-  };
+  if (provider.protocol === "openai-responses" && !thinkingEnabled) return { reasoning_effort: "none" };
+  const effortParameters = thinkingEnabled && effort
+    ? provider.protocol === "anthropic-messages"
+      ? { output_config: { effort } }
+      : { reasoning_effort: effort }
+    : {};
+  if (isGeminiProviderOrModel(provider, model)) return effortParameters;
+  const hostname = providerHostname(provider);
+  const isZhipu = hostname === "open.bigmodel.cn" || hostname.endsWith(".bigmodel.cn") || hostname === "api.z.ai" || hostname.endsWith(".z.ai");
+  if (provider.protocol === "anthropic-messages" && !isZhipu && hostname !== "api.longcat.chat") return effortParameters;
+  return { thinking: { type: thinkingEnabled ? provider.thinkingType ?? "enabled" : "disabled" }, ...effortParameters };
 }
 
 function messagesWithImages(messages, protocol, imageAttachments) {
