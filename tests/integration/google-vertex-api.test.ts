@@ -176,6 +176,35 @@ describe("Google Vertex 供应商 API", () => {
     }
   });
 
+  it("通过 Vertex OpenAI 兼容 /models 自动导入模型", async () => {
+    const provider = await request(runtime.app).post("/api/platform/ai/providers").send({
+      name: "Google Vertex 模型导入",
+      protocol: "google-vertex",
+      baseUrl: vertexBaseUrl,
+      apiKey: serviceAccountJson,
+      status: "enabled"
+    }).expect(201);
+    const providerId = String(provider.body.data.id);
+
+    const imported = await request(runtime.app).post(`/api/providers/${providerId}/models/import`).send({}).expect(200);
+    expect(imported.body.data).toEqual({
+      availableCount: 1,
+      importedCount: 1,
+      existingCount: 0,
+      invalidItemCount: 0
+    });
+    const models = await request(runtime.app).get(`/api/providers/${providerId}/models`).expect(200);
+    expect(models.body.data).toEqual([
+      expect.objectContaining({
+        modelId: "google/gemini-2.0-flash-001",
+        displayName: "google/gemini-2.0-flash-001",
+        contextWindow: 128_000,
+        preset: { max_tokens: 32_000 }
+      })
+    ]);
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === `${vertexBaseUrl}/models`)).toBe(true);
+  });
+
   it("出站前再次拒绝数据库中遗留的非官方 Vertex 地址", async () => {
     const provider = await request(runtime.app).post("/api/platform/ai/providers").send({
       name: "遗留 Vertex",

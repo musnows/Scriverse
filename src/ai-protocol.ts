@@ -133,6 +133,102 @@ export function providerModelEndpoints(baseUrl: string, protocol: AiProviderProt
   return primary === root ? [primary] : [primary, root];
 }
 
+export type ProviderModelListItem = {
+  modelId: string;
+  displayName: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  multimodalEnabled?: boolean;
+};
+
+export type ProviderModelListPage = {
+  models: ProviderModelListItem[];
+  invalidItemCount: number;
+  nextCursor?: string;
+};
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function trimmedString(value: unknown, maximumLength: number): string {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim();
+  return normalized.length <= maximumLength ? normalized : "";
+}
+
+function boundedPositiveInteger(value: unknown, minimum: number, maximum: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const normalized = Math.round(value);
+  return normalized >= minimum && normalized <= maximum ? normalized : undefined;
+}
+
+function parseOpenAiCompatibleModelList(data: unknown[]): Pick<ProviderModelListPage, "models" | "invalidItemCount"> {
+  let invalidItemCount = 0;
+  const models = data.flatMap((item) => {
+    const model = objectValue(item);
+    const modelId = trimmedString(model?.id, 300);
+    if (!model || !modelId) {
+      invalidItemCount += 1;
+      return [];
+    }
+    return [{ modelId, displayName: modelId }];
+  });
+  return { models, invalidItemCount };
+}
+
+function parseAnthropicModelList(data: unknown[]): Pick<ProviderModelListPage, "models" | "invalidItemCount"> {
+  let invalidItemCount = 0;
+  const models = data.flatMap((item) => {
+    const model = objectValue(item);
+    const modelId = trimmedString(model?.id, 300);
+    if (!model || !modelId) {
+      invalidItemCount += 1;
+      return [];
+    }
+    const displayName = trimmedString(model.display_name, 200) || modelId;
+    const capabilities = objectValue(model.capabilities);
+    const imageInput = objectValue(capabilities?.image_input);
+    const contextWindow = boundedPositiveInteger(model.max_input_tokens, 32_768, 2_000_000);
+    const maxOutputTokens = boundedPositiveInteger(model.max_tokens, 1, 2_000_000);
+    return [{
+      modelId,
+      displayName,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      ...(typeof imageInput?.supported === "boolean" ? { multimodalEnabled: imageInput.supported } : {})
+    }];
+  });
+  return { models, invalidItemCount };
+}
+
+export function parseProviderModelListPage(protocol: AiProviderProtocol, payload: unknown): ProviderModelListPage {
+  const root = objectValue(payload);
+  if (!root || !Array.isArray(root.data)) {
+    throw new Error(`${providerProtocolLabelText(protocol)} /models 响应缺少 data 列表`);
+  }
+  if (protocol === "anthropic-messages") {
+    const page = parseAnthropicModelList(root.data);
+    if (root.has_more !== true) return page;
+    const nextCursor = trimmedString(root.last_id, 300);
+    if (!nextCursor) throw new Error("Anthropic Messages /models 分页响应缺少 last_id");
+    return { ...page, nextCursor };
+  }
+  return parseOpenAiCompatibleModelList(root.data);
+}
+
+export function providerModelListPageEndpoint(
+  endpoint: string,
+  protocol: AiProviderProtocol,
+  cursor?: string
+): string {
+  if (protocol !== "anthropic-messages") return endpoint;
+  const url = new URL(endpoint);
+  url.searchParams.set("limit", "1000");
+  if (cursor) url.searchParams.set("after_id", cursor);
+  return url.toString();
+}
+
 export function providerRequestHeaders(
   protocol: AiProviderProtocol,
   accessToken: string,

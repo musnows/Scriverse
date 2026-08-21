@@ -3009,6 +3009,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listModelsPage(request.params.providerId, pagination) : ai.listModels(request.params.providerId));
   });
+  app.post("/api/providers/:providerId/models/import", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await ai.importProviderModels(request.params.providerId));
+  });
   app.post("/api/providers/:providerId/models", (request, response) => data(response, ai.createModel(request.params.providerId, parse(modelSchema, request.body)), 201));
   app.post("/api/models/:modelId/test", async (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});

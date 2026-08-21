@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildCompletionRequestBody,
   parseCompletionPayload,
+  parseProviderModelListPage,
   providerCompletionEndpoint,
+  providerModelListPageEndpoint,
   providerModelEndpoints,
   providerRequestHeaders
 } from "../../src/ai-protocol.js";
@@ -26,6 +28,61 @@ describe("AI 供应商协议适配", () => {
       .toBe("https://api.openai.com/v1/responses");
     expect(providerModelEndpoints("https://api.openai.com/v1", "openai-responses"))
       .toEqual(["https://api.openai.com/v1/models"]);
+  });
+
+  it.each(["openai-chat-completions", "openai-responses", "google-vertex"] as const)(
+    "按 %s 的 OpenAI 兼容结构解析模型列表",
+    (protocol) => {
+      expect(parseProviderModelListPage(protocol, {
+        object: "list",
+        data: [
+          { id: " model-a ", object: "model", created: 1, owned_by: "provider" },
+          { id: "model-b", object: "model" },
+          { object: "model" }
+        ]
+      })).toEqual({
+        models: [
+          { modelId: "model-a", displayName: "model-a" },
+          { modelId: "model-b", displayName: "model-b" }
+        ],
+        invalidItemCount: 1
+      });
+    }
+  );
+
+  it("按 Anthropic 结构解析名称、能力、上下文与分页游标", () => {
+    expect(parseProviderModelListPage("anthropic-messages", {
+      data: [{
+        id: "claude-sonnet",
+        display_name: "Claude Sonnet",
+        type: "model",
+        max_input_tokens: 200_000,
+        max_tokens: 64_000,
+        capabilities: { image_input: { supported: true } }
+      }],
+      has_more: true,
+      last_id: "claude-sonnet"
+    })).toEqual({
+      models: [{
+        modelId: "claude-sonnet",
+        displayName: "Claude Sonnet",
+        contextWindow: 200_000,
+        maxOutputTokens: 64_000,
+        multimodalEnabled: true
+      }],
+      invalidItemCount: 0,
+      nextCursor: "claude-sonnet"
+    });
+    expect(providerModelListPageEndpoint(
+      "https://api.anthropic.com/v1/models",
+      "anthropic-messages",
+      "claude-sonnet"
+    )).toBe("https://api.anthropic.com/v1/models?limit=1000&after_id=claude-sonnet");
+  });
+
+  it("拒绝缺少协议模型列表字段或 Anthropic 分页游标的响应", () => {
+    expect(() => parseProviderModelListPage("openai-responses", { models: [] })).toThrow(/缺少 data 列表/u);
+    expect(() => parseProviderModelListPage("anthropic-messages", { data: [], has_more: true })).toThrow(/缺少 last_id/u);
   });
 
   it("为 Anthropic 请求设置版本与两种兼容鉴权头", () => {
