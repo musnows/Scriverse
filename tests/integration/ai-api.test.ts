@@ -203,6 +203,7 @@ describe("AI 供应商、模型与建议 API", () => {
       code: "PROVIDER_MODELS_ENDPOINT_UNSUPPORTED",
       message: "当前供应商 Base URL 不支持 /models 端点，请手动添加模型"
     });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM models WHERE provider_id = ?", providerId)).toEqual({ count: 0 });
   });
 
