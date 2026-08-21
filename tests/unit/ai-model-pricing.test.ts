@@ -1,20 +1,13 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   LiteLlmPriceCache,
   estimateLiteLlmUsageCost,
   nextLiteLlmPriceUpdate,
   parseLiteLlmPriceTable
 } from "../../src/ai-model-pricing.js";
-
-const temporaryRoots: string[] = [];
-
-afterAll(() => {
-  for (const root of temporaryRoots.splice(0)) execFileSync("rmtrash", ["-rf", root]);
-});
 
 const pricePayload = {
   "deepseek-chat": {
@@ -62,7 +55,6 @@ describe("LiteLLM 模型价格估算", () => {
 
   it("成功更新才替换 JSON 缓存，失败时保留历史文件并可重启恢复", async () => {
     const root = mkdtempSync(join(tmpdir(), "scriverse-litellm-price-cache-"));
-    temporaryRoots.push(root);
     const cachePath = join(root, "litellm-model-prices.json");
     const cache = new LiteLlmPriceCache({
       cachePath,
@@ -104,7 +96,6 @@ describe("LiteLLM 模型价格估算", () => {
 
   it("没有历史缓存且更新失败时保持不可用", async () => {
     const root = mkdtempSync(join(tmpdir(), "scriverse-litellm-price-cache-empty-"));
-    temporaryRoots.push(root);
     const cache = new LiteLlmPriceCache({
       cachePath: join(root, "litellm-model-prices.json"),
       schedule: false,
