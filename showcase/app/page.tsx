@@ -54,7 +54,7 @@ const relationColors: Record<RelationKind, string> = {
 
 const capabilities = [
   ["01", "作品书架", "集中管理多部作品、封面、作者、简介与作品级访问权限。"],
-  ["02", "正文与进度", "分卷章节树、批量筛选与移动、每日写作进度、版本回滚与章节回收站。"],
+  ["02", "正文与进度", "分卷章节树、批量筛选与移动、沉浸式阅读、正文行评论与待办、每日写作进度、版本回滚与章节回收站。"],
   ["03", "智能导入", "导入 TXT 或 DOCX，自动识别分卷、章节、设定与后记结构。"],
   ["04", "世界设定", "把地点、规则、道具与硬约束沉淀为可检索、可锁定的知识。"],
   ["05", "角色档案", "角色别名、属性、种族、组织归属与长篇档案都保留版本。"],
@@ -62,9 +62,16 @@ const capabilities = [
   ["07", "时间线看板", "在多条事件轨道上拆分、合并、排序，并追踪章节证据。"],
   ["08", "人物关系", "记录关系类型、关键词、置信度和证据，并自动生成可交互图谱。"],
   ["09", "大纲与伏笔", "管理章节目标、冲突、转折，以及伏笔的埋设、提醒和回收。"],
-  ["10", "AI 创作助手", "对话、续写、校对与三种剧情方向，流式输出且支持精确引用。"],
+  ["10", "AI 创作助手", "并发对话、续写、校对与关系角色扮演，支持人物关系和故事回忆。"],
   ["11", "分析任务", "结构、章节、角色、时间线、关系和一致性分析可批量编排。"],
-  ["12", "搜索与导出", "全文检索正文与知识库，把分卷、章节标题和正文安全导出为 Markdown ZIP。"],
+  ["12", "搜索与导出", "全文检索正文与设定库，把作品安全导出为 Markdown ZIP、DOCX 或带目录的 EPUB。"],
+];
+
+const latestCapabilities = [
+  ["N1", "并发对话与关系扮演", "同时推进多个 AI 对话；指定 AI 和作者各自扮演的角色，并按需回忆人物关系与故事正文。"],
+  ["N2", "沉浸式阅读与 EPUB", "在专注阅读界面检查章节连续性，并将封面、分卷层级和可跳转目录一起导出为 EPUB。"],
+  ["N3", "正文行评论与待办", "把评论或待办精确落在正文行上，集中查看、定位、解决，让协作反馈回到具体原文。"],
+  ["N4", "加密 S3 系统备份", "将数据库和图片增量备份到多个 S3 目标；支持本机加密、定时执行、留存与运行记录。"],
 ];
 
 const sectionIds = new Set(["top", "workspace", "abilities", "relationships", "galaxy"]);
@@ -589,6 +596,13 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="section latest-section" aria-labelledby="latest-capabilities-title">
+        <div className="section-heading split-heading"><div><span className="eyebrow">RECENTLY ADDED</span><h2 id="latest-capabilities-title">近期版本，<br />创作闭环再向前。</h2></div><p>从写作现场、阅读交付到角色沉浸和系统备份，这些能力已经进入叙界的正式工作流，并继续沿用同一套可追溯的数据边界。</p></div>
+        <div className="capability-grid latest-capability-grid">
+          {latestCapabilities.map(([index, title, description]) => <article key={index}><span>{index}</span><h3>{title}</h3><p>{description}</p><i>→</i></article>)}
+        </div>
+      </section>
+
       <section className="graph-section" id="relationships">
         <div className="section-heading graph-heading"><div><span className="eyebrow">RELATIONSHIP INTELLIGENCE</span><h2>人物不是档案，<br />而是一张活的网络。</h2></div><p>关系的类型、方向、强度与证据共同构成叙事张力。点击图中的角色，查看他们如何牵动整个故事。</p></div>
         <RelationshipGraph />
@@ -600,7 +614,7 @@ export default function Home() {
       </section>
 
       <section className="section intelligence-section">
-        <div className="section-heading split-heading"><div><span className="eyebrow">AI WITH CONTEXT</span><h2>AI 读懂的，<br />不止是眼前一段。</h2></div><p>章节正文、人物状态、锁定设定和全书概要组成可控上下文。每条建议都清楚说明依据，是否写回始终由作者决定。</p></div>
+        <div className="section-heading split-heading"><div><span className="eyebrow">AI WITH CONTEXT</span><h2>AI 读懂的，<br />不止是眼前一段。</h2></div><p>章节正文、人物状态、锁定设定和全书概要组成可控上下文。普通创作对话与关系角色扮演都能回忆人物关系和故事证据，是否写回始终由作者决定。</p></div>
         <div className="intelligence-grid">
           <article className="ai-console">
             <header><span><i />叙界助手</span><small>上下文 42,310 / 128,000</small></header>
@@ -629,7 +643,7 @@ export default function Home() {
       </section>
 
       <section className="section control-section">
-        <div className="control-copy"><span className="eyebrow">BUILT FOR SERIOUS STORIES</span><h2>创作自由之下，<br />是一套可靠的秩序。</h2><p>叙界支持多用户协作与作品级权限；密钥加密保存，导出不携带凭据；每一次重要写入都有审计与版本历史。</p><div className="control-tags"><span>作品级权限</span><span>加密密钥</span><span>同源防护</span><span>完整审计</span><span>安全导出</span></div></div>
+        <div className="control-copy"><span className="eyebrow">BUILT FOR SERIOUS STORIES</span><h2>创作自由之下，<br />是一套可靠的秩序。</h2><p>叙界支持多用户协作与作品级权限；密钥加密保存，导出不携带凭据；系统级 S3 备份可在本机加密数据库和图片，每一次重要写入都有审计与版本历史。</p><div className="control-tags"><span>作品级权限</span><span>加密密钥</span><span>S3 系统备份</span><span>完整审计</span><span>安全导出</span></div></div>
         <div className="access-card"><header><span>作品协作</span><small>《烬城来信》</small></header><div className="member"><i>陆</i><span><strong>陆离</strong><small>作品所有者</small></span><b>可管理</b></div><div className="member"><i>姚</i><span><strong>姚青</strong><small>联合作者</small></span><b>可编辑</b></div><div className="member"><i>沈</i><span><strong>沈越</strong><small>设定顾问</small></span><b>只读</b></div><footer><span>所有修改均记录操作者</span><button type="button">邀请协作</button></footer></div>
       </section>
 
