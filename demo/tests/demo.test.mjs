@@ -47,6 +47,7 @@ test("开发服务器直接复用正式站点前端资源", async () => {
   assert.match(server, /src\/public/);
   assert.match(server, /mock-api\.js/);
   assert.match(server, /process\.env\.PORT \?\? 45678/);
+  assert.match(server, /"\.svg": "image\/svg\+xml; charset=utf-8"/);
   assert.doesNotMatch(server, /novel\.db|sqlite/iu);
 });
 
@@ -138,6 +139,214 @@ test("Demo 适配当前正文、资料和协作接口契约", async () => {
   assert.match(adapter, /restoreEntityVersion/);
 });
 
+test("Demo 补齐当前前端新增契约并隔离 S3 凭据", async () => {
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  for (const capability of [
+    "annotation-counts",
+    "recycle-bin/works",
+    "outline-board",
+    "foreshadow-reminders",
+    "character-extraction",
+    "demoCharacterAvatarBlobs",
+    "demoExportArtifact",
+    "demoGlobalReplace",
+    "installDemoUploadAdapter",
+    "favorite",
+    "roleplayUserCharacter",
+    "recall_story",
+    "platform/ai/protocols",
+    "pricing/refresh",
+    "platform/backups/targets",
+    "monthlyTokenQuota",
+    "externalRequestSent"
+  ]) assert.match(adapter, new RegExp(capability), `Demo 缺少当前前端契约：${capability}`);
+  assert.ok(adapter.includes('match = path.match(/^\\/api\\/volumes\\/([^/]+)\\/(restore|permanent)$/u);'));
+  assert.ok(adapter.includes('match = path.match(/^\\/api\\/ai-conversations\\/([^/]+)\\/export$/u);'));
+  assert.match(adapter, /不会保存或上传 AK、SK/);
+  assert.match(adapter, /不会向任何 S3 服务发起外部请求/);
+  assert.doesNotMatch(adapter, /state\.backup.*(?:accessKeyId|secretAccessKey)/u);
+});
+
+test("浏览器 AI 保留多章节、剧情顺序、思考强度与图片输入", async () => {
+  const scoped = buildBrowserAiMessages({
+    work: works[0],
+    scope: { type: "chapter", chapterIds: [works[0].chapters[0].id, works[0].chapters[1].id] },
+    instruction: "对比两章"
+  });
+  assert.match(scoped[0].content, new RegExp(works[0].chapters[0].title));
+  assert.match(scoped[0].content, new RegExp(works[0].chapters[1].title));
+  const guardedScope = buildBrowserAiMessages({
+    work: {
+      title: "范围安全",
+      chapters: [{ id: "prose", title: "正文章", chapterType: "正文", content: "可分析正文" }, { id: "author-note", title: "作者的话", chapterType: "作者的话", content: "不应发送的作者说明" }],
+      settings: [{ title: "设定条目", content: "需一并参考" }]
+    },
+    scope: { type: "book", includeAllSettings: true },
+    instruction: "分析"
+  });
+  assert.match(guardedScope[0].content, /可分析正文/u);
+  assert.match(guardedScope[0].content, /需一并参考/u);
+  assert.doesNotMatch(guardedScope[0].content, /不应发送的作者说明/u);
+
+  const storyWork = {
+    title: "并行剧情",
+    volumes: [
+      { id: "later", sortOrder: 0, storyOrder: 2, chapters: [{ id: "later-chapter", title: "后发生", content: "后发生的事" }] },
+      { id: "earlier", sortOrder: 1, storyOrder: 0, chapters: [{ id: "earlier-chapter", title: "先发生", content: "先发生的事" }] }
+    ],
+    characters: [{ id: "role", name: "角色", gender: "female", isDead: true }],
+    relationships: []
+  };
+  const roleplay = buildBrowserAiMessages({ work: storyWork, scope: { type: "none" }, instruction: "回忆故事", roleplayCharacter: storyWork.characters[0] });
+  assert.ok(roleplay[0].content.indexOf("先发生") < roleplay[0].content.indexOf("后发生"));
+  assert.match(roleplay[0].content, /生命状态：已死亡/u);
+
+  let request;
+  await requestBrowserAi({
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已识别" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    provider: { protocol: "openai-chat-completions", baseUrl: "https://example.test/v1", apiKey: "sk-local", maxTokensParameter: "max_completion_tokens", thinkingType: "enabled" },
+    model: { modelId: "vision-model", thinkingEnabled: true, thinkingEffort: "high", preset: { max_tokens: 512 } },
+    messages: [{ role: "system", content: "系统" }, { role: "user", content: "看图" }],
+    imageAttachments: [{ mimeType: "image/png", dataUrl: "data:image/png;base64,AA==" }]
+  });
+  const body = JSON.parse(request.init.body);
+  assert.equal(body.max_completion_tokens, 512);
+  assert.equal(body.reasoning_effort, "high");
+  assert.deepEqual(body.thinking, { type: "enabled" });
+  assert.equal(body.messages[1].content[1].type, "image_url");
+});
+
+test("Demo mock 实际响应正式前端的新增功能契约", async () => {
+  const previous = Object.fromEntries(["window", "document", "sessionStorage"].map((key) => [key, globalThis[key]]));
+  const memoryStorage = () => {
+    const values = new Map();
+    return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)), removeItem: (key) => values.delete(key), values };
+  };
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  globalThis.window = {
+    fetch: async () => { throw new Error("合约测试不允许外部网络请求"); },
+    localStorage,
+    location: { origin: "https://demo.example.test" },
+    setTimeout
+  };
+  globalThis.document = { readyState: "loading", addEventListener() {} };
+  globalThis.sessionStorage = sessionStorage;
+  try {
+    await import(`../mock-api.js?contracts=${Date.now()}`);
+    sessionStorage.setItem("scriverse-demo-authenticated", "true");
+    const request = async (path, init = {}) => {
+      const response = await window.fetch(path, init);
+      const payload = response.status !== 204 && response.headers.get("content-type")?.includes("application/json") ? await response.json() : null;
+      return { response, payload, data: payload?.data };
+    };
+    const json = (method, body) => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const upload = (path, method, form) => new Promise((resolve, reject) => {
+      const xhr = new window.XMLHttpRequest();
+      const progress = [];
+      xhr.open(method, path, true);
+      xhr.upload.addEventListener("progress", (event) => progress.push(event.lengthComputable ? Math.round(event.loaded / event.total * 100) : null));
+      xhr.addEventListener("load", () => resolve({ status: xhr.status, payload: JSON.parse(xhr.responseText), progress }));
+      xhr.addEventListener("error", () => reject(new Error("Demo XHR 上传失败")));
+      xhr.send(form);
+    });
+    const zipLocalEntries = (bytes) => {
+      const entries = new Map();
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      let offset = 0;
+      while (offset + 30 <= bytes.length && view.getUint32(offset, true) === 0x04034b50) {
+        const size = view.getUint32(offset + 18, true);
+        const nameLength = view.getUint16(offset + 26, true);
+        const extraLength = view.getUint16(offset + 28, true);
+        const contentOffset = offset + 30 + nameLength + extraLength;
+        const name = new TextDecoder().decode(bytes.slice(offset + 30, offset + 30 + nameLength));
+        entries.set(name, bytes.slice(contentOffset, contentOffset + size));
+        offset = contentOffset + size;
+      }
+      return entries;
+    };
+
+    const work = (await request("/api/works/silent-tide")).data;
+    const board = (await request(`/api/works/${work.id}/outline-board?page=1&limit=10&sort=foreshadows`)).data;
+    assert.equal(board.workId, work.id);
+    assert.ok(board.total > 0);
+    assert.ok(board.volumeOptions.every((volume) => Number.isInteger(volume.filteredChapterCount)));
+
+    const replaced = (await request(`/api/works/${work.id}/replace`, json("POST", { find: "空气", replacement: "雾气", scope: "prose", volumeId: work.volumes[0].id }))).data;
+    assert.ok(replaced.totalMatches > 0);
+    assert.ok(replaced.chapterCount > 0);
+
+    const reminders = (await request(`/api/works/${work.id}/chapters/${work.id}-chapter-6/foreshadow-reminders`)).data;
+    assert.ok(reminders.length > 0);
+    const resolved = (await request(`/api/works/${work.id}/chapters/${work.id}-chapter-6/foreshadow-reminders/${reminders[0].foreshadowId}/resolve`, json("POST", { expectedVersionNo: reminders[0].versionNo }))).data;
+    assert.equal(resolved.status, "resolved");
+
+    const conversation = (await request(`/api/works/${work.id}/ai-conversations`, json("POST", { taskType: "chat" }))).data;
+    await request(`/api/ai-conversations/${conversation.id}/messages`, json("POST", { role: "user", content: "演示对话导出" }));
+    const conversationExport = await request(`/api/ai-conversations/${conversation.id}/export`);
+    assert.equal(conversationExport.response.headers.get("content-type"), "text/markdown; charset=utf-8");
+    assert.match(await conversationExport.response.text(), /演示对话导出/u);
+
+    const markdownExport = await request(`/api/works/${work.id}/export?format=markdown`);
+    assert.equal(markdownExport.response.headers.get("content-type"), "application/zip");
+    const markdownEntries = zipLocalEntries(new Uint8Array(await markdownExport.response.arrayBuffer()));
+    assert.ok([...markdownEntries.keys()].some((name) => name.endsWith(".md")));
+    const docxExport = await request(`/api/works/${work.id}/export?format=docx`);
+    const docxEntries = zipLocalEntries(new Uint8Array(await docxExport.response.arrayBuffer()));
+    assert.ok(docxEntries.has("[Content_Types].xml"));
+    assert.ok(docxEntries.has("word/document.xml"));
+    const epubHead = await request(`/api/volumes/${work.volumes[0].id}/export?format=epub`, { method: "HEAD" });
+    assert.equal(epubHead.response.status, 204);
+    assert.equal(epubHead.response.headers.get("content-type"), "application/epub+zip");
+    const epubExport = await request(`/api/volumes/${work.volumes[0].id}/export?format=epub`);
+    const epubEntries = zipLocalEntries(new Uint8Array(await epubExport.response.arrayBuffer()));
+    assert.equal(new TextDecoder().decode(epubEntries.get("mimetype")), "application/epub+zip");
+    assert.ok(epubEntries.has("META-INF/container.xml"));
+    assert.ok(epubEntries.has("OEBPS/nav.xhtml"));
+
+    const avatarForm = new FormData();
+    avatarForm.append("file", new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }), "avatar.png");
+    const character = work.characters[0];
+    const avatarUpload = await upload(`/api/characters/${character.id}/avatar`, "PUT", avatarForm);
+    assert.equal(avatarUpload.status, 200);
+    assert.deepEqual(avatarUpload.progress, [0, 100]);
+    const avatar = avatarUpload.payload.data;
+    assert.match(avatar.avatarUrl, /\/api\/characters\/.*\/avatar/u);
+    assert.equal((await request(`/api/characters/${character.id}/avatar`)).response.headers.get("content-type"), "image/png");
+
+    const task = work.tasks[0];
+    const preview = (await request(`/api/tasks/${task.id}/character-extraction/preview`)).data;
+    const applied = (await request(`/api/tasks/${task.id}/character-extraction/apply`, json("POST", {
+      previewToken: preview.previewToken,
+      selections: preview.items.map((item) => ({ candidateId: item.candidateId, action: "skip" }))
+    }))).data;
+    assert.equal(applied.status, "applied");
+    assert.equal(applied.skippedCount, preview.items.length);
+
+    const backupTarget = (await request("/api/platform/backups/targets", json("POST", { name: "安全演示", endpoint: "https://s3.example.invalid", bucket: "demo", accessKeyId: "DO-NOT-STORE", secretAccessKey: "DO-NOT-STORE-EITHER", enabled: true }))).data;
+    assert.doesNotMatch(JSON.stringify(backupTarget), /DO-NOT-STORE/u);
+    const backupRun = (await request("/api/platform/backups/run", json("POST", { targetIds: [backupTarget.id] }))).data;
+    assert.equal(backupRun.simulated, true);
+    assert.doesNotMatch([...localStorage.values.values()].join("\n"), /DO-NOT-STORE/u);
+
+    const deletedVolume = work.volumes.at(-1);
+    await request(`/api/volumes/${deletedVolume.id}`, json("DELETE", { expectedVersionNo: deletedVolume.versionNo }));
+    const recycleBin = (await request(`/api/works/${work.id}/recycle-bin`)).data;
+    const recycledVolume = recycleBin.volumes.find((volume) => volume.id === deletedVolume.id);
+    assert.equal(recycledVolume.chapterCount, deletedVolume.chapters.length);
+    await request(`/api/volumes/${deletedVolume.id}/restore`, json("POST", { expectedVersionNo: recycledVolume.versionNo }));
+    assert.ok((await request(`/api/works/${work.id}`)).data.volumes.some((volume) => volume.id === deletedVolume.id));
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  }
+});
+
 test("AI 配置仅保存在浏览器并说明前端直连方式", async () => {
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
   const values = new Map();
@@ -170,6 +379,50 @@ test("浏览器直接调用 OpenAI 兼容模型并携带作品上下文", async 
   assert.equal(request.init.headers.Authorization, "Bearer sk-local");
   assert.equal(JSON.parse(request.init.body).model, "demo-model");
   assert.deepEqual(result, { content: "冲突概括", outputTokens: 12 });
+});
+
+test("浏览器直连模式支持 OpenAI Responses 与关系角色扮演回忆", async () => {
+  const roleplayCharacter = {
+    id: works[0].characters[0].id,
+    name: works[0].characters[0].name,
+    profile: { summary: works[0].characters[0].detail },
+    currentState: { 身份: works[0].characters[0].role }
+  };
+  const roleplayUserCharacter = {
+    id: works[0].characters[1].id,
+    name: works[0].characters[1].name
+  };
+  const messages = buildBrowserAiMessages({
+    work: works[0],
+    scope: { type: "none" },
+    instruction: "继续刚才的对话",
+    roleplayCharacter,
+    roleplayUserCharacter
+  });
+  assert.match(messages[0].content, new RegExp(`你扮演 ${roleplayCharacter.name}`));
+  assert.match(messages[0].content, new RegExp(`对话者扮演：${roleplayUserCharacter.name}`));
+  assert.match(messages[0].content, /人物关系回忆/);
+  assert.match(messages[0].content, /故事回忆/);
+
+  let request;
+  const result = await requestBrowserAi({
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return new Response(JSON.stringify({ output_text: "角色回应", usage: { output_tokens: 7 } }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    provider: { protocol: "openai-responses", baseUrl: "https://example.test/v1/responses", apiKey: "sk-local" },
+    model: { modelId: "response-model", thinkingEnabled: false, preset: { temperature: 0.4, max_tokens: 800 } },
+    messages
+  });
+  const body = JSON.parse(request.init.body);
+  assert.equal(request.url, "https://example.test/v1/responses");
+  assert.equal(body.model, "response-model");
+  assert.equal(body.instructions, messages[0].content);
+  assert.deepEqual(body.input, messages.slice(1));
+  assert.equal(body.reasoning_effort, "none");
+  assert.equal(body.reasoning, undefined);
+  assert.equal(body.thinking, undefined);
+  assert.deepEqual(result, { content: "角色回应", outputTokens: 7 });
 });
 
 test("供应商和模型连接测试都会发起最小模型请求并接受纯思考响应", async () => {
@@ -264,4 +517,9 @@ test("Demo 版本直接继承主项目版本", async () => {
   assert.match(versionedDemoAdapterSource(adapter, mainPackage.version), new RegExp(`demo-version\\.js\\?v=${mainPackage.version.replaceAll(".", "\\.")}`));
   assert.match(adapter, /version: DEMO_VERSION/);
   assert.doesNotMatch(adapter, /0\.1\.0-demo/);
+});
+
+test("Demo 在正式前端和主版本来源变化时触发 Vercel 重建", async () => {
+  const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
+  assert.equal(vercel.ignoreCommand, "git diff --quiet HEAD^ HEAD -- ./ ../src/public ../package.json ../package-lock.json");
 });

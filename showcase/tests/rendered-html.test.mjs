@@ -26,6 +26,12 @@ test("服务端渲染叙界介绍页", async () => {
   assert.match(html, /每日写作进度/);
   assert.match(html, /章节回收站/);
   assert.match(html, /Markdown ZIP/);
+  assert.match(html, /并发对话与关系扮演/);
+  assert.match(html, /我和作者各自扮演的角色|AI 和作者各自扮演的角色/);
+  assert.match(html, /沉浸式阅读与 EPUB/);
+  assert.match(html, /正文行评论与待办/);
+  assert.match(html, /加密 S3 系统备份/);
+  assert.match(html, /S3 系统备份/);
   assert.match(html, /href="https:\/\/showcase\.scriverse\.top\/"[^>]*>在线体验/);
   assert.match(html, /href="https:\/\/llm-racing\.scriverse\.top\/\?utm_source=scriverse"/);
   assert.match(html, /aria-label="查看模型排行榜"/);

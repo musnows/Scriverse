@@ -127,6 +127,7 @@ CLI 会按服务器保存登录凭据。所有连接服务的数据命令都可�
 | `SCRIVERSE_AVATAR_IMAGE_MAX_BYTES` | `2097152` | 头像图片上传大小上限，单位为字节 |
 | `SCRIVERSE_COVER_IMAGE_MAX_BYTES` | `5242880` | 作品封面图片上传大小上限，单位为字节；封面不支持 GIF |
 | `SCRIVERSE_ATTACHMENT_IMAGE_MAX_BYTES` | `31457280` | 设定库等其他图片附件上传大小上限，单位为字节；包括 GIF |
+| `SCRIVERSE_AI_CHAT_IMAGE_MAX_BYTES` | `5242880` | 创作助手聊天图片附件上传大小上限，单位为字节；最小可设为 `1048576`（1 MB） |
 
 布尔环境变量统一接受 `true`/`1` 表示开启、`false`/`0` 表示关闭；其他数字不会被解析为布尔值。`APP_TRUST_PROXY` 例外，其 `0`–`10` 数字表示可信代理跳数。
 

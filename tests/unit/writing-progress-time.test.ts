@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildWritingCalendar,
+  buildWritingMonthCalendar,
   formatServerLocalClock,
   resolveServerTimeZone,
   resolveWritingTimeZone,
@@ -24,6 +25,15 @@ describe("写作进度时区", () => {
     expect(calendar.dateKeys).toEqual(["2026-03-07", "2026-03-08"]);
     expect(calendar.startInclusive).toBe("2026-03-07T05:00:00.000Z");
     expect(calendar.endExclusive).toBe("2026-03-09T04:00:00.000Z");
+  });
+
+  it("按服务端时区计算自然月的起止边界", () => {
+    const calendar = buildWritingMonthCalendar(new Date("2026-07-31T15:30:00.000Z"), "Asia/Shanghai");
+
+    expect(calendar.monthKey).toBe("2026-07");
+    expect(calendar.startKey).toBe("2026-07-01");
+    expect(calendar.startInclusive).toBe("2026-06-30T16:00:00.000Z");
+    expect(calendar.endExclusive).toBe("2026-07-31T16:00:00.000Z");
   });
 
   it("未配置或配置无效时默认使用上海时区", () => {

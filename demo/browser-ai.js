@@ -46,7 +46,7 @@ export function normalizeProviderBaseUrl(value) {
   if (!/^https?:$/u.test(url.protocol)) throw new Error("供应商地址必须使用 HTTP 或 HTTPS");
   url.hash = "";
   url.search = "";
-  url.pathname = url.pathname.replace(/\/(?:chat\/completions|messages|models)\/?$/u, "").replace(/\/+$/u, "");
+  url.pathname = url.pathname.replace(/\/(?:chat\/completions|responses|messages|models)\/?$/u, "").replace(/\/+$/u, "");
   return url.toString().replace(/\/$/u, "");
 }
 
@@ -73,24 +73,28 @@ function chapterList(work) {
 }
 
 function scopeContext(work, scope) {
-  const chapters = chapterList(work);
+  const chapters = chapterList(work).filter((chapter) => chapter.chapterType !== "作者的话" && chapter.excludedFromAnalysis !== true);
+  const settingsContext = scope?.includeAllSettings === true
+    ? `\n\n同时参考设定库：\n${(work?.settings ?? []).map((setting) => `${setting.title}：${String(setting.content ?? "").slice(0, 700)}`).join("\n").slice(0, 10000)}`
+    : "";
   if (scope?.type === "selection") return `当前选中文本：\n${String(scope.selection ?? "").slice(0, 24000)}`;
   if (scope?.type === "chapter" || scope?.chapterId) {
-    const chapter = chapters.find((item) => item.id === scope.chapterId);
-    if (chapter) return `当前章节：${chapter.title}\n\n${String(chapter.content ?? "").slice(0, 24000)}`;
+    const chapterIds = [...new Set([...(scope?.chapterIds ?? []), scope?.chapterId].filter(Boolean))];
+    const selected = chapterIds.map((chapterId) => chapters.find((item) => item.id === chapterId)).filter(Boolean);
+    if (selected.length) return `当前章节范围：\n${selected.map((chapter) => `${chapter.title}\n${String(chapter.content ?? "").slice(0, 8000)}`).join("\n\n").slice(0, 24000)}${settingsContext}`;
   }
   if (scope?.type === "volume") {
     const volume = (work?.volumes ?? []).find((item) => item.id === scope.volumeId);
-    if (volume) return `当前分卷：${volume.title}\n${(volume.chapters ?? []).map((chapter) => `${chapter.title}：${String(chapter.content ?? "").slice(0, 500)}`).join("\n")}`;
+    if (volume) return `当前分卷：${volume.title}\n${chapters.filter((chapter) => chapter.volumeId === volume.id || (volume.chapters ?? []).some((item) => item.id === chapter.id)).map((chapter) => `${chapter.title}：${String(chapter.content ?? "").slice(0, 500)}`).join("\n")}${settingsContext}`;
   }
   if (scope?.type === "book") {
-    return `全书章节概览：\n${chapters.map((chapter) => `${chapter.title}：${String(chapter.content ?? "").slice(0, 280)}`).join("\n").slice(0, 24000)}`;
+    return `全书章节概览：\n${chapters.map((chapter) => `${chapter.title}：${String(chapter.content ?? "").slice(0, 280)}`).join("\n").slice(0, 24000)}${settingsContext}`;
   }
   if (scope?.type === "settings-catalog" || scope?.type === "settings") {
     return `世界观设定：\n${(work?.settings ?? []).map((setting) => `${setting.title}：${String(setting.content ?? "").slice(0, 900)}`).join("\n").slice(0, 24000)}`;
   }
   if (scope?.type === "characters") {
-    return `人物档案：\n${(work?.characters ?? []).map((character) => `${character.name}：${String(character.profile?.summary ?? "").slice(0, 700)}`).join("\n").slice(0, 24000)}`;
+    return `人物档案：\n${(work?.characters ?? []).map((character) => `${character.name}（性别：${character.gender ?? "unknown"}${character.isDead ? "，已死亡" : ""}）：${String(character.profile?.summary ?? "").slice(0, 700)}`).join("\n").slice(0, 24000)}`;
   }
   if (scope?.type === "races") {
     return `种族档案：\n${(work?.races ?? []).map((race) => `${race.name}：${String(race.description ?? "").slice(0, 700)}`).join("\n").slice(0, 16000)}`;
@@ -113,7 +117,7 @@ function scopeContext(work, scope) {
     const selectedRaces = new Set(scope.raceIds ?? []);
     const selectedOrganizations = new Set(scope.organizationIds ?? []);
     const sections = [
-      ...(work?.characters ?? []).filter((item) => selectedCharacters.has(item.id)).map((item) => `角色 ${item.name}：${item.profile?.summary ?? ""}`),
+      ...(work?.characters ?? []).filter((item) => selectedCharacters.has(item.id)).map((item) => `角色 ${item.name}（性别：${item.gender ?? "unknown"}${item.isDead ? "，已死亡" : ""}）：${item.profile?.summary ?? ""}`),
       ...(work?.settings ?? []).filter((item) => selectedSettings.has(item.id)).map((item) => `设定 ${item.title}：${item.content ?? ""}`),
       ...(work?.races ?? []).filter((item) => selectedRaces.has(item.id)).map((item) => `种族 ${item.name}：${item.description ?? ""}`),
       ...(work?.organizations ?? []).filter((item) => selectedOrganizations.has(item.id)).map((item) => `组织 ${item.name}：${item.description ?? ""}`)
@@ -123,20 +127,55 @@ function scopeContext(work, scope) {
   return "本次请求未附加正文上下文。";
 }
 
-export function buildBrowserAiMessages({ work, scope, instruction, platformPrompt = "", workPrompt = "", conversationMessages = [], citations = [], roleplayCharacter = null }) {
+function roleplayMemoryContext(work, roleplayCharacter, roleplayUserCharacter) {
+  if (!roleplayCharacter) return "";
+  const characters = Array.isArray(work?.characters) ? work.characters : [];
+  const characterNames = new Map(characters.map((character) => [character.id, character.name]));
+  const relationships = (work?.relationships ?? [])
+    .filter((relationship) => relationship.fromCharacterId === roleplayCharacter.id || relationship.toCharacterId === roleplayCharacter.id)
+    .slice(0, 12)
+    .map((relationship) => {
+      const from = characterNames.get(relationship.fromCharacterId) ?? "未知角色";
+      const to = characterNames.get(relationship.toCharacterId) ?? "未知角色";
+      return `${from} — ${relationship.subtype || relationship.category || "关系未命名"} — ${to}`;
+    });
+  const roleNames = [roleplayCharacter.name, roleplayUserCharacter?.name].filter(Boolean);
+  const storyVolumes = [...(work?.volumes ?? [])].sort((left, right) => Number(left.storyOrder ?? left.sortOrder ?? 0) - Number(right.storyOrder ?? right.sortOrder ?? 0)
+    || Number(left.sortOrder ?? 0) - Number(right.sortOrder ?? 0));
+  const chapters = (storyVolumes.length ? storyVolumes.flatMap((volume) => volume.chapters ?? []) : chapterList(work))
+    .filter((chapter) => chapter.chapterType !== "作者的话" && chapter.excludedFromAnalysis !== true);
+  const recalledChapters = chapters
+    .filter((chapter) => roleNames.some((name) => String(chapter.content ?? "").includes(name)))
+    .slice(-4);
+  const storyMemories = (recalledChapters.length ? recalledChapters : chapters.slice(0, 3))
+    .map((chapter) => `${chapter.title}：${String(chapter.content ?? "").replace(/\s+/gu, " ").trim().slice(0, 900)}`);
+  return [
+    `角色扮演：你扮演 ${roleplayCharacter.name}。保持角色已知信息、立场与说话方式一致，不替作者决定剧情事实。`,
+    `角色档案：${roleplayCharacter.profile?.summary ?? "暂无摘要"}\n性别：${roleplayCharacter.gender ?? "unknown"}\n生命状态：${roleplayCharacter.isDead ? "已死亡（仅在故事设定允许的回忆或时间点中回应）" : "未标记死亡"}\n当前状态：${JSON.stringify(roleplayCharacter.currentState ?? {})}`,
+    roleplayUserCharacter ? `对话者扮演：${roleplayUserCharacter.name}。请将用户输入视为该角色在故事中的言行。` : "对话者身份：作者本人。",
+    `人物关系回忆：\n${relationships.join("\n") || "暂无已记录关系。"}`,
+    `故事回忆：\n${storyMemories.join("\n") || "暂无可引用正文。"}`
+  ].join("\n\n");
+}
+
+export function buildBrowserAiMessages({ work, scope, instruction, platformPrompt = "", workPrompt = "", conversationMessages = [], citations = [], roleplayCharacter = null, roleplayUserCharacter = null }) {
   const systemParts = [
     "你是叙界演示站中的小说创作助手。请使用简体中文回答，尊重作者决定，不要声称已经修改正文。",
     platformPrompt,
     workPrompt,
     `作品：${work?.title ?? "未命名作品"}\n简介：${work?.description ?? ""}`,
-    roleplayCharacter ? `当前角色卡：${roleplayCharacter.name}\n${roleplayCharacter.code ? `角色代号：${roleplayCharacter.code}` : ""}` : "",
+    roleplayMemoryContext(work, roleplayCharacter, roleplayUserCharacter),
     scopeContext(work, scope)
   ].filter((part) => String(part).trim());
   if (citations.length) systemParts.push(`作者引用：\n${citations.map((item) => `${item.chapterTitle ?? "章节"}：${item.text ?? ""}`).join("\n").slice(0, 12000)}`);
   const history = conversationMessages
     .filter((message) => message?.role === "user" || message?.role === "assistant")
     .slice(-12)
-    .map((message) => ({ role: message.role, content: String(message.content ?? "") }));
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content ?? ""),
+      ...(Array.isArray(message.metadata?.chatImageAttachmentIds) ? { imageAttachmentIds: message.metadata.chatImageAttachmentIds.map(String).slice(0, 4) } : {})
+    }));
   if (history.at(-1)?.role !== "user" || history.at(-1)?.content !== instruction) history.push({ role: "user", content: instruction });
   return [{ role: "system", content: systemParts.join("\n\n") }, ...history];
 }
@@ -159,14 +198,81 @@ function completionText(payload) {
   throw new Error("模型响应中没有可用文本");
 }
 
-export async function requestBrowserAi({ fetchImpl, provider, model, messages }) {
+function isGeminiProviderOrModel(provider, model) {
+  const endpoint = String(provider.baseUrl ?? "").toLowerCase();
+  const modelId = String(model.modelId ?? "").toLowerCase();
+  return provider.protocol === "google-vertex"
+    || endpoint.includes("gemini")
+    || endpoint.includes("generativelanguage.googleapis.com")
+    || endpoint.includes("aiplatform.googleapis.com")
+    || modelId.includes("gemini");
+}
+
+function providerHostname(provider) {
+  try {
+    return new URL(provider.baseUrl).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function browserThinkingParameters(provider, model) {
+  const thinkingEnabled = model.thinkingEnabled !== false;
+  const effort = ["low", "medium", "high", "xhigh", "max"].includes(model.thinkingEffort) ? model.thinkingEffort : null;
+  if (provider.protocol === "openai-responses" && !thinkingEnabled) return { reasoning_effort: "none" };
+  const effortParameters = thinkingEnabled && effort
+    ? provider.protocol === "anthropic-messages"
+      ? { output_config: { effort } }
+      : { reasoning_effort: effort }
+    : {};
+  if (isGeminiProviderOrModel(provider, model)) return effortParameters;
+  const hostname = providerHostname(provider);
+  const isZhipu = hostname === "open.bigmodel.cn" || hostname.endsWith(".bigmodel.cn") || hostname === "api.z.ai" || hostname.endsWith(".z.ai");
+  if (provider.protocol === "anthropic-messages" && !isZhipu && hostname !== "api.longcat.chat") return effortParameters;
+  return { thinking: { type: thinkingEnabled ? provider.thinkingType ?? "enabled" : "disabled" }, ...effortParameters };
+}
+
+function messagesWithImages(messages, protocol, imageAttachments) {
+  if (!imageAttachments.length) return messages;
+  const latestUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const attachmentById = new Map(imageAttachments.map((attachment) => [attachment.id, attachment]));
+  return messages.map((message, index) => {
+    if (message.role !== "user") return { ...message };
+    const selected = (message.imageAttachmentIds ?? []).map((attachmentId) => attachmentById.get(String(attachmentId))).filter(Boolean);
+    const attachments = selected.length ? selected : index === latestUserIndex && !message.imageAttachmentIds?.length ? imageAttachments : [];
+    const { imageAttachmentIds: _imageAttachmentIds, ...next } = message;
+    if (!attachments.length) return next;
+    const text = String(message.content ?? "");
+    if (protocol === "anthropic-messages") next.content = [
+      ...attachments.map((attachment) => ({
+        type: "image",
+        source: { type: "base64", media_type: attachment.mimeType, data: attachment.dataUrl.split(",", 2)[1] ?? "" }
+      })),
+      { type: "text", text }
+    ];
+    else if (protocol === "openai-responses") next.content = [
+      { type: "input_text", text },
+      ...attachments.map((attachment) => ({ type: "input_image", image_url: attachment.dataUrl }))
+    ];
+    else next.content = [
+      { type: "text", text },
+      ...attachments.map((attachment) => ({ type: "image_url", image_url: { url: attachment.dataUrl, detail: "auto" } }))
+    ];
+    return next;
+  });
+}
+
+export async function requestBrowserAi({ fetchImpl, provider, model, messages, imageAttachments = [] }) {
   const isAnthropic = provider.protocol === "anthropic-messages";
+  const isOpenAiResponses = provider.protocol === "openai-responses";
   if (provider.protocol === "google-vertex") throw new Error("Google Vertex 需要服务端 OAuth，演示站浏览器直连模式暂不支持该协议");
   const system = messages.find((message) => message.role === "system")?.content ?? "";
-  const requestMessages = messages.filter((message) => message.role !== "system");
+  const preparedMessages = messagesWithImages(messages, provider.protocol, imageAttachments);
+  const requestMessages = preparedMessages.filter((message) => message.role !== "system");
+  const thinkingParameters = browserThinkingParameters(provider, model);
   const response = await fetchImpl(isAnthropic
     ? versionedProviderApiUrl(provider.baseUrl, "messages")
-    : providerApiUrl(provider.baseUrl, "chat/completions"), {
+    : providerApiUrl(provider.baseUrl, isOpenAiResponses ? "responses" : "chat/completions"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -180,15 +286,26 @@ export async function requestBrowserAi({ fetchImpl, provider, model, messages })
         system,
         messages: requestMessages,
         temperature: Number(model.preset?.temperature ?? 0.7),
-        max_tokens: Number(model.preset?.max_tokens ?? provider.maxTokens ?? 32000)
+        max_tokens: Number(model.preset?.max_tokens ?? provider.maxTokens ?? 32000),
+        ...thinkingParameters
       }
-      : {
+      : isOpenAiResponses
+        ? {
+          model: model.modelId,
+          instructions: system,
+          input: requestMessages,
+          temperature: Number(model.preset?.temperature ?? 0.7),
+          max_output_tokens: Number(model.preset?.max_tokens ?? provider.maxTokens ?? 32000),
+          ...thinkingParameters
+        }
+        : {
         model: model.modelId,
-        messages,
+        messages: preparedMessages,
         stream: false,
         temperature: Number(model.preset?.temperature ?? 0.7),
-        max_tokens: Number(model.preset?.max_tokens ?? provider.maxTokens ?? 32000)
-      })
+        [provider.maxTokensParameter === "max_completion_tokens" ? "max_completion_tokens" : "max_tokens"]: Number(model.preset?.max_tokens ?? provider.maxTokens ?? 32000),
+        ...thinkingParameters
+        })
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.error?.message ?? `供应商请求失败：${response.status}`);

@@ -136,9 +136,10 @@ describe("分析任务自动运行", () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       autoRunConcurrency: 0
     }).expect(400);
-    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+    const lowQuota = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       dailyTokenQuota: 9_999
-    }).expect(400);
+    }).expect(200);
+    expect(lowQuota.body.data.dailyTokenQuota).toBe(9_999);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       autoRunBatchLimit: 201
     }).expect(400);

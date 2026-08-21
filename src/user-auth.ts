@@ -319,6 +319,14 @@ export class UserAuthService {
       if (role === "admin") {
         this.database.run("UPDATE works SET owner_user_id = ? WHERE owner_user_id IS NULL AND id <> ?", userId, PLATFORM_AI_WORK_ID);
         this.database.run(
+          `UPDATE ai_conversations SET created_by_user_id = ?
+           WHERE created_by_user_id IS NULL
+             AND work_id IN (SELECT id FROM works WHERE owner_user_id = ? AND id <> ?)`,
+          userId,
+          userId,
+          PLATFORM_AI_WORK_ID
+        );
+        this.database.run(
           `INSERT OR IGNORE INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at)
            SELECT id, ?, 'owner', ?, ? FROM works WHERE owner_user_id = ? AND id <> ?`,
           userId,

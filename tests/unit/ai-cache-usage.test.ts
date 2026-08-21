@@ -28,6 +28,7 @@ describe("AI 输入缓存命中率", () => {
       inputTokens: 35,
       outputTokens: 6,
       cachedInputTokens: 10,
+      cacheWriteInputTokens: 5,
       cacheEligibleInputTokens: 35,
       source: "reported"
     });
@@ -36,6 +37,16 @@ describe("AI 输入缓存命中率", () => {
   it("缺少完整缓存统计时不返回命中率", () => {
     expect(resolveCacheHitPercent({ prompt_tokens: 800 })).toBeUndefined();
     expect(resolveCacheHitPercent({ prompt_tokens_details: { cached_tokens: 600 } })).toBeUndefined();
+  });
+
+  it("解析 Vertex usageMetadata 中的服务端输入用量", () => {
+    expect(resolveAiTokenUsage({
+      usageMetadata: { promptTokenCount: 1_234, candidatesTokenCount: 56 }
+    }, 700, 100)).toMatchObject({
+      inputTokens: 1_234,
+      outputTokens: 100,
+      source: "mixed"
+    });
   });
 
   it("统一解析供应商用量并标记估算来源", () => {
@@ -47,17 +58,20 @@ describe("AI 输入缓存命中率", () => {
       inputTokens: 800,
       outputTokens: 120,
       cachedInputTokens: 600,
+      cacheWriteInputTokens: 0,
       cacheEligibleInputTokens: 800,
       source: "reported"
     });
     expect(resolveAiTokenUsage({ prompt_tokens: 800 }, 700, 100)).toMatchObject({
       inputTokens: 800,
       outputTokens: 100,
+      cacheWriteInputTokens: 0,
       source: "mixed"
     });
     expect(resolveAiTokenUsage(undefined, 700, 100)).toMatchObject({
       inputTokens: 700,
       outputTokens: 100,
+      cacheWriteInputTokens: 0,
       source: "estimated"
     });
   });

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
-import { AI_PROVIDER_PROTOCOLS, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
+import { AI_PROVIDER_PROTOCOL_OPTIONS, AI_PROVIDER_PROTOCOLS, AI_THINKING_TYPES, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
 import { DEFAULT_AI_CHAT_TAB_LIMIT } from "./ai-chat-tab-limit.js";
 import type { AiRetryPolicy } from "./ai-retry.js";
@@ -20,7 +20,9 @@ import {
   normalizeAiStreamIdleTimeoutSeconds
 } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { attachmentDownloadFileName, inlineContentDisposition } from "./attachment-download.js";
 import { AiManager } from "./ai.js";
+import { LiteLlmPriceCache } from "./ai-model-pricing.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import {
   CHARACTER_EXTRACTION_MAX_ALIASES,
@@ -51,7 +53,7 @@ import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { S3BackupManager, type S3BackupManagerOptions } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
 import { ReleaseUpdateChecker } from "./release-update.js";
-import { DEFAULT_IMAGE_UPLOAD_LIMITS, formatUploadLimit, type ImageUploadLimits } from "./upload-limits.js";
+import { CHARACTER_AVATAR_IMAGE_MAX_BYTES, DEFAULT_IMAGE_UPLOAD_LIMITS, formatUploadLimit, type ImageUploadLimits } from "./upload-limits.js";
 import { canReadWorkModule, canWriteWorkModule, chapterAnnotationPermissionModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
@@ -92,6 +94,15 @@ const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
 const maximumKnowledgeSectionsLength = 4_000_000;
+const aiChatAttachmentIngestOptions = {
+  allowedFormats: new Set(["png", "jpeg"]),
+  preserveFormat: true,
+  unsupportedMessage: "AI 对话图片附件仅支持 PNG、JPG、JPEG 图片"
+};
+const characterAvatarIngestOptions = {
+  allowedFormats: new Set(["png", "jpeg", "webp"]),
+  unsupportedMessage: "角色头像仅支持 PNG、JPEG 和 WebP 图片"
+};
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
@@ -110,13 +121,19 @@ function assertImageUploadSize(byteLength: number, maximumBytes: number, message
   throw new AppError(413, "IMAGE_TOO_LARGE", message);
 }
 
-function uploadSizeError(pathname: string, limits: ImageUploadLimits): { code: string; message: string } | null {
+function uploadSizeError(pathname: string, limits: ImageUploadLimits, module = ""): { code: string; message: string } | null {
   if (pathname === "/api/auth/avatar") return { code: "IMAGE_TOO_LARGE", message: `头像图片不能超过 ${formatUploadLimit(limits.avatarBytes)}` };
+  if (/^\/api\/characters\/[^/]+\/avatar$/u.test(pathname)) {
+    return { code: "CHARACTER_AVATAR_TOO_LARGE", message: `角色头像不能超过 ${formatUploadLimit(CHARACTER_AVATAR_IMAGE_MAX_BYTES)}` };
+  }
   if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) {
     return { code: "IMAGE_TOO_LARGE", message: `封面图片不能超过 ${formatUploadLimit(limits.coverBytes)}` };
   }
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
-    return { code: "ATTACHMENT_TOO_LARGE", message: `图片附件不能超过 ${formatUploadLimit(limits.attachmentBytes)}` };
+    const maximumBytes = module === "ai-chat"
+      ? limits.chatImageBytes
+      : limits.attachmentBytes;
+    return { code: "ATTACHMENT_TOO_LARGE", message: `图片附件不能超过 ${formatUploadLimit(maximumBytes)}` };
   }
   return null;
 }
@@ -417,11 +434,14 @@ const providerBaseSchema = z.object({
   baseUrl: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "接口地址必须使用 HTTP 或 HTTPS"),
   apiKey: z.string().trim().min(1).max(50_000),
   protocol: z.enum(AI_PROVIDER_PROTOCOLS).optional(),
+  thinkingType: z.enum(AI_THINKING_TYPES).optional(),
   maxTokensParameter: z.enum(MAX_TOKENS_PARAMETERS).optional(),
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),
   concurrencyLimit: z.number().int().min(1).max(100).optional(),
-  rpmLimit: z.number().int().min(1).max(10_000).optional()
+  rpmLimit: z.number().int().min(1).max(10_000).optional(),
+  dailyTokenQuota: z.number().int().min(1, "Token 额度必须设置大于 0").max(2_000_000_000).nullable().optional(),
+  monthlyTokenQuota: z.number().int().min(1, "Token 额度必须设置大于 0").max(2_000_000_000).nullable().optional()
 });
 
 function refineProviderApiKey(
@@ -490,6 +510,14 @@ const aiPromptSchema = z.object({
 
 const aiUsageQuerySchema = z.object({
   timezoneOffset: z.coerce.number().int().min(-840).max(840).default(0)
+}).strict();
+
+const adminAiConversationQuerySchema = z.object({
+  page: z.string().optional(),
+  limit: z.string().optional(),
+  q: z.string().trim().max(200).optional(),
+  workId: identifier.optional(),
+  userId: identifier.optional()
 }).strict();
 
 const platformPageSizesSchema = z.object({
@@ -623,7 +651,8 @@ const aiProcessStepSchema = z.discriminatedUnion("type", [
 
 const workAiSettingsSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
-  dailyTokenQuota: z.number().int().min(10_000).max(2_000_000_000).nullable().optional(),
+  dailyTokenQuota: z.number().int().min(1, "Token 额度必须设置大于 0").max(2_000_000_000).nullable().optional(),
+  monthlyTokenQuota: z.number().int().min(1, "Token 额度必须设置大于 0").max(2_000_000_000).nullable().optional(),
   autoRunEnabled: z.boolean().optional(),
   autoRunConcurrency: z.number().int().min(1).max(8).optional(),
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
@@ -810,6 +839,7 @@ export type RuntimeOptions = {
   databasePath: string;
   masterSecret: string;
   attachmentDirectory?: string;
+  characterAvatarDirectory?: string;
   fetchImpl?: typeof fetch;
   /** 测试用：覆盖 GitHub Release 探测请求。 */
   releaseFetchImpl?: typeof fetch;
@@ -839,6 +869,10 @@ export type RuntimeOptions = {
   aiRetryPolicy?: Partial<AiRetryPolicy>;
   /** 测试用：替换 AI HTTP 重试等待。 */
   aiRetrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  /** 价格缓存文件路径；生产服务使用数据目录下的 JSON 文件。 */
+  liteLlmPriceCachePath?: string;
+  /** 测试用：注入价格缓存实例，避免测试访问外部 LiteLLM 服务。 */
+  liteLlmPriceCache?: LiteLlmPriceCache;
   /** 同一浏览器工作区允许同时打开的 Agent 对话数量。 */
   aiChatTabLimit?: number;
   /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
@@ -850,9 +884,11 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  liteLlmPriceCache: LiteLlmPriceCache;
   backups: S3BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  characterAvatarStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
   close: () => Promise<void>;
 };
@@ -1145,6 +1181,7 @@ export function publicAiStreamError(error: unknown): {
   code: string;
   message: string;
   status?: number;
+  details?: Record<string, unknown>;
   failure?: string;
   callId?: string;
   providerName?: string;
@@ -1158,10 +1195,30 @@ export function publicAiStreamError(error: unknown): {
     const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
       ? error.details as Record<string, unknown>
       : null;
+    const publicQuotaDetails = details?.platformLimited === true
+      ? Object.fromEntries([
+        "platformLimited",
+        "limitScope",
+        "limitPeriod",
+        "workId",
+        "providerId",
+        "providerName",
+        "dailyTokenQuota",
+        "monthlyTokenQuota",
+        "usedTokens",
+        "remainingTokens",
+        "estimatedInputTokens",
+        "resetsAt",
+        "timezone",
+        "dayStartedAt",
+        "monthStartedAt"
+      ].filter((key) => details[key] !== undefined).map((key) => [key, details[key]]))
+      : undefined;
     return {
       code: error.code,
       message: error.message,
       status: error.status,
+      ...(publicQuotaDetails ? { details: publicQuotaDetails } : {}),
       ...((error.status < 500 || error.code === "AI_CALL_FAILED") && typeof details?.failure === "string" ? { failure: details.failure } : {}),
       ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
@@ -1211,14 +1268,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   const database = new Database(options.databasePath);
   const bootId = randomUUID();
-  const temporaryAttachmentRoot = options.databasePath === ":memory:" && !options.attachmentDirectory
-    ? mkdtempSync(join(tmpdir(), "scriverse-attachments-"))
+  const temporaryStorageRoot = options.databasePath === ":memory:" && (!options.attachmentDirectory || !options.characterAvatarDirectory)
+    ? mkdtempSync(join(tmpdir(), "scriverse-storage-"))
     : null;
   const attachmentStorage = new AttachmentStorage(
-    options.attachmentDirectory ?? temporaryAttachmentRoot ?? join(dirname(options.databasePath), "attachments"),
+    options.attachmentDirectory ?? temporaryStorageRoot ?? join(dirname(options.databasePath), "attachments"),
     uploadLimits.attachmentBytes
   );
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
+  const characterAvatarStorage = new AttachmentStorage(
+    options.characterAvatarDirectory
+      ?? (temporaryStorageRoot ? join(temporaryStorageRoot, "character-avatars") : join(dirname(options.databasePath), "character-avatars")),
+    CHARACTER_AVATAR_IMAGE_MAX_BYTES
+  );
+  mkdirSync(characterAvatarStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
   const collaborationPresence = new CollaborationPresence(
     45_000,
@@ -1290,17 +1353,30 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     attachmentCleanupChain = cleanup.catch(() => undefined);
     return cleanup;
   };
+  const cleanupCharacterAvatarFiles = async (storageKeys: string[]): Promise<void> => {
+    for (const storageKey of new Set(storageKeys)) {
+      if (store.characterAvatarStorageKeyInUse(storageKey)) continue;
+      await characterAvatarStorage.remove(storageKey);
+    }
+  };
   const requestPermissions = (request: Request, workId?: string): WorkModulePermissions => {
     if (!request.authUser) return fullWorkModulePermissions();
     const resolvedWorkId = workId ?? auth.resolveWorkId(request.path) ?? undefined;
     if (!resolvedWorkId) return fullWorkModulePermissions();
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
+  const assertRequestAiConversationOwner = (request: Request, conversationId: string): void => {
+    if (request.authUser) store.assertAiConversationOwner(conversationId, request.authUser.userId);
+  };
   const resolveConversationModelId = (workId: string, conversationId: string | undefined, requestedModelId: string | undefined): string | undefined => {
     if (!conversationId) return requestedModelId;
     const lockedModelId = store.getAiConversationLockedModelId(conversationId, workId);
+    const hasImageAttachments = store.getAiConversationHasImageAttachments(conversationId, workId);
     if (lockedModelId && requestedModelId && lockedModelId !== requestedModelId) {
       throw new AppError(409, "AI_CONVERSATION_MODEL_LOCKED", "当前对话已经锁定模型，请新建对话后再切换模型");
+    }
+    if (hasImageAttachments && !lockedModelId && requestedModelId) {
+      throw new AppError(409, "AI_CONVERSATION_IMAGE_MODEL_LOCKED", "当前对话链路包含图片但没有可继承的模型，请新建对话后再选择模型");
     }
     return lockedModelId ?? requestedModelId;
   };
@@ -1308,6 +1384,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const credentialVault = new CredentialVault(options.masterSecret);
   const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
     ...options.backupOptions,
+    characterAvatarStorage,
     masterKey: options.masterSecret,
     validateEndpoint: options.backupOptions?.validateEndpoint
       ?? (options.security ? (url) => assertSafeS3Endpoint(url, options.security?.allowPrivateAiEndpoints) : undefined)
@@ -1321,6 +1398,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       retries: options.releaseCheckRetries
     }
   );
+  const liteLlmPriceCache = options.liteLlmPriceCache ?? new LiteLlmPriceCache({
+    ...(options.liteLlmPriceCachePath ? { cachePath: options.liteLlmPriceCachePath } : {})
+  });
+  if (!options.liteLlmPriceCache && options.liteLlmPriceCachePath) liteLlmPriceCache.start();
   const ai = new AiManager(
     store,
     credentialVault,
@@ -1347,7 +1428,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     {
       interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? platformAiStreamIdleTimeoutMs,
       retryPolicy: options.aiRetryPolicy,
-      retrySleep: options.aiRetrySleep
+      retrySleep: options.aiRetrySleep,
+      aiChatImageMaxBytes: uploadLimits.chatImageBytes,
+      liteLlmPriceCache
     }
   );
   const app = express();
@@ -1364,12 +1447,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     storage: multer.memoryStorage(),
     limits: { fileSize: uploadLimits.avatarBytes + 1, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
   });
+  const characterAvatarUpload = multer({
+    storage: multer.diskStorage({
+      destination: characterAvatarStorage.temporaryDirectory,
+      filename: (_request, _file, callback) => callback(null, randomUUID())
+    }),
+    limits: { fileSize: CHARACTER_AVATAR_IMAGE_MAX_BYTES + 1, files: 1, fields: 0, fieldSize: 1024, parts: 2, headerPairs: 50 }
+  });
   const attachmentUpload = multer({
     storage: multer.diskStorage({
       destination: attachmentStorage.temporaryDirectory,
       filename: (_request, _file, callback) => callback(null, randomUUID())
     }),
-    limits: { fileSize: uploadLimits.attachmentBytes + 1, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
+    limits: { fileSize: Math.max(uploadLimits.attachmentBytes, uploadLimits.chatImageBytes) + 1, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
 
   app.disable("x-powered-by");
@@ -1570,7 +1660,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.delete("/api/recycle-bin/works/:workId/permanent", async (request, response) => {
     if (request.authUser) auth.assertDeletedWorkAccess(request.authUser, request.params.workId, request.authMethod !== "api-key");
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    const characterAvatarStorageKeys = store.listCharacterAvatarStorageKeysForWork(request.params.workId);
     store.permanentlyDeleteWork(request.params.workId, input.expectedVersionNo);
+    await cleanupCharacterAvatarFiles(characterAvatarStorageKeys);
     await cleanupAttachments();
     noContent(response);
   });
@@ -1728,11 +1820,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.post("/api/works/:workId/volumes", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(200), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional() }), request.body);
+    const input = parse(z.object({ title: nonEmpty.max(200), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional(), storyOrder: z.number().int().min(0).max(1_000_000).optional() }).strict(), request.body);
     data(response, store.createVolume(request.params.workId, input), 201);
   });
   app.patch("/api/volumes/:volumeId", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(200).optional(), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional(), sortOrder: z.number().int().min(0).optional(), expectedVersionNo: expectedVersionNoSchema, changeNote: changeNoteSchema }).strict(), request.body);
+    const input = parse(z.object({ title: nonEmpty.max(200).optional(), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional(), sortOrder: z.number().int().min(0).optional(), storyOrder: z.number().int().min(0).max(1_000_000).optional(), expectedVersionNo: expectedVersionNoSchema, changeNote: changeNoteSchema }).strict(), request.body);
     const { expectedVersionNo, changeNote, ...volumeInput } = input;
     data(response, store.updateVolume(request.params.volumeId, volumeInput, expectedVersionNo, "manual", null, changeNote));
   });
@@ -2031,6 +2123,56 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/characters/:characterId", (request, response) => {
     data(response, redactCharacterLinks(store.getCharacter(request.params.characterId), requestPermissions(request)));
   });
+  app.put("/api/characters/:characterId/avatar", characterAvatarUpload.single("file"), async (request, response) => {
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 角色头像");
+    const characterId = String(request.params.characterId);
+    let stored: Awaited<ReturnType<AttachmentStorage["ingest"]>> | null = null;
+    try {
+      stored = await characterAvatarStorage.ingest(request.file.path, characterAvatarIngestOptions);
+      const result = store.setCharacterAvatar(characterId, {
+        mimeType: stored.storedMimeType,
+        byteLength: stored.storedByteLength,
+        sha256: stored.storedSha256,
+        storageKey: stored.storageKey,
+        width: stored.width,
+        height: stored.height
+      });
+      if (result.previousStorageKey
+        && result.previousStorageKey !== stored.storageKey
+        && !store.characterAvatarStorageKeyInUse(result.previousStorageKey)) {
+        await characterAvatarStorage.remove(result.previousStorageKey);
+      }
+      data(response, redactCharacterLinks(result.character, requestPermissions(request)));
+    } catch (error) {
+      if (error instanceof AppError && error.code === "ATTACHMENT_TOO_LARGE") {
+        throw new AppError(413, "CHARACTER_AVATAR_TOO_LARGE", `角色头像不能超过 ${formatUploadLimit(CHARACTER_AVATAR_IMAGE_MAX_BYTES)}`);
+      }
+      if (stored && !store.characterAvatarStorageKeyInUse(stored.storageKey)) {
+        await characterAvatarStorage.remove(stored.storageKey);
+      }
+      throw error;
+    } finally {
+      await rm(request.file.path, { force: true });
+    }
+  });
+  app.get("/api/characters/:characterId/avatar", async (request, response) => {
+    const avatar = store.getCharacterAvatar(request.params.characterId);
+    if (!avatar) throw new AppError(404, "CHARACTER_AVATAR_NOT_FOUND", "角色头像不存在");
+    const content = await characterAvatarStorage.read(avatar.storageKey);
+    response.setHeader("Content-Type", avatar.mimeType);
+    response.setHeader("Content-Length", String(content.byteLength));
+    response.setHeader("ETag", `\"${avatar.sha256}\"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(content);
+  });
+  app.delete("/api/characters/:characterId/avatar", async (request, response) => {
+    const result = store.deleteCharacterAvatar(request.params.characterId);
+    if (result.storageKey && !store.characterAvatarStorageKeyInUse(result.storageKey)) {
+      await characterAvatarStorage.remove(result.storageKey);
+    }
+    data(response, redactCharacterLinks(result.character, requestPermissions(request)));
+  });
   app.patch("/api/characters/:characterId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(characterUpdateSchema.extend({ expectedVersionNo: expectedVersionNoSchema }), request.body);
     const character = store.updateCharacter(request.params.characterId, input, "manual", null, changeNote, expectedVersionNo);
@@ -2048,10 +2190,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const character = store.restoreCharacter(request.params.characterId, input.versionNo, input.expectedVersionNo);
     data(response, redactCharacterLinks(character, requestPermissions(request)));
   });
-  app.delete("/api/characters/:characterId", (request, response) => {
+  app.delete("/api/characters/:characterId", async (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     const character = store.getCharacter(request.params.characterId);
+    const avatar = store.getCharacterAvatar(request.params.characterId);
     store.deleteCharacter(request.params.characterId, input.expectedVersionNo);
+    if (avatar && !store.characterAvatarStorageKeyInUse(avatar.storageKey)) {
+      await characterAvatarStorage.remove(avatar.storageKey);
+    }
     publishEntityChange(String(character.workId), "character", String(character.id), deletedPageChange);
     noContent(response);
   });
@@ -2128,10 +2274,22 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/attachments", attachmentUpload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要上传的图片附件");
-    const accessModule = parse(attachmentPermissionModuleSchema, request.query.module ?? "settings");
+    const accessModule = parse(attachmentPermissionModuleSchema, request.query.module ?? "settings") as typeof attachmentPermissionModules[number];
+    if (!canWriteWorkModule(requestPermissions(request, String(request.params.workId)), accessModule)) {
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有编辑该资料模块的权限");
+    }
+    const maximumUploadBytes = accessModule === "ai-chat" ? uploadLimits.chatImageBytes : uploadLimits.attachmentBytes;
     let storageKey: string | null = null;
     try {
-      const stored = await attachmentStorage.ingest(request.file.path);
+      if (request.file.size > maximumUploadBytes) {
+        throw new AppError(413, "ATTACHMENT_TOO_LARGE", `图片附件不能超过 ${formatUploadLimit(maximumUploadBytes)}`);
+      }
+      const stored = await attachmentStorage.ingest(
+        request.file.path,
+        accessModule === "ai-chat"
+          ? { ...aiChatAttachmentIngestOptions, maximumUploadBytes }
+          : undefined
+      );
       storageKey = stored.storageKey;
       const result = store.createAttachment(String(request.params.workId), {
         originalName: normalizeUploadFileName(request.file.originalname),
@@ -2155,8 +2313,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该附件所属资料模块的权限");
     }
     const content = await attachmentStorage.read(String(attachment.storageKey));
+    const fileName = attachmentDownloadFileName(
+      store.getAttachmentDownloadContextName(String(attachment.id)),
+      String(attachment.originalName)
+    );
     response.setHeader("Content-Type", String(attachment.storedMimeType));
     response.setHeader("Content-Length", String(attachment.storedByteLength));
+    response.setHeader("Content-Disposition", inlineContentDisposition(fileName));
     response.setHeader("ETag", `"${String(attachment.storedSha256)}"`);
     response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     response.setHeader("X-Content-Type-Options", "nosniff");
@@ -2551,6 +2714,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listProvidersPage(pagination) : ai.listProviders());
   });
+  app.get("/api/platform/ai/protocols", (_request, response) => data(response, AI_PROVIDER_PROTOCOL_OPTIONS));
   app.post("/api/platform/ai/providers", (request, response) => data(response, ai.createProvider(parse(providerSchema, request.body)), 201));
   app.get("/api/platform/ai/models", (request, response) => {
     const pagination = parsePagination(request.query);
@@ -2567,6 +2731,29 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/platform/ai/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
+  });
+  app.post("/api/platform/ai/usage/pricing/refresh", async (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    parse(z.object({}).strict(), request.body ?? {});
+    const refreshed = await liteLlmPriceCache.refresh();
+    if (!refreshed) {
+      throw new AppError(502, "LITELLM_PRICE_REFRESH_FAILED", "LiteLLM 模型价格刷新失败，历史缓存未改变");
+    }
+    data(response, {
+      refreshed: true,
+      pricingAvailable: liteLlmPriceCache.hasData(),
+      modelCount: liteLlmPriceCache.getPriceTable().size
+    });
+  });
+  app.get("/api/platform/ai-conversations", (request, response) => {
+    const query = parse(adminAiConversationQuerySchema, request.query);
+    const pagination = parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 };
+    data(response, store.listAdminAiConversationsPage(pagination, {
+      query: query.q,
+      workId: query.workId,
+      userId: query.userId
+    }));
   });
   app.get("/api/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
   app.get("/api/platform/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
@@ -2654,7 +2841,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       limit: request.query.limit ?? "20"
     }) ?? { page: 1, limit: 20, offset: 0 };
     const permissions = requestPermissions(request, request.params.workId);
-    data(response, mapRecords(store.listAiConversationsPage(request.params.workId, pagination), (conversation) => (
+    data(response, mapRecords(store.listAiConversationsPage(
+      request.params.workId,
+      pagination,
+      request.authUser?.userId
+    ), (conversation) => (
       redactAiConversation(conversation, permissions)
     )));
   });
@@ -2664,6 +2855,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       taskType: aiConversationTaskTypeSchema.optional()
     }).strict(), request.body ?? {});
     data(response, store.createAiConversation(request.params.workId, input.title, input.taskType), 201);
+  });
+  app.use("/api/ai-conversations/:conversationId", (request, _response, next) => {
+    assertRequestAiConversationOwner(request, request.params.conversationId);
+    next();
   });
   app.get("/api/ai-conversations/:conversationId", (request, response) => {
     const pagination = parsePagination(request.query);
@@ -2814,6 +3009,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listModelsPage(request.params.providerId, pagination) : ai.listModels(request.params.providerId));
   });
+  app.post("/api/providers/:providerId/models/import", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await ai.importProviderModels(request.params.providerId));
+  });
   app.post("/api/providers/:providerId/models", (request, response) => data(response, ai.createModel(request.params.providerId, parse(modelSchema, request.body)), 201));
   app.post("/api/models/:modelId/test", async (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
@@ -2861,6 +3060,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
     }
+    if (input.conversationId) assertRequestAiConversationOwner(request, input.conversationId);
     const modelId = resolveConversationModelId(request.params.workId, input.conversationId, input.modelId);
     data(response, redactSuggestion(await ai.createSuggestion({
       workId: request.params.workId,
@@ -2879,6 +3079,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       modelId: identifier.optional(),
       parameters: jsonObject.optional(),
       citations: aiCitationsSchema.optional(),
+      imageAttachmentIds: z.array(identifier).max(4).optional(),
       conversationId: identifier.optional(),
       currentMessageId: identifier.optional(),
       ignoreContextWarning: z.boolean().optional()
@@ -2903,6 +3104,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       : input.conversationId
         ? store.getAiConversationSummary(input.conversationId)
         : store.createAiConversation(request.params.workId);
+    assertRequestAiConversationOwner(request, String(conversation.id));
     if (String(conversation.workId) !== request.params.workId) {
       throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
     }
@@ -2918,6 +3120,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     let lastStreamLeaseTouchAt = Date.now();
     let preparedContext: Record<string, unknown> | null = null;
     let preparedConversation: Record<string, unknown> | null = null;
+    let preparedChatImageAttachments: Awaited<ReturnType<typeof ai.prepareChatImageAttachments>> = [];
     const startStream = (): void => {
       if (response.headersSent) return;
       response.status(200);
@@ -2936,6 +3139,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     };
     try {
       if (!existingRequest) {
+        preparedChatImageAttachments = await ai.prepareChatImageAttachments(
+          request.params.workId,
+          modelId,
+          input.imageAttachmentIds ?? [],
+          permissions
+        );
         store.assertAiConversationStreamAvailable(conversationId);
         preparedContext = await ai.prepareConversationContext({
           conversationId,
@@ -2987,11 +3196,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           content: input.instruction,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
-          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length) ? { metadata: {
+          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length || input.imageAttachmentIds?.length) ? { metadata: {
             ...(modelId ? { modelId } : {}),
             ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
             ...(mentionRaceIds.length ? { mentionRaceIds } : {}),
-            ...(mentionOrganizationIds.length ? { mentionOrganizationIds } : {})
+            ...(mentionOrganizationIds.length ? { mentionOrganizationIds } : {}),
+            ...(input.imageAttachmentIds?.length ? { chatImageAttachmentIds: [...new Set(input.imageAttachmentIds)] } : {})
           } } : {})
         }
       });
@@ -3048,7 +3258,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         excludeConversationMessageId: currentMessageId,
         ...(currentMessageId ? { assistantMessageRequestId: `assistant:${currentMessageId}` } : {}),
         ...(modelId ? { modelId } : {}),
-        ...(input.parameters ? { parameters: input.parameters } : {})
+        ...(input.parameters ? { parameters: input.parameters } : {}),
+        ...(preparedChatImageAttachments.length ? { imageAttachments: preparedChatImageAttachments } : {})
       }, (delta) => sendEvent("delta", { delta }));
       const assistantMessageId = typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
         ? String((suggestion.conversationMessage as Record<string, unknown>).id ?? "")
@@ -3152,7 +3363,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, await ai.searchWork(request.params.workId, query.q, {
       type: query.type,
       limit: query.limit,
-      allowedTypes: readableHybridSearchTypes(permissions)
+      allowedTypes: readableHybridSearchTypes(permissions),
+      conversationOwnerUserId: request.authUser?.userId
     }));
   });
   app.head("/api/works/:workId/export", (request, response) => {
@@ -3278,7 +3490,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (error instanceof multer.MulterError) {
       logger.warn("http.request.upload_rejected", { ...commonFields, uploadCode: error.code });
       if (error.code === "LIMIT_FILE_SIZE") {
-        const sizeError = uploadSizeError(request.path, uploadLimits);
+        const sizeError = uploadSizeError(request.path, uploadLimits, String(request.query.module ?? ""));
         if (sizeError) {
           response.status(413).json({ error: sizeError });
           return;
@@ -3331,6 +3543,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       stopping = true;
       logger.info("runtime.closing");
       backups.dispose();
+      liteLlmPriceCache.dispose();
       ai.dispose();
       const cancelledStreamRequests = store.cancelActiveAiConversationStreamRequests();
       if (cancelledStreamRequests > 0) logger.info("ai.stream.requests_cancelled", { count: cancelledStreamRequests });
@@ -3340,7 +3553,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         await backups.waitForIdle(RUNTIME_BACKUP_IDLE_TIMEOUT_MS);
         collaborationPresence.close();
         database.close();
-        if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
+        if (temporaryStorageRoot) rmSync(temporaryStorageRoot, { recursive: true, force: true });
         closed = true;
         logger.info("runtime.closed");
       } catch (error) {
@@ -3352,5 +3565,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     })();
     return closePromise;
   };
-  return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close };
+  return { app, database, store, ai, liteLlmPriceCache, backups, auth, attachmentStorage, characterAvatarStorage, cleanupAttachments, close };
 }

@@ -52,6 +52,7 @@ describe("Google Vertex 供应商 API", () => {
       }
       const body = JSON.parse(String(init?.body)) as {
         model?: string;
+        messages?: Array<{ content?: unknown }>;
         stream?: boolean;
         thinking?: unknown;
         reasoning_effort?: string;
@@ -61,6 +62,12 @@ describe("Google Vertex 供应商 API", () => {
       if (expectedThinkingEffort) expect(body.reasoning_effort).toBe(expectedThinkingEffort);
       else expect(body).not.toHaveProperty("reasoning_effort");
       if (body.max_tokens === 10) {
+        if (Array.isArray(body.messages?.[0]?.content)) {
+          expect(body.messages[0]?.content).toEqual(expect.arrayContaining([
+            expect.objectContaining({ type: "text" }),
+            expect.objectContaining({ type: "image_url", image_url: expect.objectContaining({ detail: "low" }) })
+          ]));
+        }
         return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), {
           status: 200,
           headers: { "Content-Type": "application/json" }
@@ -134,13 +141,16 @@ describe("Google Vertex 供应商 API", () => {
       displayName: "Gemini Flash",
       modelId: "google/gemini-2.0-flash-001",
       thinkingEnabled: true,
-      thinkingEffort: "low"
+      thinkingEffort: "low",
+      multimodalEnabled: true
     }).expect(201);
     expect(model.body.data.thinkingEffort).toBe("low");
     expectedThinkingEffort = "low";
 
     const testResult = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
     expect(testResult.body.data.ok).toBe(true);
+    const modelTestResult = await request(runtime.app).post(`/api/models/${model.body.data.id}/test`).send({}).expect(200);
+    expect(modelTestResult.body.data).toMatchObject({ ok: true, multimodalTested: true });
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
@@ -164,6 +174,35 @@ describe("Google Vertex 供应商 API", () => {
     for (const [, init] of completionCalls) {
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ya29.vertex-access-token");
     }
+  });
+
+  it("通过 Vertex OpenAI 兼容 /models 自动导入模型", async () => {
+    const provider = await request(runtime.app).post("/api/platform/ai/providers").send({
+      name: "Google Vertex 模型导入",
+      protocol: "google-vertex",
+      baseUrl: vertexBaseUrl,
+      apiKey: serviceAccountJson,
+      status: "enabled"
+    }).expect(201);
+    const providerId = String(provider.body.data.id);
+
+    const imported = await request(runtime.app).post(`/api/providers/${providerId}/models/import`).send({}).expect(200);
+    expect(imported.body.data).toEqual({
+      availableCount: 1,
+      importedCount: 1,
+      existingCount: 0,
+      invalidItemCount: 0
+    });
+    const models = await request(runtime.app).get(`/api/providers/${providerId}/models`).expect(200);
+    expect(models.body.data).toEqual([
+      expect.objectContaining({
+        modelId: "google/gemini-2.0-flash-001",
+        displayName: "google/gemini-2.0-flash-001",
+        contextWindow: 128_000,
+        preset: { max_tokens: 32_000 }
+      })
+    ]);
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === `${vertexBaseUrl}/models`)).toBe(true);
   });
 
   it("出站前再次拒绝数据库中遗留的非官方 Vertex 地址", async () => {

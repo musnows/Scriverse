@@ -23,8 +23,9 @@ const modelThinkingEfforts = new Set(MODEL_THINKING_EFFORT_OPTIONS.map(([value])
 export const MIN_MODEL_CONTEXT_WINDOW = 32_768;
 export const RECOMMENDED_MODEL_CONTEXT_WINDOW = 128_000;
 
-export function supportsMultimodalModelProtocol(protocol) {
-  return protocol === "openai-chat-completions";
+export function supportsMultimodalModelProtocol(protocol, protocolOptions = []) {
+  return Array.isArray(protocolOptions)
+    && protocolOptions.some((option) => option?.value === protocol && option?.supportsMultimodal === true);
 }
 
 const purposeAliases = new Map([
@@ -98,4 +99,10 @@ export function modelOptionLabel(model) {
   const providerName = String(model?.providerName ?? "").trim();
   const modelName = String(model?.displayName ?? model?.modelId ?? "").trim();
   return [providerName, modelName].filter(Boolean).join(" · ");
+}
+
+export function modelThinkingEffortLabel(model) {
+  if (model?.thinkingEnabled !== true) return "";
+  const thinkingEffort = String(model?.thinkingEffort ?? "").trim().toLowerCase();
+  return thinkingEffort && thinkingEffort !== "default" ? thinkingEffort : "auto";
 }

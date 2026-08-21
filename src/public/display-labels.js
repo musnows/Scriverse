@@ -65,12 +65,12 @@ export function providerConnectionLabel(value) {
   return enumLabel({ unchecked: "未测试", success: "连接正常", failed: "连接失败" }, value, "未知连接状态");
 }
 
-export function providerProtocolLabel(value) {
-  return enumLabel({
-    "openai-chat-completions": "OpenAI Chat Completions",
-    "anthropic-messages": "Anthropic Messages",
-    "google-vertex": "Google Vertex"
-  }, value, "未知接口协议");
+export function providerProtocolLabel(value, protocolOptions = []) {
+  const normalized = String(value ?? "").trim();
+  const option = Array.isArray(protocolOptions)
+    ? protocolOptions.find((candidate) => candidate?.value === normalized)
+    : null;
+  return typeof option?.label === "string" ? option.label : enumLabel({}, normalized, "未知接口协议");
 }
 
 export function chapterVersionSourceLabel(value) {

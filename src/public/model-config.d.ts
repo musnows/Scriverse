@@ -2,7 +2,8 @@ export const MODEL_PURPOSE_OPTIONS: ReadonlyArray<readonly [string, string]>;
 export const MODEL_THINKING_EFFORT_OPTIONS: ReadonlyArray<readonly ["default" | "low" | "medium" | "high" | "xhigh" | "max", string]>;
 export const MIN_MODEL_CONTEXT_WINDOW: number;
 export const RECOMMENDED_MODEL_CONTEXT_WINDOW: number;
-export function supportsMultimodalModelProtocol(protocol: string | null | undefined): boolean;
+export type ModelProviderProtocolOption = { value: string; supportsMultimodal?: boolean };
+export function supportsMultimodalModelProtocol(protocol: string | null | undefined, protocolOptions?: ReadonlyArray<ModelProviderProtocolOption>): boolean;
 
 export type ModelFormValues = {
   displayName: string;
@@ -24,3 +25,4 @@ export function modelContextWindowGuidance(value: unknown): { belowMinimum: bool
 export function modelFormValues(model?: Record<string, unknown> | null): ModelFormValues;
 export function modelPayload(values: ModelFormValues, existingPreset?: Record<string, unknown>): Record<string, unknown> & { thinkingEnabled: boolean; thinkingEffort: "default" | "low" | "medium" | "high" | "xhigh" | "max" };
 export function modelOptionLabel(model: Record<string, unknown> | null | undefined): string;
+export function modelThinkingEffortLabel(model: Record<string, unknown> | null | undefined): string;

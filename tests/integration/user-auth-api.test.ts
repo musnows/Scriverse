@@ -2488,14 +2488,14 @@ describe("用户、作品权限与操作者追踪 API", () => {
         }
       })
       .expect(201);
-    const source = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
-      .set("X-CSRF-Token", owner.csrfToken)
-      .send({ title: "共享历史对话" })
+    const source = await collaborator.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ title: "个人历史对话" })
       .expect(201);
     const sourceId = String(source.body.data.id);
-    const message = await owner.agent.post(`/api/ai-conversations/${sourceId}/messages`)
-      .set("X-CSRF-Token", owner.csrfToken)
-      .send({ role: "user", content: "共享历史消息" })
+    const message = await collaborator.agent.post(`/api/ai-conversations/${sourceId}/messages`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ role: "user", content: "个人历史消息" })
       .expect(201);
     const body = { messageId: message.body.data.id, requestId: "authorized-fork-request" };
 
@@ -2527,6 +2527,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ role: "user", content: "角色私有上下文" })
       .expect(201);
+    runtime.database.run(
+      "UPDATE ai_conversations SET created_by_user_id = ? WHERE id = ?",
+      collaborator.user.userId,
+      String(roleplaySource.body.data.id)
+    );
     const characterDenied = await collaborator.agent.post(`/api/ai-conversations/${roleplaySource.body.data.id}/fork`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ messageId: roleplayMessage.body.data.id, requestId: "roleplay-fork-denied" })
@@ -2632,6 +2637,16 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ volumeId: volume.body.data.id, title: "机密章", content: "TOP_SECRET_PROSE_TOOL" })
       .expect(201);
+    await owner.agent.post(`/api/works/${workId}/timeline`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        name: "TOP_SECRET_TIMELINE_TOOL",
+        timeLabel: "秘密时点",
+        timeSort: 88,
+        chapterIds: [chapter.body.data.id],
+        status: "confirmed"
+      })
+      .expect(201);
     const permissions = {
       prose: "none",
       drafts: "none",
@@ -2691,6 +2706,23 @@ describe("用户、作品权限与操作者追踪 API", () => {
       result: { ok: false, error: { code: "TOOL_NOT_AVAILABLE" } }
     });
     expect(JSON.stringify(result)).not.toContain("TOP_SECRET_PROSE_TOOL");
+
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: { ...permissions, prose: "read" } })
+      .expect(200);
+    const structureOnly = await runWithRequestActor(
+      { ...collaborator.user, authentication: "session" },
+      () => internalAi.executeAgentTool(workId, {
+        id: "structure-only",
+        type: "function",
+        function: { name: "story_index", arguments: JSON.stringify({ offset: 0, limit: 20, cursor: 0 }) }
+      })
+    );
+    expect(structureOnly).toMatchObject({ status: "completed", result: { ok: true } });
+    expect(JSON.stringify(structureOnly)).toContain('"storyOrder"');
+    expect(JSON.stringify(structureOnly)).not.toContain("TOP_SECRET_TIMELINE_TOOL");
+    expect(JSON.stringify(structureOnly)).not.toContain("confirmedTimelineEvents");
   });
 
   it("AI 调用列表按成员权限隐藏原始上下文", async () => {
@@ -2789,8 +2821,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
         }
       })
       .expect(201);
-    const conversation = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
-      .set("X-CSRF-Token", owner.csrfToken)
+    const conversation = await collaborator.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
       .send({})
       .expect(201);
     const conversationId = String(conversation.body.data.id);
@@ -2805,10 +2837,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       }
     });
 
-    const ownerView = await owner.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
-    expect(ownerView.body.data.messages[0].metadata.mentionCharacterIds).toEqual([character.body.data.id]);
-    expect(ownerView.body.data.messages[0].metadata.mentionRaceIds).toEqual(["secret-race-id"]);
-    expect(ownerView.body.data.messages[0].metadata.mentionOrganizationIds).toEqual(["secret-organization-id"]);
+    const ownerView = await owner.agent.get(`/api/ai-conversations/${conversationId}`).expect(403);
+    expect(ownerView.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
 
     const collaboratorView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(collaboratorView.body.data.messages[0]).toMatchObject({
@@ -2898,12 +2928,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
       now
     );
     runtime.database.run(
-      `INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, created_at, updated_at)
-       VALUES (?, ?, 'TOP_SECRET_CHAT_TITLE', '', 0, ?, ?)`,
+      `INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id)
+       VALUES (?, ?, 'TOP_SECRET_CHAT_TITLE', '', 0, ?, ?, ?)`,
       conversationId,
       workId,
       now,
-      now
+      now,
+      collaborator.user.userId
     );
     runtime.database.run(
       `INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at)
@@ -3044,7 +3075,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
-  it("仅向有权限的已登录用户暴露对话 Session ID，不暴露认证会话 ID", async () => {
+  it("仅向对话创建者暴露对话 Session ID，不暴露认证会话 ID", async () => {
     const owner = await register(runtime, "ai_session_id_owner");
     const reader = await register(runtime, "ai_session_id_reader");
     const outsider = await register(runtime, "ai_session_id_outsider");
@@ -3068,14 +3099,14 @@ describe("用户、作品权限与操作者追踪 API", () => {
           relationships: "none",
           outlines: "none",
           reviews: "none",
-          "ai-chat": "read",
+          "ai-chat": "write",
           "ai-analysis": "none",
           "ai-settings": "none"
         }
       })
       .expect(201);
-    const created = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
-      .set("X-CSRF-Token", owner.csrfToken)
+    const created = await reader.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", reader.csrfToken)
       .send({ title: "诊断对话" })
       .expect(201);
     const conversationId = String(created.body.data.id);
@@ -3084,6 +3115,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(unauthenticated.body.error.code).toBe("AUTH_REQUIRED");
     const forbidden = await outsider.agent.get(`/api/ai-conversations/${conversationId}`).expect(403);
     expect(forbidden.body.error.code).toBe("WORK_ACCESS_DENIED");
+    const ownerDenied = await owner.agent.get(`/api/ai-conversations/${conversationId}`).expect(403);
+    expect(ownerDenied.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
 
     const readable = await reader.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(readable.body.data.id).toBe(conversationId);
@@ -3098,13 +3131,112 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(authSession.body.data.csrfToken).toBe(reader.csrfToken);
   });
 
+  it("作品 Chat 仅返回当前用户对话，管理员可从系统列表查看全部对话", async () => {
+    const admin = await register(runtime, "conversation_owner_admin");
+    const collaborator = await register(runtime, "conversation_owner_collaborator");
+    const work = await admin.agent.post("/api/works")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ title: "对话归属作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await admin.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "read",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+
+    const adminConversation = await admin.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ title: "管理员私有对话" })
+      .expect(201);
+    const collaboratorConversation = await collaborator.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ title: "协作者私有对话" })
+      .expect(201);
+    await collaborator.agent.post(`/api/ai-conversations/${collaboratorConversation.body.data.id}/messages`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ role: "user", content: "协作者独有搜索词" })
+      .expect(201);
+
+    const adminList = await admin.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
+    expect(adminList.body.data.items.map((item: { id: string }) => item.id)).toEqual([adminConversation.body.data.id]);
+    const collaboratorList = await collaborator.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
+    expect(collaboratorList.body.data.items.map((item: { id: string }) => item.id)).toEqual([collaboratorConversation.body.data.id]);
+
+    const adminDirectDenied = await admin.agent.get(`/api/ai-conversations/${collaboratorConversation.body.data.id}`).expect(403);
+    expect(adminDirectDenied.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
+    const collaboratorDirectDenied = await collaborator.agent.get(`/api/ai-conversations/${adminConversation.body.data.id}`).expect(403);
+    expect(collaboratorDirectDenied.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
+    const crossWriteDenied = await collaborator.agent.patch(`/api/ai-conversations/${adminConversation.body.data.id}/favorite`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ isFavorite: true })
+      .expect(403);
+    expect(crossWriteDenied.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
+    const crossStreamDenied = await collaborator.agent.post(`/api/works/${workId}/chat/stream`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ instruction: "继续", scope: { type: "none" }, conversationId: adminConversation.body.data.id })
+      .expect(403);
+    expect(crossStreamDenied.body.error.code).toBe("AI_CONVERSATION_ACCESS_DENIED");
+
+    const collaboratorSearch = await collaborator.agent
+      .get(`/api/works/${workId}/search?q=${encodeURIComponent("协作者独有搜索词")}&type=agent-history`)
+      .expect(200);
+    expect(collaboratorSearch.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ conversationId: collaboratorConversation.body.data.id })
+    ]));
+    const adminSearch = await admin.agent
+      .get(`/api/works/${workId}/search?q=${encodeURIComponent("协作者独有搜索词")}&type=agent-history`)
+      .expect(200);
+    expect(adminSearch.body.data).toEqual([]);
+
+    const platformList = await admin.agent.get("/api/platform/ai-conversations?page=1&limit=20").expect(200);
+    expect(platformList.body.data.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: adminConversation.body.data.id,
+        work: expect.objectContaining({ id: workId, title: "对话归属作品" }),
+        creator: expect.objectContaining({ userId: admin.user.userId })
+      }),
+      expect.objectContaining({
+        id: collaboratorConversation.body.data.id,
+        creator: expect.objectContaining({ userId: collaborator.user.userId })
+      })
+    ]));
+    const filteredPlatformList = await admin.agent
+      .get(`/api/platform/ai-conversations?q=${encodeURIComponent("协作者独有搜索词")}&userId=${encodeURIComponent(collaborator.user.userId)}`)
+      .expect(200);
+    expect(filteredPlatformList.body.data.items.map((item: { id: string }) => item.id)).toEqual([collaboratorConversation.body.data.id]);
+    const nonAdminPlatformDenied = await collaborator.agent.get("/api/platform/ai-conversations").expect(403);
+    expect(nonAdminPlatformDenied.body.error.code).toBe("ADMIN_REQUIRED");
+  });
+
   it("首位管理员注册时自动接管迁移前的现有作品", async () => {
     const legacyWork = runtime.store.createWork({ title: "既有作品" });
+    const legacyConversation = runtime.store.createAiConversation(String(legacyWork.id), "既有历史对话");
     const admin = await register(runtime, "first_admin");
     const works = await admin.agent.get("/api/works").expect(200);
     expect(works.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: legacyWork.id, accessRole: "owner" })]));
     expect(runtime.database.get("SELECT owner_user_id FROM works WHERE id = ?", String(legacyWork.id))?.owner_user_id).toBe(admin.user.userId);
     expect(runtime.database.get("SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?", String(legacyWork.id), admin.user.userId)?.role).toBe("owner");
+    expect(runtime.database.get(
+      "SELECT created_by_user_id FROM ai_conversations WHERE id = ?",
+      String(legacyConversation.id)
+    )?.created_by_user_id).toBe(admin.user.userId);
   });
 
   it("管理员可管理账户，但不能停用自己或移除最后一名管理员", async () => {

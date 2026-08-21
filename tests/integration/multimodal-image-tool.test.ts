@@ -25,16 +25,6 @@ describe("Agent 多模态图片工具", () => {
       if (body.messages.length === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200 });
       }
-      if (body.messages[0]?.role === "system" && body.messages[1]?.role === "user" && Array.isArray(body.messages[1].content)) {
-        const content = body.messages[1].content as Array<Record<string, unknown>>;
-        const imageBlock = content.find((block) => block.type === "image_url");
-        expect(imageBlock).toMatchObject({ type: "image_url", image_url: { detail: "auto" } });
-        expect(String((imageBlock?.image_url as Record<string, unknown>)?.url)).toMatch(/^data:image\/(?:png|webp);base64,/u);
-        return new Response(JSON.stringify({
-          choices: [{ message: { content: "图片显示一座带有三颗卫星的蓝色行星，右侧标注为北港航线。" } }],
-          usage: { prompt_tokens: 120, completion_tokens: 24 }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
       completionCount += 1;
       if (completionCount === 1) {
         expect(body.tools?.map((tool) => tool.function?.name)).toContain("image");
@@ -47,7 +37,14 @@ describe("Agent 多模态图片工具", () => {
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       const toolMessage = body.messages.find((message) => message.role === "tool");
-      expect(String(toolMessage?.content)).toContain("图片显示一座带有三颗卫星的蓝色行星");
+      expect(String(toolMessage?.content)).toContain("native_multimodal");
+      const nativeImageMessage = body.messages.find((message) => message.role === "user"
+        && Array.isArray(message.content)
+        && (message.content as Array<Record<string, unknown>>).some((block) => block.type === "image_url"));
+      const imageBlock = (nativeImageMessage?.content as Array<Record<string, unknown>> | undefined)
+        ?.find((block) => block.type === "image_url");
+      expect(imageBlock).toMatchObject({ type: "image_url", image_url: { detail: "auto" } });
+      expect(String((imageBlock?.image_url as Record<string, unknown>)?.url)).toMatch(/^data:image\/(?:png|webp);base64,/u);
       return new Response(JSON.stringify({ choices: [{ message: { content: "已读取设定图片：图片显示一座带有三颗卫星的蓝色行星，右侧标注为北港航线。" } }] }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
@@ -104,9 +101,10 @@ describe("Agent 多模态图片工具", () => {
       name: "image",
       status: "completed",
       arguments: { attachmentId },
-      result: { ok: true, data: expect.objectContaining({ attachmentId, fileName: "星图.png" }) }
+      result: { ok: true, data: expect.objectContaining({ attachmentId, fileName: "星图.png", delivery: "native_multimodal" }) }
     })]);
     expect(JSON.stringify(result.body.data.toolCalls)).not.toContain("data:image");
+    expect(completionCount).toBe(2);
     expect(fetchMock).toHaveBeenCalled();
     await request(runtime.app).patch(`/api/models/${modelId}`).send({ enabled: false }).expect(200);
     const platformSettings = await request(runtime.app).get("/api/platform/ai/settings").expect(200);

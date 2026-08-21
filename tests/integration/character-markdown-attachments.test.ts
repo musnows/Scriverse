@@ -69,7 +69,7 @@ describe("人物 Markdown 章节与附件", () => {
       masterSecret: "test-master-secret-with-at-least-32-characters",
       disableUserAuth: true,
       serveUi: false,
-      uploadLimits: { avatarBytes: 100, coverBytes: 100, attachmentBytes: 100 }
+      uploadLimits: { avatarBytes: 100, coverBytes: 100, attachmentBytes: 100, chatImageBytes: 1_048_576 }
     });
     try {
       const work = await createWork(limitedRuntime);
@@ -203,6 +203,10 @@ describe("人物 Markdown 章节与附件", () => {
     const content = await request(runtime.app).get(`/api/attachments/${attachmentId}/content`);
     expect(content.status).toBe(200);
     expect(content.headers["content-type"]).toMatch(/^image\/webp/u);
+    const contentDisposition = String(content.headers["content-disposition"] ?? "");
+    expect(contentDisposition).toContain("inline;");
+    const characterFileName = contentDisposition.match(/filename\*=UTF-8''([^;]+)/u)?.[1];
+    expect(decodeURIComponent(String(characterFileName))).toBe("scriverse-魔克拉·姆边贝-档案图.png");
     expect(content.headers["x-content-type-options"]).toBe("nosniff");
     expect(runtime.store.getSettingAttachment(String(work.id), attachmentId)).toMatchObject({ id: attachmentId });
 
@@ -299,6 +303,9 @@ describe("人物 Markdown 章节与附件", () => {
     }).expect(201);
 
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count).toBe(3);
+    const settingContent = await request(runtime.app).get(`/api/attachments/${attachmentId}/content`).expect(200);
+    const settingFileName = String(settingContent.headers["content-disposition"] ?? "").match(/filename\*=UTF-8''([^;]+)/u)?.[1];
+    expect(decodeURIComponent(String(settingFileName))).toBe("scriverse-带图设定-世界观图.png");
     await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(409);
 
     await request(runtime.app).patch(`/api/settings/${String(setting.body.data.id)}`).send({ content: "无附件设定" }).expect(200);
