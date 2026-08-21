@@ -25,3 +25,4 @@ export function modelContextWindowGuidance(value: unknown): { belowMinimum: bool
 export function modelFormValues(model?: Record<string, unknown> | null): ModelFormValues;
 export function modelPayload(values: ModelFormValues, existingPreset?: Record<string, unknown>): Record<string, unknown> & { thinkingEnabled: boolean; thinkingEffort: "default" | "low" | "medium" | "high" | "xhigh" | "max" };
 export function modelOptionLabel(model: Record<string, unknown> | null | undefined): string;
+export function modelThinkingEffortLabel(model: Record<string, unknown> | null | undefined): string;

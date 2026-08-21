@@ -23,6 +23,7 @@ describe("AI 模型选择收纳界面", () => {
     expect(page).toContain('id="ai-attachment-input" class="ai-attachment-input" type="file"');
     expect(page).toContain("feature=ai-model-picker-v1");
     expect(page).toContain("feature=ai-fork-model-unlock-v1");
+    expect(page).toContain("feature=ai-model-thinking-label-v1");
 
     expect(application).toContain("function selectedAiModelLabel()");
     expect(application).toContain("function aiConversationModelLocked()");
@@ -43,6 +44,8 @@ describe("AI 模型选择收纳界面", () => {
     expect(application).toContain('if (!$("#ai-model-popover").classList.contains("hidden")) {');
     expect(application).toContain("syncAiModelPicker();");
     expect(application).toContain("function renderAiModelOptions()");
+    expect(application).toContain("modelThinkingEffortLabel(model)");
+    expect(application).toContain('.join(" · ")');
     expect(application).toContain("model.multimodalEnabled === true");
     expect(application).toContain("aiModelImageIconMarkup()");
     expect(application).toContain("function syncAiImageAttachmentControl()");

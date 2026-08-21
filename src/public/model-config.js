@@ -100,3 +100,9 @@ export function modelOptionLabel(model) {
   const modelName = String(model?.displayName ?? model?.modelId ?? "").trim();
   return [providerName, modelName].filter(Boolean).join(" · ");
 }
+
+export function modelThinkingEffortLabel(model) {
+  if (model?.thinkingEnabled !== true) return "";
+  const thinkingEffort = String(model?.thinkingEffort ?? "").trim().toLowerCase();
+  return thinkingEffort && thinkingEffort !== "default" ? thinkingEffort : "auto";
+}

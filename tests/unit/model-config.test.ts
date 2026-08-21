@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload, supportsMultimodalModelProtocol } from "../../src/public/model-config.js";
+import { MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "../../src/public/model-config.js";
 
 describe("AI 模型配置", () => {
   it("按后端返回的协议能力判断是否支持多模态", () => {
@@ -49,6 +49,14 @@ describe("AI 模型配置", () => {
       thinkingEnabled: false,
       thinkingEffort: "high"
     });
+  });
+
+  it("仅为开启 thinking 的模型显示思考强度", () => {
+    expect(modelThinkingEffortLabel({ thinkingEnabled: true, thinkingEffort: "high" })).toBe("high");
+    expect(modelThinkingEffortLabel({ thinkingEnabled: true, thinkingEffort: "default" })).toBe("auto");
+    expect(modelThinkingEffortLabel({ thinkingEnabled: true })).toBe("auto");
+    expect(modelThinkingEffortLabel({ thinkingEnabled: false, thinkingEffort: "high" })).toBe("");
+    expect(modelThinkingEffortLabel({ thinkingEffort: "high" })).toBe("");
   });
 
   it("拒绝未知思考强度并回退为模型默认", () => {

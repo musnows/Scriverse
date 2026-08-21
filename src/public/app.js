@@ -16,7 +16,7 @@ import {
   visibleForeshadowReminders
 } from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260816-extended-thinking-effort-v1&feature=ai-provider-responses-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260821-ai-model-thinking-label-v1&feature=ai-provider-responses-v1";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
@@ -3507,7 +3507,9 @@ function renderAiModelOptions() {
     const name = document.createElement("strong");
     name.textContent = String(model.displayName ?? model.modelId ?? "模型");
     const provider = document.createElement("small");
-    provider.textContent = String(model.providerName ?? "");
+    provider.textContent = [String(model.providerName ?? "").trim(), modelThinkingEffortLabel(model)]
+      .filter(Boolean)
+      .join(" · ");
     copy.append(name, provider);
     option.append(copy);
     if (model.multimodalEnabled === true) {
