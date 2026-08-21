@@ -23,7 +23,7 @@ describe("AI 模型选择收纳界面", () => {
     expect(page).toContain('id="ai-attachment-input" class="ai-attachment-input" type="file"');
     expect(page).toContain("feature=ai-model-picker-v1");
     expect(page).toContain("feature=ai-fork-model-unlock-v1");
-    expect(page).toContain("feature=ai-model-thinking-label-v1");
+    expect(page).toContain("feature=ai-model-thinking-label-v2");
     expect(page).toContain("feature=ai-model-picker-focus-v1");
 
     expect(application).toContain("function selectedAiModelLabel()");

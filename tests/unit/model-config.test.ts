@@ -53,8 +53,8 @@ describe("AI 模型配置", () => {
 
   it("仅为开启 thinking 的模型显示思考强度", () => {
     expect(modelThinkingEffortLabel({ thinkingEnabled: true, thinkingEffort: "high" })).toBe("high");
-    expect(modelThinkingEffortLabel({ thinkingEnabled: true, thinkingEffort: "default" })).toBe("auto");
-    expect(modelThinkingEffortLabel({ thinkingEnabled: true })).toBe("auto");
+    expect(modelThinkingEffortLabel({ thinkingEnabled: true, thinkingEffort: "default" })).toBe("default");
+    expect(modelThinkingEffortLabel({ thinkingEnabled: true })).toBe("default");
     expect(modelThinkingEffortLabel({ thinkingEnabled: false, thinkingEffort: "high" })).toBe("");
     expect(modelThinkingEffortLabel({ thinkingEffort: "high" })).toBe("");
   });

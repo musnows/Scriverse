@@ -104,5 +104,5 @@ export function modelOptionLabel(model) {
 export function modelThinkingEffortLabel(model) {
   if (model?.thinkingEnabled !== true) return "";
   const thinkingEffort = String(model?.thinkingEffort ?? "").trim().toLowerCase();
-  return thinkingEffort && thinkingEffort !== "default" ? thinkingEffort : "auto";
+  return thinkingEffort && thinkingEffort !== "default" ? thinkingEffort : "default";
 }
