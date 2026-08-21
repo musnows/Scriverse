@@ -19,9 +19,20 @@ const demoUser = Object.freeze({
 let demoUserState = { ...demoUser };
 let demoApiKey = null;
 let demoUiSettings = { toastPosition: "bottom-right" };
+let demoBackupEncryption = { enabled: false, keyConfiguredAt: null };
+let demoBackupEncryptionConfirmationToken = null;
+let demoBackupTargets = [];
+let demoBackupRuns = [];
+let demoBackupRunSequence = 0;
 const demoDirectoryUsers = [
   { userId: "demo-editor", username: "demo-editor", displayName: "演示协作者", role: "writer", status: "active", avatarUrl: null }
 ];
+const demoAiProtocolOptions = Object.freeze([
+  { value: "openai-chat-completions", label: "OpenAI Chat Completions", defaultBaseUrl: "https://api.openai.com/v1", credentialKind: "api-key", supportsMultimodal: true, supportsMaxCompletionTokens: true },
+  { value: "openai-responses", label: "OpenAI Responses", defaultBaseUrl: "https://api.openai.com/v1", credentialKind: "api-key", supportsMultimodal: true, supportsMaxCompletionTokens: false },
+  { value: "anthropic-messages", label: "Anthropic Messages", defaultBaseUrl: "https://api.anthropic.com", credentialKind: "api-key", supportsMultimodal: true, supportsMaxCompletionTokens: false },
+  { value: "google-vertex", label: "Google Vertex", defaultBaseUrl: "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi", credentialKind: "service-account-json", supportsMultimodal: true, supportsMaxCompletionTokens: true }
+]);
 
 function installDemoLoginHint() {
   const mount = () => {
@@ -83,6 +94,22 @@ function installBrowserAiNotice() {
 }
 
 installBrowserAiNotice();
+
+function installDemoBackupNotice() {
+  const mount = () => {
+    for (const host of [document.querySelector("#s3-backup-dialog .s3-backup-body"), document.querySelector("#s3-backup-target-form .dialog-fields")]) {
+      if (!host || host.querySelector(".demo-backup-notice")) continue;
+      const notice = document.createElement("p");
+      notice.className = "s3-backup-encryption-warning demo-backup-notice";
+      notice.textContent = "演示站仅在当前页面内模拟 S3 配置与备份结果，不会保存或上传 AK、SK，也不会向任何 S3 服务发起外部请求。请勿输入真实凭据。";
+      host.prepend(notice);
+    }
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount, { once: true });
+  else mount();
+}
+
+installDemoBackupNotice();
 
 const wordCount = (text) => Array.from(String(text ?? "").replace(/\s/gu, "")).length;
 const page = (items, url) => {
@@ -368,6 +395,7 @@ function buildWork(source) {
     chapterCount: chapters.length,
     wordCount: wordTotal,
     versionNo: 1,
+    deletedAt: null,
     createdAt: now,
     updatedAt: now,
     volumes,
@@ -409,7 +437,8 @@ function buildWork(source) {
 }
 
 const works = sourceWorks.map(buildWork);
-const findWork = (id) => works.find((work) => work.id === id);
+const findWork = (id) => works.find((work) => work.id === id && !work.deletedAt);
+const findDeletedWork = (id) => works.find((work) => work.id === id && work.deletedAt);
 const allChapters = (includeDeleted = false) => works.flatMap((work) => work.chapters.filter((chapter) => includeDeleted || !chapter.deletedAt));
 const success = (data, status = 200) => new Response(status === 204 ? null : JSON.stringify({ data }), {
   status,
@@ -549,6 +578,7 @@ function createEmptyWork(body) {
     chapterCount: 0,
     wordCount: 0,
     versionNo: 1,
+    deletedAt: null,
     createdAt: timestamp,
     updatedAt: timestamp,
     volumes: [],
@@ -847,6 +877,7 @@ const defaultWorkAiSettings = (workId = null) => ({
   ...(workId ? { workId } : {}),
   systemPrompt: "",
   dailyTokenQuota: null,
+  monthlyTokenQuota: null,
   autoRunEnabled: false,
   autoRunConcurrency: 2,
   autoRunBatchLimit: 20,
@@ -901,7 +932,8 @@ function contextUsage(model, conversation = null) {
 
 function conversationSummaries(state, workId) {
   return [...(state.conversations[workId] ?? [])]
-    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
+    .sort((left, right) => Number(right.isFavorite === true) - Number(left.isFavorite === true)
+      || String(right.updatedAt).localeCompare(String(left.updatedAt)))
     .map(({ messages, ...conversation }) => ({ ...conversation, messageCount: messages.length }));
 }
 
@@ -919,6 +951,8 @@ function createConversationRecord(workId, title = "新对话") {
     taskType: "chat",
     contextScope: { type: "none" },
     roleplayCharacter: null,
+    roleplayUserCharacter: null,
+    isFavorite: false,
     agentTools: null,
     createdAt,
     updatedAt: createdAt,
@@ -1127,7 +1161,26 @@ function demoTokenUsage(workId = null, includeWorks = false) {
       }
     }
   }
-  return { summary, daily: [...dailyByDate.values()].sort((left, right) => left.date.localeCompare(right.date)), ...(includeWorks ? { works: workRows.sort((left, right) => right.totalTokens - left.totalTokens || left.workTitle.localeCompare(right.workTitle, "zh-CN")) } : {}), timezoneOffset: 0 };
+  const daily = [...dailyByDate.values()].sort((left, right) => left.date.localeCompare(right.date));
+  const quotaSettings = workId ? { ...defaultWorkAiSettings(workId), ...(state.workSettings[workId] ?? {}) } : null;
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+  const usedTokens = daily.find((row) => row.date === today)?.totalTokens ?? 0;
+  const monthlyUsedTokens = daily.filter((row) => row.date.startsWith(month)).reduce((total, row) => total + row.totalTokens, 0);
+  const dailyTokenQuota = quotaSettings?.dailyTokenQuota ?? null;
+  const monthlyTokenQuota = quotaSettings?.monthlyTokenQuota ?? null;
+  const quota = workId ? {
+    dailyTokenQuota,
+    usedTokens,
+    remainingTokens: dailyTokenQuota === null ? null : Math.max(0, Number(dailyTokenQuota) - usedTokens),
+    reached: dailyTokenQuota !== null && usedTokens >= Number(dailyTokenQuota),
+    monthlyTokenQuota,
+    monthlyUsedTokens,
+    monthlyRemainingTokens: monthlyTokenQuota === null ? null : Math.max(0, Number(monthlyTokenQuota) - monthlyUsedTokens),
+    monthlyReached: monthlyTokenQuota !== null && monthlyUsedTokens >= Number(monthlyTokenQuota),
+    timezone: "UTC"
+  } : undefined;
+  return { summary, daily, ...(quota ? { quota } : {}), ...(includeWorks ? { works: workRows.sort((left, right) => right.totalTokens - left.totalTokens || left.workTitle.localeCompare(right.workTitle, "zh-CN")) } : {}), timezoneOffset: 0 };
 }
 
 async function runBrowserAi(body, workId) {
@@ -1148,7 +1201,8 @@ async function runBrowserAi(body, workId) {
     workPrompt: settings.systemPrompt,
     conversationMessages: conversation?.messages ?? [],
     citations: body.citations ?? [],
-    roleplayCharacter: conversation?.roleplayCharacter ?? null
+    roleplayCharacter: conversation?.roleplayCharacter ?? null,
+    roleplayUserCharacter: conversation?.roleplayUserCharacter ?? null
   });
   const result = await requestBrowserAi({ fetchImpl: nativeFetch, provider, model, messages });
   return { ...result, model: modelWithProvider(model, state.providers) };
@@ -1203,6 +1257,44 @@ function aiStreamResponse(result) {
     `event: complete\ndata: ${JSON.stringify({ model: { id: result.model.id, displayName: result.model.displayName }, outputTokens, toolCalls: [], processSteps: [], contextUsage: result.contextUsage, conversationId: result.conversationId, conversationTitle: result.conversationTitle, messageId: result.assistantMessage?.id, messageCreatedAt: result.assistantMessage?.createdAt })}`
   ];
   return new Response(`${events.join("\n\n")}\n\n`, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
+}
+
+function demoBackupRootPrefix(basePath = "") {
+  const normalized = String(basePath).trim().replace(/^\/+|\/+$/gu, "").replace(/\/{2,}/gu, "/");
+  return normalized ? `${normalized}/scriverse` : "scriverse";
+}
+
+function demoBackupTarget(body, current = null) {
+  const timestamp = new Date().toISOString();
+  const basePath = String(body.basePath ?? current?.basePath ?? "").trim();
+  return {
+    id: current?.id ?? demoId("backup-target"),
+    name: String(body.name ?? current?.name ?? "演示 S3 目标").trim() || "演示 S3 目标",
+    endpoint: String(body.endpoint ?? current?.endpoint ?? "https://s3.example.invalid").trim(),
+    region: String(body.region ?? current?.region ?? "us-east-1").trim() || "us-east-1",
+    bucket: String(body.bucket ?? current?.bucket ?? "scriverse-demo").trim(),
+    basePath,
+    rootPrefix: demoBackupRootPrefix(basePath),
+    forcePathStyle: body.forcePathStyle === undefined ? current?.forcePathStyle ?? true : Boolean(body.forcePathStyle),
+    enabled: body.enabled === undefined ? current?.enabled ?? false : Boolean(body.enabled),
+    backupImages: body.backupImages === undefined ? current?.backupImages ?? true : Boolean(body.backupImages),
+    scheduleTime: String(body.scheduleTime ?? current?.scheduleTime ?? "03:00"),
+    retentionCount: Math.min(365, Math.max(1, Number(body.retentionCount ?? current?.retentionCount ?? 7))),
+    sortOrder: current?.sortOrder ?? demoBackupTargets.length,
+    credentialsConfigured: true,
+    lastStartedAt: current?.lastStartedAt ?? null,
+    lastSuccessAt: current?.lastSuccessAt ?? null,
+    lastFailureAt: current?.lastFailureAt ?? null,
+    lastError: current?.lastError ?? null,
+    createdAt: current?.createdAt ?? timestamp,
+    updatedAt: timestamp
+  };
+}
+
+function demoRecycleBinExpiresAt(deletedAt) {
+  const expiresAt = new Date(deletedAt);
+  expiresAt.setUTCDate(expiresAt.getUTCDate() + 30);
+  return expiresAt.toISOString();
 }
 
 async function mockApi(input, init = {}) {
@@ -1344,6 +1436,116 @@ async function mockApi(input, init = {}) {
       return success(work.members);
     }
   }
+  if (path === "/api/platform/ai/protocols") return success(demoAiProtocolOptions);
+  if (path === "/api/platform/ai-conversations" && method === "GET") {
+    const query = String(url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("zh-CN");
+    const workId = String(url.searchParams.get("workId") ?? "");
+    const records = Object.values(browserAiStore.read().conversations).flatMap((conversations) => conversations).map((conversation) => {
+      const work = findWork(conversation.workId) ?? findDeletedWork(conversation.workId);
+      return {
+        ...conversationSummary(conversation),
+        creator: { userId: demoUser.userId, username: demoUser.username, displayName: demoUser.displayName },
+        work: work ? { id: work.id, title: work.title, deleted: Boolean(work.deletedAt) } : null
+      };
+    }).filter((conversation) => (!workId || conversation.workId === workId)
+      && (!query || `${conversation.title} ${conversation.preview} ${conversation.work?.title ?? ""}`.toLocaleLowerCase("zh-CN").includes(query)))
+      .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+    return success(page(records, url));
+  }
+  if (path === "/api/platform/backups/encryption") {
+    if (method === "GET") return success({ ...demoBackupEncryption });
+    const body = await bodyOf(init);
+    if (body.enabled !== true) {
+      demoBackupEncryption = { ...demoBackupEncryption, enabled: false };
+      demoBackupEncryptionConfirmationToken = null;
+      return success({ ...demoBackupEncryption });
+    }
+    if (demoBackupEncryption.keyConfiguredAt) {
+      demoBackupEncryption = { ...demoBackupEncryption, enabled: true };
+      return success({ ...demoBackupEncryption });
+    }
+    demoBackupEncryptionConfirmationToken = crypto.randomUUID();
+    return success({
+      ...demoBackupEncryption,
+      key: "SCRIVERSE-DEMO-BACKUP-KEY-NOT-FOR-RESTORE",
+      confirmationToken: demoBackupEncryptionConfirmationToken
+    });
+  }
+  if (path === "/api/platform/backups/encryption/confirm" && method === "POST") {
+    const body = await bodyOf(init);
+    if (!demoBackupEncryptionConfirmationToken || body.confirmationToken !== demoBackupEncryptionConfirmationToken) return failure("演示备份加密确认已失效", 409);
+    demoBackupEncryptionConfirmationToken = null;
+    demoBackupEncryption = { enabled: true, keyConfiguredAt: new Date().toISOString() };
+    return success({ ...demoBackupEncryption });
+  }
+  if (path === "/api/platform/backups/targets") {
+    if (method === "GET") return success(demoBackupTargets.map((target) => ({ ...target })));
+    const body = await bodyOf(init);
+    const target = demoBackupTarget(body);
+    demoBackupTargets.push(target);
+    return success({ ...target }, 201);
+  }
+  match = path.match(/^\/api\/platform\/backups\/targets\/([^/]+)$/u);
+  if (match) {
+    const targetId = decodeURIComponent(match[1]);
+    const targetIndex = demoBackupTargets.findIndex((target) => target.id === targetId);
+    if (targetIndex < 0) return failure("未找到演示备份目标");
+    if (method === "DELETE") {
+      demoBackupTargets.splice(targetIndex, 1);
+      return success(null, 204);
+    }
+    const body = await bodyOf(init);
+    demoBackupTargets[targetIndex] = demoBackupTarget(body, demoBackupTargets[targetIndex]);
+    return success({ ...demoBackupTargets[targetIndex] });
+  }
+  if (path === "/api/platform/backups/runs" && method === "GET") {
+    const afterSequence = Number(url.searchParams.get("afterSequence"));
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 30)));
+    const items = Number.isInteger(afterSequence) && afterSequence >= 0
+      ? demoBackupRuns.filter((run) => run.sequence > afterSequence).sort((left, right) => left.sequence - right.sequence).slice(0, limit)
+      : demoBackupRuns.slice(0, limit);
+    return success({ items: items.map((run) => ({ ...run })), latestSequence: demoBackupRunSequence });
+  }
+  if (path === "/api/platform/backups/run" && method === "POST") {
+    const body = await bodyOf(init);
+    const requestedIds = Array.isArray(body.targetIds)
+      ? body.targetIds.map(String)
+      : demoBackupTargets.filter((target) => target.enabled).map((target) => target.id);
+    const acceptedTargetIds = [];
+    const skippedTargetIds = [];
+    for (const targetId of requestedIds) {
+      const target = demoBackupTargets.find((item) => item.id === targetId);
+      if (!target) {
+        skippedTargetIds.push(targetId);
+        continue;
+      }
+      const timestamp = new Date().toISOString();
+      target.lastStartedAt = timestamp;
+      target.lastSuccessAt = timestamp;
+      target.lastFailureAt = null;
+      target.lastError = null;
+      target.updatedAt = timestamp;
+      demoBackupRunSequence += 1;
+      demoBackupRuns.unshift({
+        sequence: demoBackupRunSequence,
+        id: demoId("backup-run"),
+        targetId: target.id,
+        targetName: target.name,
+        trigger: "manual",
+        status: "succeeded",
+        databaseKey: `${target.rootPrefix}/db/demo.snapshot`,
+        imagesUploaded: target.backupImages ? 2 : 0,
+        imagesSkipped: target.backupImages ? 2 : 0,
+        databasesDeleted: 0,
+        errorMessage: null,
+        serverResponse: { simulated: true, externalRequestSent: false },
+        startedAt: timestamp,
+        finishedAt: timestamp
+      });
+      acceptedTargetIds.push(target.id);
+    }
+    return success({ acceptedTargetIds, skippedTargetIds, queuedAt: new Date().toISOString(), simulated: true }, 202);
+  }
   if (path === "/api/platform/ai/providers") {
     if (method === "GET") {
       const providers = browserAiStore.read().providers.map(publicProvider);
@@ -1353,16 +1555,16 @@ async function mockApi(input, init = {}) {
     const provider = {
       id: demoId("provider"),
       name: String(body.name ?? "").trim(),
-      protocol: body.protocol === "anthropic-messages"
-        ? "anthropic-messages"
-        : body.protocol === "google-vertex"
-          ? "google-vertex"
-          : "openai-chat-completions",
+      protocol: demoAiProtocolOptions.some((option) => option.value === body.protocol) ? body.protocol : "openai-chat-completions",
       baseUrl: normalizeProviderBaseUrl(body.baseUrl),
       apiKey: String(body.apiKey ?? "").trim(),
       concurrencyLimit: Number(body.concurrencyLimit ?? 10),
       rpmLimit: Number(body.rpmLimit ?? 10),
       maxTokens: Number(body.maxTokens ?? 32000),
+      maxTokensParameter: body.maxTokensParameter ?? "max_tokens",
+      thinkingType: body.thinkingType ?? "enabled",
+      dailyTokenQuota: body.dailyTokenQuota ?? null,
+      monthlyTokenQuota: body.monthlyTokenQuota ?? null,
       note: String(body.note ?? ""),
       status: body.status === "disabled" ? "disabled" : "enabled",
       connectionStatus: "unchecked",
@@ -1387,6 +1589,9 @@ async function mockApi(input, init = {}) {
     return success(updated);
   }
   if (path === "/api/platform/ai/usage") return success(demoTokenUsage(null, true));
+  if (path === "/api/platform/ai/usage/pricing/refresh" && method === "POST") {
+    return success({ refreshed: true, pricingAvailable: false, modelCount: 0, simulated: true });
+  }
   match = path.match(/^\/api\/works\/([^/]+)\/providers$/u);
   if (match) {
     if (!findWork(decodeURIComponent(match[1]))) return failure("未找到作品");
@@ -1401,6 +1606,11 @@ async function mockApi(input, init = {}) {
         apiKey: String(body.apiKey ?? "").trim(),
         concurrencyLimit: Number(body.concurrencyLimit ?? 10),
         rpmLimit: Number(body.rpmLimit ?? 10),
+        maxTokens: Number(body.maxTokens ?? 32000),
+        maxTokensParameter: body.maxTokensParameter ?? "max_tokens",
+        thinkingType: body.thinkingType ?? "enabled",
+        dailyTokenQuota: body.dailyTokenQuota ?? null,
+        monthlyTokenQuota: body.monthlyTokenQuota ?? null,
         note: String(body.note ?? ""),
         status: body.status === "enabled" ? "enabled" : "disabled",
         connectionStatus: "unchecked",
@@ -1588,27 +1798,67 @@ async function mockApi(input, init = {}) {
   }
   match = path.match(/^\/api\/ai-conversations\/([^/]+)$/u);
   if (match) {
-    const conversation = findConversation(browserAiStore.read(), decodeURIComponent(match[1]));
-    return conversation ? success(conversation) : failure("未找到 AI 对话");
+    const conversationId = decodeURIComponent(match[1]);
+    const conversation = findConversation(browserAiStore.read(), conversationId);
+    if (!conversation) return failure("未找到 AI 对话");
+    if (method === "DELETE") {
+      if (conversation.isFavorite === true) return failure("收藏的对话不能清理，请先取消收藏", 409);
+      browserAiStore.update((state) => {
+        state.conversations[conversation.workId] = (state.conversations[conversation.workId] ?? []).filter((item) => item.id !== conversationId);
+      });
+      return success({ deleted: true });
+    }
+    return success(conversation);
+  }
+  match = path.match(/^\/api\/ai-conversations\/([^/]+)\/favorite$/u);
+  if (match && method === "PATCH") {
+    const conversationId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    let updated;
+    browserAiStore.update((state) => {
+      const conversation = findConversation(state, conversationId);
+      if (!conversation) return;
+      conversation.isFavorite = body.isFavorite === true;
+      conversation.updatedAt = new Date().toISOString();
+      updated = conversationSummary(conversation);
+    });
+    return updated ? success(updated) : failure("未找到 AI 对话");
   }
   match = path.match(/^\/api\/ai-conversations\/([^/]+)\/(task-type|context-scope|roleplay)$/u);
   if (match && method === "PATCH") {
     const conversationId = decodeURIComponent(match[1]);
     const action = match[2];
     const body = await bodyOf(init);
+    const selectedCharacter = body.characterId ? works.flatMap((work) => work.characters).find((item) => item.id === body.characterId) : null;
+    const selectedUserCharacter = body.userCharacterId ? works.flatMap((work) => work.characters).find((item) => item.id === body.userCharacterId) : null;
+    if (action === "roleplay" && body.characterId && !selectedCharacter) return failure("未找到要扮演的角色", 400);
+    if (action === "roleplay" && body.userCharacterId && !selectedUserCharacter) return failure("未找到对话者扮演的角色", 400);
+    if (selectedCharacter && selectedUserCharacter && selectedCharacter.id === selectedUserCharacter.id) return failure("双方不能扮演同一个角色", 400);
     let updated;
     browserAiStore.update((state) => {
       const conversation = findConversation(state, conversationId);
       if (!conversation) return;
       if (action === "task-type" && ["chat", "roleplay", "continue", "polish"].includes(body.taskType)) {
         conversation.taskType = body.taskType;
-        if (body.taskType !== "roleplay") conversation.roleplayCharacter = null;
+        if (body.taskType !== "roleplay") {
+          conversation.roleplayCharacter = null;
+          conversation.roleplayUserCharacter = null;
+          conversation.agentTools = null;
+        }
       }
       if (action === "context-scope" && body.scope && typeof body.scope === "object") conversation.contextScope = body.scope;
       if (action === "roleplay") {
-        const character = body.characterId ? works.flatMap((work) => work.characters).find((item) => item.id === body.characterId) : null;
-        conversation.roleplayCharacter = character ? { id: character.id, name: character.name, code: character.code ?? "" } : null;
-        conversation.taskType = character ? "roleplay" : (conversation.taskType === "roleplay" ? "chat" : conversation.taskType);
+        const characterView = (character) => character ? {
+          id: character.id,
+          name: character.name,
+          code: character.code ?? "",
+          profile: character.profile ?? {},
+          currentState: character.currentState ?? {}
+        } : null;
+        conversation.roleplayCharacter = characterView(selectedCharacter);
+        conversation.roleplayUserCharacter = characterView(selectedUserCharacter);
+        conversation.agentTools = selectedCharacter ? ["recall_self", "recall_relationship", "recall_story", "calculate_time"] : null;
+        conversation.taskType = selectedCharacter ? "roleplay" : (conversation.taskType === "roleplay" ? "chat" : conversation.taskType);
       }
       conversation.updatedAt = new Date().toISOString();
       updated = conversationSummary(conversation);
@@ -1640,6 +1890,11 @@ async function mockApi(input, init = {}) {
       const boundary = source.messages.findIndex((message) => message.id === body.messageId);
       if (boundary < 0) return;
       forked = createConversationRecord(source.workId, String(body.title ?? `${source.title}（分支）`));
+      forked.taskType = source.taskType;
+      forked.contextScope = structuredClone(source.contextScope);
+      forked.roleplayCharacter = structuredClone(source.roleplayCharacter);
+      forked.roleplayUserCharacter = structuredClone(source.roleplayUserCharacter ?? null);
+      forked.agentTools = structuredClone(source.agentTools);
       forked.messages = source.messages.slice(0, boundary + 1).map((message) => ({ ...message, id: demoId("message"), conversationId: forked.id }));
       forked.updatedAt = forked.messages.at(-1)?.createdAt ?? forked.createdAt;
       state.conversations[source.workId] = [forked, ...(state.conversations[source.workId] ?? [])];
@@ -1914,6 +2169,49 @@ async function mockApi(input, init = {}) {
     if (!found) return failure("未找到章节");
     return success(found.chapter.insights ?? []);
   }
+  if (path === "/api/recycle-bin/works" && method === "GET") {
+    return success({
+      retentionDays: 30,
+      works: works.filter((work) => work.deletedAt).sort((left, right) => String(right.deletedAt).localeCompare(String(left.deletedAt))).map((work) => ({
+        id: work.id,
+        title: work.title,
+        author: work.author,
+        description: work.description,
+        versionNo: work.versionNo,
+        volumeCount: work.volumes.length,
+        chapterCount: work.chapters.length,
+        deletedAt: work.deletedAt,
+        expiresAt: demoRecycleBinExpiresAt(work.deletedAt),
+        actor: demoUser.displayName
+      }))
+    });
+  }
+  match = path.match(/^\/api\/recycle-bin\/works\/([^/]+)\/restore$/u);
+  if (match && method === "POST") {
+    const work = findDeletedWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到回收站作品");
+    const body = await bodyOf(init);
+    if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(work.versionNo)) return failure("作品版本已变化，请刷新后重试", 409);
+    work.deletedAt = null;
+    work.versionNo += 1;
+    work.updatedAt = new Date().toISOString();
+    recordAudit(work, "work.restored", "work", work.id, { versionNo: work.versionNo, fromRecycleBin: true });
+    return success(workView(work));
+  }
+  match = path.match(/^\/api\/recycle-bin\/works\/([^/]+)\/permanent$/u);
+  if (match && method === "DELETE") {
+    const work = findDeletedWork(decodeURIComponent(match[1]));
+    if (!work) return failure("仅回收站中的作品可以彻底删除", 409);
+    const body = await bodyOf(init);
+    if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(work.versionNo)) return failure("作品版本已变化，请刷新后重试", 409);
+    works.splice(works.indexOf(work), 1);
+    browserAiStore.update((state) => {
+      delete state.conversations[work.id];
+      delete state.workSettings[work.id];
+      delete state.taskDefaults[work.id];
+    });
+    return success(null, 204);
+  }
   if (path === "/api/works/import" && method === "POST") {
     const file = formFile(init);
     const fileName = String(file?.name ?? "未命名作品.txt").replace(/\.(?:txt|docx)$/iu, "").trim() || "未命名作品";
@@ -2065,7 +2363,12 @@ async function mockApi(input, init = {}) {
       return success(workView(work));
     }
     if (method === "DELETE") {
-      works.splice(works.indexOf(work), 1);
+      const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(work.versionNo)) return failure("作品版本已变化，请刷新后重试", 409);
+      work.versionNo += 1;
+      work.deletedAt = new Date().toISOString();
+      work.updatedAt = work.deletedAt;
+      recordAudit(work, "work.deleted", "work", work.id, { versionNo: work.versionNo, recoverable: true, expiresAt: demoRecycleBinExpiresAt(work.deletedAt) });
       return success(null, 204);
     }
   }
@@ -2192,11 +2495,28 @@ async function mockApi(input, init = {}) {
     const found = findChapterRecord(decodeURIComponent(match[1]), true);
     return found ? success(found.chapter.versions) : failure("未找到章节");
   }
+  match = path.match(/^\/api\/chapters\/([^/]+)\/annotation-counts$/u);
+  if (match && method === "GET") {
+    const found = findChapterRecord(decodeURIComponent(match[1]));
+    if (!found) return failure("未找到章节");
+    const counts = new Map();
+    for (const annotation of found.work.chapterAnnotations.filter((item) => item.chapterId === found.chapter.id && !item.deletedAt)) {
+      for (let line = Number(annotation.startLine); line <= Number(annotation.endLine); line += 1) {
+        counts.set(line, (counts.get(line) ?? 0) + 1);
+      }
+    }
+    return success([...counts.entries()].sort(([left], [right]) => left - right).map(([line, count]) => ({ line, count })));
+  }
   match = path.match(/^\/api\/chapters\/([^/]+)\/annotations$/u);
   if (match) {
     const found = findChapterRecord(decodeURIComponent(match[1]));
     if (!found) return failure("未找到章节");
-    if (method === "GET") return success(found.work.chapterAnnotations.filter((annotation) => annotation.chapterId === found.chapter.id && !annotation.deletedAt));
+    if (method === "GET") {
+      const line = Number(url.searchParams.get("line"));
+      return success(found.work.chapterAnnotations.filter((annotation) => annotation.chapterId === found.chapter.id
+        && !annotation.deletedAt
+        && (!Number.isInteger(line) || line < 1 || Number(annotation.startLine) <= line && Number(annotation.endLine) >= line)));
+    }
     const body = await bodyOf(init);
     const lines = found.chapter.content.replace(/\r\n?/gu, "\n").split("\n");
     const startLine = Number(body.startLine);
@@ -2651,7 +2971,7 @@ async function mockApi(input, init = {}) {
     return success(volume);
   }
   if (path === "/api/works" && method === "GET") {
-    const items = works.map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, drafts, relationships, reviews, tasks, suggestions, fileVersions, attachments, members, chapterAnnotations, auditLogs, writingGoal, ...work }) => work);
+    const items = works.filter((work) => !work.deletedAt).map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, drafts, relationships, reviews, tasks, suggestions, fileVersions, attachments, members, chapterAnnotations, auditLogs, writingGoal, deletedAt, ...work }) => work);
     return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(items, url) : items);
   }
   match = path.match(/^\/api\/works\/([^/]+)$/u);

@@ -47,6 +47,7 @@ test("开发服务器直接复用正式站点前端资源", async () => {
   assert.match(server, /src\/public/);
   assert.match(server, /mock-api\.js/);
   assert.match(server, /process\.env\.PORT \?\? 45678/);
+  assert.match(server, /"\.svg": "image\/svg\+xml; charset=utf-8"/);
   assert.doesNotMatch(server, /novel\.db|sqlite/iu);
 });
 
@@ -138,6 +139,25 @@ test("Demo 适配当前正文、资料和协作接口契约", async () => {
   assert.match(adapter, /restoreEntityVersion/);
 });
 
+test("Demo 补齐当前前端新增契约并隔离 S3 凭据", async () => {
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  for (const capability of [
+    "annotation-counts",
+    "recycle-bin/works",
+    "favorite",
+    "roleplayUserCharacter",
+    "recall_story",
+    "platform/ai/protocols",
+    "pricing/refresh",
+    "platform/backups/targets",
+    "monthlyTokenQuota",
+    "externalRequestSent"
+  ]) assert.match(adapter, new RegExp(capability), `Demo 缺少当前前端契约：${capability}`);
+  assert.match(adapter, /不会保存或上传 AK、SK/);
+  assert.match(adapter, /不会向任何 S3 服务发起外部请求/);
+  assert.doesNotMatch(adapter, /state\.backup.*(?:accessKeyId|secretAccessKey)/u);
+});
+
 test("AI 配置仅保存在浏览器并说明前端直连方式", async () => {
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
   const values = new Map();
@@ -170,6 +190,47 @@ test("浏览器直接调用 OpenAI 兼容模型并携带作品上下文", async 
   assert.equal(request.init.headers.Authorization, "Bearer sk-local");
   assert.equal(JSON.parse(request.init.body).model, "demo-model");
   assert.deepEqual(result, { content: "冲突概括", outputTokens: 12 });
+});
+
+test("浏览器直连模式支持 OpenAI Responses 与关系角色扮演回忆", async () => {
+  const roleplayCharacter = {
+    id: works[0].characters[0].id,
+    name: works[0].characters[0].name,
+    profile: { summary: works[0].characters[0].detail },
+    currentState: { 身份: works[0].characters[0].role }
+  };
+  const roleplayUserCharacter = {
+    id: works[0].characters[1].id,
+    name: works[0].characters[1].name
+  };
+  const messages = buildBrowserAiMessages({
+    work: works[0],
+    scope: { type: "none" },
+    instruction: "继续刚才的对话",
+    roleplayCharacter,
+    roleplayUserCharacter
+  });
+  assert.match(messages[0].content, new RegExp(`你扮演 ${roleplayCharacter.name}`));
+  assert.match(messages[0].content, new RegExp(`对话者扮演：${roleplayUserCharacter.name}`));
+  assert.match(messages[0].content, /人物关系回忆/);
+  assert.match(messages[0].content, /故事回忆/);
+
+  let request;
+  const result = await requestBrowserAi({
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return new Response(JSON.stringify({ output_text: "角色回应", usage: { output_tokens: 7 } }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    provider: { protocol: "openai-responses", baseUrl: "https://example.test/v1/responses", apiKey: "sk-local" },
+    model: { modelId: "response-model", preset: { temperature: 0.4, max_tokens: 800 } },
+    messages
+  });
+  const body = JSON.parse(request.init.body);
+  assert.equal(request.url, "https://example.test/v1/responses");
+  assert.equal(body.model, "response-model");
+  assert.equal(body.instructions, messages[0].content);
+  assert.deepEqual(body.input, messages.slice(1));
+  assert.deepEqual(result, { content: "角色回应", outputTokens: 7 });
 });
 
 test("供应商和模型连接测试都会发起最小模型请求并接受纯思考响应", async () => {
@@ -264,4 +325,9 @@ test("Demo 版本直接继承主项目版本", async () => {
   assert.match(versionedDemoAdapterSource(adapter, mainPackage.version), new RegExp(`demo-version\\.js\\?v=${mainPackage.version.replaceAll(".", "\\.")}`));
   assert.match(adapter, /version: DEMO_VERSION/);
   assert.doesNotMatch(adapter, /0\.1\.0-demo/);
+});
+
+test("Demo 在正式前端和主版本来源变化时触发 Vercel 重建", async () => {
+  const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
+  assert.equal(vercel.ignoreCommand, "git diff --quiet HEAD^ HEAD -- ./ ../src/public ../package.json ../package-lock.json");
 });

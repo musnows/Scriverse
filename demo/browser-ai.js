@@ -46,7 +46,7 @@ export function normalizeProviderBaseUrl(value) {
   if (!/^https?:$/u.test(url.protocol)) throw new Error("供应商地址必须使用 HTTP 或 HTTPS");
   url.hash = "";
   url.search = "";
-  url.pathname = url.pathname.replace(/\/(?:chat\/completions|messages|models)\/?$/u, "").replace(/\/+$/u, "");
+  url.pathname = url.pathname.replace(/\/(?:chat\/completions|responses|messages|models)\/?$/u, "").replace(/\/+$/u, "");
   return url.toString().replace(/\/$/u, "");
 }
 
@@ -123,13 +123,41 @@ function scopeContext(work, scope) {
   return "本次请求未附加正文上下文。";
 }
 
-export function buildBrowserAiMessages({ work, scope, instruction, platformPrompt = "", workPrompt = "", conversationMessages = [], citations = [], roleplayCharacter = null }) {
+function roleplayMemoryContext(work, roleplayCharacter, roleplayUserCharacter) {
+  if (!roleplayCharacter) return "";
+  const characters = Array.isArray(work?.characters) ? work.characters : [];
+  const characterNames = new Map(characters.map((character) => [character.id, character.name]));
+  const relationships = (work?.relationships ?? [])
+    .filter((relationship) => relationship.fromCharacterId === roleplayCharacter.id || relationship.toCharacterId === roleplayCharacter.id)
+    .slice(0, 12)
+    .map((relationship) => {
+      const from = characterNames.get(relationship.fromCharacterId) ?? "未知角色";
+      const to = characterNames.get(relationship.toCharacterId) ?? "未知角色";
+      return `${from} — ${relationship.subtype || relationship.category || "关系未命名"} — ${to}`;
+    });
+  const roleNames = [roleplayCharacter.name, roleplayUserCharacter?.name].filter(Boolean);
+  const chapters = chapterList(work);
+  const recalledChapters = chapters
+    .filter((chapter) => roleNames.some((name) => String(chapter.content ?? "").includes(name)))
+    .slice(-4);
+  const storyMemories = (recalledChapters.length ? recalledChapters : chapters.slice(0, 3))
+    .map((chapter) => `${chapter.title}：${String(chapter.content ?? "").replace(/\s+/gu, " ").trim().slice(0, 900)}`);
+  return [
+    `角色扮演：你扮演 ${roleplayCharacter.name}。保持角色已知信息、立场与说话方式一致，不替作者决定剧情事实。`,
+    `角色档案：${roleplayCharacter.profile?.summary ?? "暂无摘要"}\n当前状态：${JSON.stringify(roleplayCharacter.currentState ?? {})}`,
+    roleplayUserCharacter ? `对话者扮演：${roleplayUserCharacter.name}。请将用户输入视为该角色在故事中的言行。` : "对话者身份：作者本人。",
+    `人物关系回忆：\n${relationships.join("\n") || "暂无已记录关系。"}`,
+    `故事回忆：\n${storyMemories.join("\n") || "暂无可引用正文。"}`
+  ].join("\n\n");
+}
+
+export function buildBrowserAiMessages({ work, scope, instruction, platformPrompt = "", workPrompt = "", conversationMessages = [], citations = [], roleplayCharacter = null, roleplayUserCharacter = null }) {
   const systemParts = [
     "你是叙界演示站中的小说创作助手。请使用简体中文回答，尊重作者决定，不要声称已经修改正文。",
     platformPrompt,
     workPrompt,
     `作品：${work?.title ?? "未命名作品"}\n简介：${work?.description ?? ""}`,
-    roleplayCharacter ? `当前角色卡：${roleplayCharacter.name}\n${roleplayCharacter.code ? `角色代号：${roleplayCharacter.code}` : ""}` : "",
+    roleplayMemoryContext(work, roleplayCharacter, roleplayUserCharacter),
     scopeContext(work, scope)
   ].filter((part) => String(part).trim());
   if (citations.length) systemParts.push(`作者引用：\n${citations.map((item) => `${item.chapterTitle ?? "章节"}：${item.text ?? ""}`).join("\n").slice(0, 12000)}`);
@@ -161,12 +189,13 @@ function completionText(payload) {
 
 export async function requestBrowserAi({ fetchImpl, provider, model, messages }) {
   const isAnthropic = provider.protocol === "anthropic-messages";
+  const isOpenAiResponses = provider.protocol === "openai-responses";
   if (provider.protocol === "google-vertex") throw new Error("Google Vertex 需要服务端 OAuth，演示站浏览器直连模式暂不支持该协议");
   const system = messages.find((message) => message.role === "system")?.content ?? "";
   const requestMessages = messages.filter((message) => message.role !== "system");
   const response = await fetchImpl(isAnthropic
     ? versionedProviderApiUrl(provider.baseUrl, "messages")
-    : providerApiUrl(provider.baseUrl, "chat/completions"), {
+    : providerApiUrl(provider.baseUrl, isOpenAiResponses ? "responses" : "chat/completions"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -182,13 +211,21 @@ export async function requestBrowserAi({ fetchImpl, provider, model, messages })
         temperature: Number(model.preset?.temperature ?? 0.7),
         max_tokens: Number(model.preset?.max_tokens ?? provider.maxTokens ?? 32000)
       }
-      : {
+      : isOpenAiResponses
+        ? {
+          model: model.modelId,
+          instructions: system,
+          input: requestMessages,
+          temperature: Number(model.preset?.temperature ?? 0.7),
+          max_output_tokens: Number(model.preset?.max_tokens ?? provider.maxTokens ?? 32000)
+        }
+        : {
         model: model.modelId,
         messages,
         stream: false,
         temperature: Number(model.preset?.temperature ?? 0.7),
         max_tokens: Number(model.preset?.max_tokens ?? provider.maxTokens ?? 32000)
-      })
+        })
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.error?.message ?? `供应商请求失败：${response.status}`);

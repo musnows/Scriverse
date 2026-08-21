@@ -7,7 +7,7 @@
     }
   },
   "framework": null,
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ./",
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ./ ../src/public ../package.json ../package-lock.json",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "cleanUrls": true,
