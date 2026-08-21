@@ -17946,8 +17946,8 @@ $("#ai-model").addEventListener("change", (event) => {
     return toast(aiConversationOptionLockedMessage);
   }
   setAiContextMeter(null);
-  syncAiModelPicker();
   setAiModelPickerVisible(false);
+  syncAiModelPicker();
 });
   $("#ai-model-picker").addEventListener("click", async (event) => {
   const button = event.currentTarget;

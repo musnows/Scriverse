@@ -24,6 +24,7 @@ describe("AI 模型选择收纳界面", () => {
     expect(page).toContain("feature=ai-model-picker-v1");
     expect(page).toContain("feature=ai-fork-model-unlock-v1");
     expect(page).toContain("feature=ai-model-thinking-label-v1");
+    expect(page).toContain("feature=ai-model-picker-focus-v1");
 
     expect(application).toContain("function selectedAiModelLabel()");
     expect(application).toContain("function aiConversationModelLocked()");
@@ -46,6 +47,7 @@ describe("AI 模型选择收纳界面", () => {
     expect(application).toContain("function renderAiModelOptions()");
     expect(application).toContain("modelThinkingEffortLabel(model)");
     expect(application).toContain('.join(" · ")');
+    expect(application).toContain("setAiContextMeter(null);\n  setAiModelPickerVisible(false);\n  syncAiModelPicker();");
     expect(application).toContain("model.multimodalEnabled === true");
     expect(application).toContain("aiModelImageIconMarkup()");
     expect(application).toContain("function syncAiImageAttachmentControl()");
