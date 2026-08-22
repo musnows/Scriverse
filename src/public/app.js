@@ -100,6 +100,7 @@ import { systemStatusPresentation } from "/system-status.js?v=20260801-system-he
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
+import { resolveToastRegionHost } from "/toast-layer.js?v=20260822-toast-modal-host-v1";
 import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v2";
 import {
   clampCropRect,
@@ -5109,8 +5110,18 @@ async function initializeAuthentication() {
   return true;
 }
 
+function syncToastRegionHost() {
+  const region = $("#toast-region");
+  const host = resolveToastRegionHost([...document.querySelectorAll("dialog[open]")], document.body);
+  if (!host || region.parentElement === host) return false;
+  if (typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+  host.append(region);
+  return true;
+}
+
 function raiseToastRegion() {
   const region = $("#toast-region");
+  syncToastRegionHost();
   if (typeof region.showPopover !== "function") return;
   if (region.matches(":popover-open")) region.hidePopover();
   region.showPopover();
@@ -5263,9 +5274,6 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
   confirm.textContent = confirmLabel;
   actions.append(cancel, confirm);
   element.append(heading, description, actions);
-  region.append(element);
-  raiseToastRegion();
-  cancel.focus();
   return new Promise((resolve) => {
     const finish = (confirmed) => {
       element.remove();
@@ -5280,6 +5288,9 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
       event.preventDefault();
       finish(false);
     });
+    region.append(element);
+    raiseToastRegion();
+    cancel.focus();
   });
 }
 
@@ -5340,8 +5351,15 @@ function inputToast(message, { title = "请输入", inputLabel = title, value = 
 
 document.addEventListener("toggle", (event) => {
   const target = event.target;
-  if (target instanceof HTMLDialogElement && target.open && $("#toast-region").childElementCount) {
+  if (!(target instanceof HTMLDialogElement)) return;
+  const region = $("#toast-region");
+  if (target.open && region.childElementCount) {
     raiseToastRegion();
+    return;
+  }
+  if (!target.open && (region.parentElement !== document.body || region.childElementCount)) {
+    const moved = syncToastRegionHost();
+    if (moved && region.childElementCount && typeof region.showPopover === "function") region.showPopover();
   }
 }, true);
 
