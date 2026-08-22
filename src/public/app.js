@@ -17030,16 +17030,12 @@ $("#account-settings-button").addEventListener("click", () => {
   $("#profile-display-name").value = state.user?.displayName ?? "";
   renderProfileAvatar();
   $("#password-form").reset();
-  $("#api-key-result").classList.add("hidden");
-  $("#api-key-value").value = "";
   $("#account-dialog").showModal();
   api("/api/auth/api-key").then((status) => {
-    $("#api-key-status").textContent = status.configured
-      ? `已配置 ${status.prefix}…${status.lastUsedAt ? `，最近使用：${formatDateTime(status.lastUsedAt)}` : "，尚未使用"}`
-      : "尚未生成 API Key。";
-    $("#api-key-reset-button").textContent = status.configured ? "重置 API Key" : "生成 API Key";
+    paintApiKeyStatus(status);
   }).catch((error) => {
     $("#api-key-status").textContent = error.message;
+    $("#api-key-copy-button").hidden = true;
   });
 });
 $("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
@@ -17476,6 +17472,17 @@ function validatePasswordChangeConfirmation() {
 }
 $("#password-form input[name='newPassword']").addEventListener("input", validatePasswordChangeConfirmation);
 $("#password-form input[name='passwordConfirmation']").addEventListener("input", validatePasswordChangeConfirmation);
+function paintApiKeyStatus(status) {
+  const copyButton = $("#api-key-copy-button");
+  copyButton.hidden = !status.configured;
+  if (status.configured) {
+    $("#api-key-status").textContent = `已配置 ${status.prefix}…${status.lastUsedAt ? `，最近使用：${formatDateTime(status.lastUsedAt)}` : "，尚未使用"}`;
+    $("#api-key-reset-button").textContent = "重置 API Key";
+    return;
+  }
+  $("#api-key-status").textContent = "尚未生成 API Key。";
+  $("#api-key-reset-button").textContent = "生成 API Key";
+}
 $("#api-key-reset-button").addEventListener("click", async () => {
   if ($("#api-key-reset-button").textContent.includes("重置") && !(await confirmToast(
     "重置后，所有使用旧 API Key 的 CLI 会立刻退出登录。确定继续吗？",
@@ -17483,25 +17490,31 @@ $("#api-key-reset-button").addEventListener("click", async () => {
   ))) return;
   try {
     const result = await api("/api/auth/api-key/reset", { method: "POST", body: {} });
-    $("#api-key-status").textContent = `已配置 ${result.prefix}…，尚未使用`;
-    $("#api-key-reset-button").textContent = "重置 API Key";
-    $("#api-key-value").value = result.apiKey;
-    $("#api-key-result").classList.remove("hidden");
-    $("#api-key-value").focus();
-    $("#api-key-value").select();
-    toast("新的 API Key 已生成，请立即保存");
+    paintApiKeyStatus({
+      configured: true,
+      prefix: result.prefix,
+      lastUsedAt: null,
+      copyable: result.copyable !== false
+    });
+    toast("新的 API Key 已生成，可点击复制");
   } catch (error) { toast(error.message, "error"); }
 });
 $("#api-key-copy-button").addEventListener("click", async () => {
-  const value = $("#api-key-value").value;
-  if (!value) return;
+  const button = $("#api-key-copy-button");
+  if (button.hidden || button.disabled) return;
+  button.disabled = true;
   try {
-    await navigator.clipboard.writeText(value);
-    toast("API Key 已复制");
-  } catch {
-    $("#api-key-value").focus();
-    $("#api-key-value").select();
-    toast("无法自动复制，请手动复制", "error");
+    const result = await api("/api/auth/api-key/reveal", { method: "POST", body: {} });
+    try {
+      await navigator.clipboard.writeText(result.apiKey);
+      toast("API Key 已复制");
+    } catch {
+      toast("无法自动复制，请检查浏览器剪贴板权限", "error");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
   }
 });
 $("#logout-button").addEventListener("click", async () => {
