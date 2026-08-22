@@ -3401,10 +3401,18 @@ async function createNewAiConversation(taskType = "chat") {
   }
 }
 
+function favoriteCharactersFirst(characters) {
+  const items = Array.isArray(characters) ? characters : [];
+  return [
+    ...items.filter((character) => character.isFavorite === true),
+    ...items.filter((character) => character.isFavorite !== true)
+  ];
+}
+
 function renderAiRoleplayCharacterSelect() {
   const select = $("#ai-roleplay-character");
   const selectedId = String(state.aiRoleplayCharacter?.id ?? "");
-  const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
+  const availableCharacters = favoriteCharactersFirst(state.characters.filter((character) => !character.mergedIntoCharacterId));
   const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
     name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
@@ -3435,9 +3443,9 @@ function renderAiRoleplayUserCharacterSelect() {
   const select = $("#ai-roleplay-user-character");
   const selectedId = String(state.aiRoleplayUserCharacter?.id ?? "");
   const aiCharacterId = String(state.aiRoleplayCharacter?.id ?? "");
-  const availableCharacters = state.characters.filter((character) => (
+  const availableCharacters = favoriteCharactersFirst(state.characters.filter((character) => (
     !character.mergedIntoCharacterId && String(character.id) !== aiCharacterId
-  ));
+  )));
   const options = [{ id: "", name: "选择我的角色（可选）" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
     name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
@@ -8551,6 +8559,67 @@ function pencilIconMarkup() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"></path><path d="m16.5 3.5 1.4-1.4a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z"></path></svg>';
 }
 
+function characterFavoriteIconMarkup() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"></path></svg>';
+}
+
+function characterFavoriteButton(item) {
+  const isFavorite = item.isFavorite === true;
+  const canFavorite = canEditModule("characters");
+  const action = isFavorite ? "取消收藏" : "收藏";
+  const title = canFavorite ? action : "当前账户没有角色模块写入权限";
+  return `<button class="character-favorite-button${isFavorite ? " is-favorite" : ""}" type="button" data-character-favorite="${esc(item.id)}" aria-label="${action}角色“${esc(item.name)}”" aria-pressed="${isFavorite}" title="${title}" ${canFavorite ? "" : "disabled"}>${characterFavoriteIconMarkup()}</button>`;
+}
+
+const recordFavoriteConfigs = Object.freeze({
+  draft: { module: "drafts", resource: "drafts", label: "想法", nameField: "title" },
+  setting: { module: "settings", resource: "settings", label: "设定", nameField: "title" },
+  organization: { module: "organizations", resource: "organizations", label: "组织", nameField: "name" }
+});
+
+function recordFavoriteButton(type, item, { cardControl = false } = {}) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return "";
+  const isFavorite = item.isFavorite === true;
+  const canFavorite = canEditModule(config.module);
+  const action = isFavorite ? "取消收藏" : "收藏";
+  const title = canFavorite ? action : `当前账户没有${config.label}模块写入权限`;
+  const name = String(item[config.nameField] ?? "");
+  return `<button class="record-favorite-button${cardControl ? " is-card-control" : ""}${isFavorite ? " is-favorite" : ""}" type="button" data-record-favorite="${esc(item.id)}" data-record-favorite-type="${esc(type)}" aria-label="${action}${config.label}“${esc(name)}”" aria-pressed="${isFavorite}" title="${title}" ${canFavorite ? "" : "disabled"}>${characterFavoriteIconMarkup()}</button>`;
+}
+
+async function toggleRecordFavorite(type, item, render) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return;
+  const updated = await api(`/api/${config.resource}/${encodeURIComponent(item.id)}/favorite`, {
+    method: "PATCH",
+    body: { isFavorite: item.isFavorite !== true }
+  });
+  await render();
+  const favoriteButton = [...$("#module-content").querySelectorAll("[data-record-favorite]")].find((button) => (
+    button.dataset.recordFavoriteType === type && button.dataset.recordFavorite === String(updated.id)
+  ));
+  favoriteButton?.focus({ preventScroll: true });
+  const name = String(updated[config.nameField] ?? "");
+  toast(updated.isFavorite ? `已收藏${config.label}“${name}”` : `已取消收藏${config.label}“${name}”`);
+}
+
+function bindRecordFavoriteButtons(type, items, render) {
+  const config = recordFavoriteConfigs[type];
+  if (!config) return;
+  $("#module-content").querySelectorAll(`[data-record-favorite-type="${type}"]`).forEach((button) => button.addEventListener("click", async () => {
+    const item = items.find((candidate) => candidate.id === button.dataset.recordFavorite);
+    if (!item || !canEditModule(config.module)) return;
+    button.disabled = true;
+    try {
+      await toggleRecordFavorite(type, item, render);
+    } catch (error) {
+      button.disabled = false;
+      toast(`${config.label}收藏状态更新失败：${error.message}`, "error");
+    }
+  }));
+}
+
 function recordCardEditButton(attribute, id, label) {
   return `<button class="record-card-edit" type="button" data-${attribute}="${esc(id)}" aria-label="编辑${esc(label)}" title="编辑">${pencilIconMarkup()}</button>`;
 }
@@ -8886,9 +8955,10 @@ function openReviewDetailDialog(item) {
 }
 
 function settingRecordActions(item) {
-  return canEditModule("settings")
+  const recordAction = canEditModule("settings")
     ? recordCardEditButton("edit-setting", item.id, `设定“${item.title}”`)
     : recordHistoryButton("setting", item.id, item.title);
+  return `${recordFavoriteButton("setting", item)}${recordAction}`;
 }
 
 function draftTypeLabel(draftType) {
@@ -9032,9 +9102,9 @@ async function renderDrafts(page = moduleListPages.drafts) {
     <details class="character-filter-dropdown"><summary><span>按绑定位置筛选</span><strong>${selectedBindingKeys.size ? `已选 ${selectedBindingKeys.size} 项` : "全部位置"}</strong></summary><div id="draft-binding-filter" class="character-filter-options">${bindingOptions.map(([value, label]) => `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedBindingKeys.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("")}</div></details>
     <div class="character-filter-toolbar-actions">${hasDraftFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>` : ""}<button id="clear-draft-filters" class="ghost-button" type="button" ${hasDraftFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
-  const actions = (item) => canEditModule("drafts")
+  const actions = (item) => `${recordFavoriteButton("draft", item)}${canEditModule("drafts")
     ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
-    : recordHistoryButton("draft", item.id, item.title);
+    : recordHistoryButton("draft", item.id, item.title)}`;
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
     <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
       <small>${esc(draftTypeLabel(item.draftType))} · ${esc(draftBindingLabel(item))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
@@ -9090,6 +9160,10 @@ async function renderDrafts(page = moduleListPages.drafts) {
   $("#module-content").querySelectorAll("[data-edit-draft]").forEach((button) => button.addEventListener("click", async () => {
     openDraftDialog(await api(`/api/drafts/${encodeURIComponent(button.dataset.editDraft)}`));
   }));
+  bindRecordFavoriteButtons("draft", pageResult.items, async () => {
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
   bindEntityHistoryButtons(() => renderDrafts(pageResult.page));
 }
 
@@ -9153,6 +9227,10 @@ async function renderSettings(page = moduleListPages.settings) {
     bindModulePagination("settings", renderSettingResults);
     const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
     $("#setting-filter-results").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
+    bindRecordFavoriteButtons("setting", pageResult.items, async () => {
+      moduleListPages.settings = 1;
+      await renderSettings(1);
+    });
     bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
   };
 
@@ -9189,6 +9267,21 @@ async function renderSettings(page = moduleListPages.settings) {
   renderSettingResults(page);
 }
 
+async function toggleCharacterFavorite(item) {
+  const updated = await api(`/api/characters/${encodeURIComponent(item.id)}/favorite`, {
+    method: "PATCH",
+    body: { isFavorite: item.isFavorite !== true }
+  });
+  if (loadedAiReferencesWorkId === state.work?.id) {
+    state.characters = upsertEntityCollection(state.characters, updated);
+    renderAiRoleplayCharacterSelect();
+  }
+  characterListPage = 1;
+  await renderCharacters(1);
+  $("#module-content").querySelector(`[data-character-favorite="${CSS.escape(String(updated.id))}"]`)?.focus({ preventScroll: true });
+  toast(updated.isFavorite ? `已收藏角色“${updated.name}”` : `已取消收藏角色“${updated.name}”`);
+}
+
 async function renderCharacters(page = characterListPage) {
   const hasCharacterFilters = characterFilters.raceIds.length > 0
     || characterFilters.organizationIds.length > 0
@@ -9211,14 +9304,14 @@ async function renderCharacters(page = characterListPage) {
   [state.races, state.organizations] = [races, organizations];
   mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
-  const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
+  const characterActions = (item) => `${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}`;
   const characterLockBadge = (item) => item.lockedFields.length
     ? `<span class="character-lock-badge" aria-label="${item.lockedFields.length} 个锁定字段" title="锁定字段：${esc(item.lockedFields.join("、"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>${item.lockedFields.length}</span></span>`
     : "";
   const characterCards = () => `<div class="card-grid">${pageCharacters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
+    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
     <div class="character-card-heading">${characterAvatarHtml(item)}<h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     <div class="character-gender"><b>性别</b><span class="pill">${esc(characterGenderLabel(item.gender))}</span></div>
@@ -9284,6 +9377,17 @@ async function renderCharacters(page = characterListPage) {
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
+  $("#module-content").querySelectorAll("[data-character-favorite]").forEach((button) => button.addEventListener("click", async () => {
+    const item = pageCharacters.find((candidate) => candidate.id === button.dataset.characterFavorite);
+    if (!item || !canEditModule("characters")) return;
+    button.disabled = true;
+    try {
+      await toggleCharacterFavorite(item);
+    } catch (error) {
+      button.disabled = false;
+      toast(`角色收藏状态更新失败：${error.message}`, "error");
+    }
+  }));
   const readSelectedValues = (selector) => [...$(selector).querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
   $("#character-race-filter").addEventListener("change", async () => {
     characterFiltersPanelOpen = true;
@@ -9438,14 +9542,14 @@ async function renderOrganizations(page = moduleListPages.organizations) {
   moduleListPages.organizations = pageResult.page;
   const layout = readModuleLayout();
   const canEditOrganizations = canEditModule("organizations");
-  const organizationActions = (item) => canEditOrganizations
+  const organizationActions = (item, { cardControl = false } = {}) => `${recordFavoriteButton("organization", item, { cardControl })}${canEditOrganizations
     ? recordCardEditButton("edit-organization", item.id, `组织“${item.name}”`)
-    : recordHistoryButton("organization", item.id, item.name);
+    : recordHistoryButton("organization", item.id, item.name)}`;
   const organizationCardActions = (item) => canEditOrganizations
-    ? organizationActions(item)
+    ? organizationActions(item, { cardControl: true })
     : `<div class="card-actions">${organizationActions(item)}</div>`;
   const organizationCards = () => `<div class="card-grid organization-grid">${pageResult.items.map((item) => `
-    <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
+    <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit has-favorite-control" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}${entityLifecycleBadge(item.isDissolved, "已解散")}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条组织设定，打开查看详情</span>` : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
@@ -9470,6 +9574,10 @@ async function renderOrganizations(page = moduleListPages.organizations) {
   bindModulePagination("organizations", renderOrganizations);
   const openOrganization = async (id, readOnly) => openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => { void openOrganization(button.dataset.editOrganization, false); }));
+  bindRecordFavoriteButtons("organization", pageResult.items, async () => {
+    moduleListPages.organizations = 1;
+    await renderOrganizations(1);
+  });
   bindEntityHistoryButtons(async () => { await renderOrganizations(pageResult.page); await loadAiReferences(); });
 }
 
