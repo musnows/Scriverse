@@ -11869,6 +11869,9 @@ function appendTokenUsageDetailRow(parent, label, usage, isSummary = false) {
     cell.textContent = tokenUsageDetailCount(usage?.[key]);
     row.append(cell);
   });
+  const price = document.createElement("td");
+  price.textContent = formatEstimatedCost(usage?.estimatedCost);
+  row.append(price);
   parent.append(row);
 }
 
@@ -11904,7 +11907,7 @@ function showTokenUsageDetails(usage, title, trigger) {
   const description = document.createElement("p");
   description.id = "token-usage-details-description";
   description.className = "token-usage-details-note";
-  description.textContent = "Raw Input 为不含缓存的输入 Token；Cache Write 与 Cache Read 也是输入组成部分，并已包含在总计中。汇总行包含当前范围内全部模型。";
+  description.textContent = "Raw Input 为不含缓存的输入 Token；Cache Write 与 Cache Read 也是输入组成部分，并已包含在总计中。估算价格按美元显示，未匹配价格的模型显示为暂无价格。汇总行包含当前范围内全部模型。";
   body.append(description);
 
   const tableScroll = document.createElement("div");
@@ -11916,7 +11919,7 @@ function showTokenUsageDetails(usage, title, trigger) {
   table.append(caption);
   const head = document.createElement("thead");
   const headRow = document.createElement("tr");
-  ["模型", "Raw Input", "Cache Write", "Cache Read", "Output", "总计", "调用", "估算调用"].forEach((label) => {
+  ["模型", "Raw Input", "Cache Write", "Cache Read", "Output", "总计", "调用", "估算调用", "估算价格"].forEach((label) => {
     const cell = document.createElement("th");
     cell.scope = "col";
     cell.textContent = label;
@@ -11930,7 +11933,7 @@ function showTokenUsageDetails(usage, title, trigger) {
   if (!models.length) {
     const emptyRow = document.createElement("tr");
     const emptyCell = document.createElement("td");
-    emptyCell.colSpan = 8;
+    emptyCell.colSpan = 9;
     emptyCell.textContent = "还没有模型用量记录。";
     emptyRow.append(emptyCell);
     bodyRows.append(emptyRow);

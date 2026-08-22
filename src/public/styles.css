@@ -744,7 +744,7 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .toast.token-usage-details-toast {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(720px, calc(100vw - 48px));
+  width: min(1200px, calc(100vw - 48px));
   max-width: none;
   max-height: min(72dvh, 560px);
   padding: 0;
@@ -762,7 +762,7 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .token-usage-details-body { display: grid; gap: 10px; min-height: 0; padding: 12px 14px 14px; overflow-y: auto; color: var(--muted); font-size: 11px; line-height: 1.6; overscroll-behavior: contain; }
 .token-usage-details-note { margin: 0; }
 .token-usage-details-table-scroll { min-width: 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.token-usage-details-table { width: 100%; min-width: 690px; border-collapse: collapse; color: var(--ink); font: 10px/1.45 var(--font-latin), var(--font-cjk), monospace; }
+.token-usage-details-table { width: 100%; min-width: 820px; border-collapse: collapse; color: var(--ink); font: 10px/1.45 var(--font-latin), var(--font-cjk), monospace; }
 .token-usage-details-table caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 .token-usage-details-table th, .token-usage-details-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
 .token-usage-details-table thead th { background: var(--surface-soft); color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: .03em; }
@@ -2962,7 +2962,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   right: auto;
   bottom: auto;
   left: 50%;
-  width: min(720px, calc(100vw - 32px));
+  width: min(1200px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   transform: translate(-50%, -50%);
 }
