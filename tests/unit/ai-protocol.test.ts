@@ -253,7 +253,7 @@ describe("AI 供应商协议适配", () => {
         },
         { role: "tool", tool_call_id: "call_1", content: "{\"ok\":true}" }
       ],
-      parameters: { max_tokens: 2_048, temperature: 0.2, reasoning_effort: "high" },
+      parameters: { max_tokens: 2_048, temperature: 0.2, reasoning_effort: "auto" },
       tools: [{
         type: "function",
         function: { name: "story_index", description: "读取目录", parameters: { type: "object", properties: {} } }
@@ -265,7 +265,7 @@ describe("AI 供应商协议适配", () => {
       model: "gpt-5",
       max_output_tokens: 2_048,
       temperature: 0.2,
-      reasoning: { effort: "high" },
+      reasoning: { effort: "auto" },
       stream: true,
       tool_choice: "auto",
       tools: [{ type: "function", name: "story_index", description: "读取目录" }]

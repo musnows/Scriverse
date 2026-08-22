@@ -23,7 +23,7 @@ describe("Google Vertex 供应商 API", () => {
   let workId: string;
   let chapterId: string;
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
-  let expectedThinkingEffort: "low" | undefined;
+  let expectedThinkingEffort: "auto" | undefined;
   const serviceAccountJson = createServiceAccountJson();
   const vertexBaseUrl = "https://aiplatform.googleapis.com/v1/projects/scriverse-demo/locations/global/endpoints/openapi";
 
@@ -141,11 +141,11 @@ describe("Google Vertex 供应商 API", () => {
       displayName: "Gemini Flash",
       modelId: "google/gemini-2.0-flash-001",
       thinkingEnabled: true,
-      thinkingEffort: "low",
+      thinkingEffort: "auto",
       multimodalEnabled: true
     }).expect(201);
-    expect(model.body.data.thinkingEffort).toBe("low");
-    expectedThinkingEffort = "low";
+    expect(model.body.data.thinkingEffort).toBe("auto");
+    expectedThinkingEffort = "auto";
 
     const testResult = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
     expect(testResult.body.data.ok).toBe(true);

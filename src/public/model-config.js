@@ -11,6 +11,7 @@ export const MODEL_PURPOSE_OPTIONS = Object.freeze([
 
 export const MODEL_THINKING_EFFORT_OPTIONS = Object.freeze([
   ["default", "模型默认"],
+  ["auto", "自动（auto）"],
   ["low", "低（low）"],
   ["medium", "中（medium）"],
   ["high", "高（high）"],
@@ -104,5 +105,5 @@ export function modelOptionLabel(model) {
 export function modelThinkingEffortLabel(model) {
   if (model?.thinkingEnabled !== true) return "";
   const thinkingEffort = String(model?.thinkingEffort ?? "").trim().toLowerCase();
-  return thinkingEffort && thinkingEffort !== "default" ? thinkingEffort : "auto";
+  return thinkingEffort && thinkingEffort !== "default" ? thinkingEffort : "default";
 }
