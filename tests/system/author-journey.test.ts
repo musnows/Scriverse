@@ -333,6 +333,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-usage-view"');
     expect(page.text).toContain('id="platform-usage-pricing-refresh"');
     expect(page.text).toContain('id="platform-usage-button"');
+    expect(page.text).toContain('feature=ai-token-usage-details-centered-v1');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
@@ -368,9 +369,15 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain("formatEstimatedCost");
     expect(application.text).toContain("估价");
+    expect(application.text).toContain("根据多来源模型价格表估算");
     expect(application.text).toContain("pricingAvailable === true");
     expect(application.text).toContain("Cache Read");
     expect(application.text).toContain("Cache Write");
+    expect(application.text).toContain('data-token-usage-details');
+    expect(application.text).toContain('function showTokenUsageDetails(usage, title, trigger)');
+    expect(application.text).toContain('classList.add("token-usage-details-region")');
+    expect(application.text).toContain('["directInputTokens", "cacheWriteInputTokens", "cacheReadInputTokens"');
+    expect(application.text).toContain('"Raw Input"');
     expect(application.text).toContain("/api/platform/ai/usage/pricing/refresh");
     expect(application.text).toContain('state.user?.role !== "admin"');
     expect(application.text).toContain("有 ${unpricedModelCount.toLocaleString(\"zh-CN\")} 个模型在价格表中未找到对应价格");
@@ -408,6 +415,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".usage-calendar-grid {");
     expect(styles.text).toContain(".usage-stat-grid {");
     expect(styles.text).toContain(".usage-cost-bubble {");
+    expect(styles.text).toContain(".toast-region.token-usage-details-region");
+    expect(styles.text).toContain(".token-usage-details-table {");
     expect(styles.text).toContain("@container usage-overview (max-width: 760px)");
     expect(page.text).toContain('id="platform-ai-return"');
     expect(page.text).toContain('id="users-settings-return"');

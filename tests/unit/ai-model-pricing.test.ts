@@ -6,6 +6,9 @@ import {
   LiteLlmPriceCache,
   estimateLiteLlmUsageCost,
   nextLiteLlmPriceUpdate,
+  parseModelsDevPriceTable,
+  parseOpenRouterPriceTable,
+  parsePublicProviderConfPriceTable,
   parseLiteLlmPriceTable
 } from "../../src/ai-model-pricing.js";
 
@@ -53,6 +56,112 @@ describe("LiteLLM 模型价格估算", () => {
     });
   });
 
+  it("解析 OpenRouter、Models.dev 和 PublicProviderConf 的统一价格字段", () => {
+    const openRouter = parseOpenRouterPriceTable({
+      data: [{
+        id: "xiaomi/mimo-v2.5-pro",
+        pricing: {
+          prompt: "0.000000435",
+          completion: "0.00000087",
+          input_cache_read: "0.0000000036",
+          input_cache_write: "0.000000435"
+        }
+      }]
+    });
+    const modelsDev = parseModelsDevPriceTable({
+      xiaomi: {
+        id: "xiaomi",
+        models: {
+          "mimo-v2.5-pro": {
+            id: "mimo-v2.5-pro",
+            cost: { input: 0.435, output: 0.87, cache_read: 0.0036, cache_write: 0.435 }
+          }
+        }
+      }
+    });
+    const publicProviderConf = parsePublicProviderConfPriceTable({
+      providers: {
+        xiaomi: {
+          id: "xiaomi",
+          models: [{
+            id: "mimo-v2.5-pro",
+            cost: { input: 0.435, output: 0.87, cache_read: 0.0036, cache_write: 0.435 }
+          }]
+        }
+      }
+    });
+
+    expect(openRouter.get("xiaomi/mimo-v2.5-pro")).toEqual({
+      input_cost_per_token: 4.35e-7,
+      output_cost_per_token: 8.7e-7,
+      cache_read_input_token_cost: 3.6e-9,
+      cache_creation_input_token_cost: 4.35e-7
+    });
+    expect(modelsDev.get("xiaomi/mimo-v2.5-pro")).toEqual(openRouter.get("xiaomi/mimo-v2.5-pro"));
+    expect(publicProviderConf.get("xiaomi/mimo-v2.5-pro")).toEqual(openRouter.get("xiaomi/mimo-v2.5-pro"));
+  });
+
+  it("先精确匹配，再按价格表 key 包含模型 ID 匹配前缀模型", () => {
+    const table = new Map([
+      ["exact-model", { input_cost_per_token: 1, output_cost_per_token: 2 }],
+      ["xiaomi/mimo-v2.5-pro", { input_cost_per_token: 3, output_cost_per_token: 4 }],
+      ["longcat/LongCat-2.0", { input_cost_per_token: 5, output_cost_per_token: 6 }]
+    ]);
+    expect(estimateLiteLlmUsageCost([
+      { modelId: "EXACT-MODEL", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 },
+      { modelId: "mimo-v2.5-pro", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 },
+      { modelId: "LongCat-2.0", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0 }
+    ], table)).toMatchObject({
+      estimatedCost: 21,
+      pricedModelCount: 3,
+      unpricedModelCount: 0
+    });
+  });
+
+  it("按来源优先级聚合，并允许单个来源失败后继续刷新其他来源", async () => {
+    const cache = new LiteLlmPriceCache({
+      schedule: false,
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes("openrouter.ai")) {
+          return new Response(JSON.stringify({
+            data: [{ id: "xiaomi/mimo-v2.5-pro", pricing: { prompt: "2", completion: "2" } }]
+          }));
+        }
+        if (url.includes("models.dev")) return new Response("Models.dev unavailable", { status: 503 });
+        if (url.includes("ThinkInAIXYZ")) {
+          return new Response(JSON.stringify({
+            providers: {
+              xiaomi: { id: "xiaomi", models: [{ id: "mimo-v2.5-pro", cost: { input: 4, output: 4 } }] },
+              public: { id: "public", models: [{ id: "public-only", cost: { input: 5, output: 5 } }] }
+            }
+          }));
+        }
+        return new Response(JSON.stringify({
+          "xiaomi/mimo-v2.5-pro": { input_cost_per_token: 1, output_cost_per_token: 1 },
+          "public/mimo-v2.5-pro": { input_cost_per_token: 1.5, output_cost_per_token: 1.5 }
+        }));
+      }
+    });
+
+    expect(await cache.refresh()).toBe(true);
+    expect(cache.getPriceTable().get("xiaomi/mimo-v2.5-pro")).toEqual({
+      input_cost_per_token: 1,
+      output_cost_per_token: 1
+    });
+    expect(cache.getPriceTable().get("public/public-only")).toEqual({
+      input_cost_per_token: 5e-6,
+      output_cost_per_token: 5e-6
+    });
+    expect(cache.getSourceStatuses()).toEqual([
+      expect.objectContaining({ source: "litellm", lastRefreshSucceeded: true }),
+      expect.objectContaining({ source: "openrouter", lastRefreshSucceeded: true }),
+      expect.objectContaining({ source: "models.dev", lastRefreshSucceeded: false }),
+      expect.objectContaining({ source: "public-provider-conf", lastRefreshSucceeded: true })
+    ]);
+    cache.dispose();
+  });
+
   it("成功更新才替换 JSON 缓存，失败时保留历史文件并可重启恢复", async () => {
     const root = mkdtempSync(join(tmpdir(), "scriverse-litellm-price-cache-"));
     const cachePath = join(root, "litellm-model-prices.json");
@@ -68,9 +177,12 @@ describe("LiteLLM 模型价格估算", () => {
     expect(cache.hasData()).toBe(true);
     const firstFile = readFileSync(cachePath, "utf8");
     expect(JSON.parse(firstFile)).toMatchObject({
-      version: 1,
-      source: expect.stringContaining("model_prices_and_context_window.json"),
+      version: 2,
       updatedAt: "2026-08-20T16:00:00.000Z"
+    });
+    expect(JSON.parse(firstFile).sources.litellm).toMatchObject({
+      source: "litellm",
+      url: expect.stringContaining("model_prices_and_context_window.json")
     });
     cache.dispose();
 
