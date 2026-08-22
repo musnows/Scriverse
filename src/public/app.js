@@ -16,7 +16,7 @@ import {
   visibleForeshadowReminders
 } from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260821-ai-model-thinking-label-v1&feature=ai-provider-responses-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
@@ -6986,6 +6986,7 @@ async function showSettingsHub() {
     state.dirty = false;
   }
   dismissChapterInsightToast();
+  dismissTokenUsageDetails({ restoreFocus: false });
   dismissDeleteToasts();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
@@ -7034,6 +7035,7 @@ async function showPlatformAi() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
   dismissChapterInsightToast();
+  dismissTokenUsageDetails({ restoreFocus: false });
   dismissDeleteToasts();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
@@ -7057,6 +7059,7 @@ async function showPlatformUsage() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 Token 用量面板将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
   dismissChapterInsightToast();
+  dismissTokenUsageDetails({ restoreFocus: false });
   dismissDeleteToasts();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
@@ -11705,6 +11708,135 @@ function scrollUsageCalendarsToLatest(root) {
   });
 }
 
+let tokenUsageDetailsTrigger = null;
+
+function tokenUsageDetailCount(value) {
+  return Math.max(0, Math.round(Number(value) || 0)).toLocaleString("zh-CN");
+}
+
+function dismissTokenUsageDetails({ restoreFocus = true } = {}) {
+  const region = $("#toast-region");
+  const element = region.querySelector("#token-usage-details-toast");
+  if (!element) return;
+  element.remove();
+  const trigger = tokenUsageDetailsTrigger;
+  tokenUsageDetailsTrigger = null;
+  region.classList.remove("token-usage-details-region");
+  if (trigger) {
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus && trigger.isConnected) trigger.focus({ preventScroll: true });
+  }
+  if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+    region.hidePopover();
+  }
+}
+
+function appendTokenUsageDetailRow(parent, label, usage, isSummary = false) {
+  const row = document.createElement("tr");
+  if (isSummary) row.className = "is-summary";
+  const model = document.createElement("th");
+  model.scope = "row";
+  model.textContent = label;
+  row.append(model);
+  ["directInputTokens", "cacheWriteInputTokens", "cacheReadInputTokens", "outputTokens", "totalTokens", "requestCount", "estimatedRequestCount"].forEach((key) => {
+    const cell = document.createElement("td");
+    cell.textContent = tokenUsageDetailCount(usage?.[key]);
+    row.append(cell);
+  });
+  parent.append(row);
+}
+
+function showTokenUsageDetails(usage, title, trigger) {
+  dismissTokenUsageDetails({ restoreFocus: false });
+  const region = $("#toast-region");
+  const element = document.createElement("section");
+  element.id = "token-usage-details-toast";
+  element.className = "toast token-usage-details-toast";
+  element.setAttribute("role", "dialog");
+  element.setAttribute("aria-labelledby", "token-usage-details-title");
+  element.setAttribute("aria-describedby", "token-usage-details-description");
+
+  const header = document.createElement("header");
+  header.className = "token-usage-details-header";
+  const heading = document.createElement("div");
+  heading.className = "token-usage-details-heading";
+  const headingTitle = document.createElement("strong");
+  headingTitle.id = "token-usage-details-title";
+  headingTitle.textContent = "Token 用量详细数据";
+  const headingScope = document.createElement("span");
+  headingScope.textContent = title;
+  heading.append(headingTitle, headingScope);
+  const close = document.createElement("button");
+  close.className = "ghost-button token-usage-details-close";
+  close.type = "button";
+  close.textContent = "关闭";
+  close.setAttribute("aria-label", "关闭 Token 用量详细数据");
+  header.append(heading, close);
+
+  const body = document.createElement("div");
+  body.className = "token-usage-details-body";
+  const description = document.createElement("p");
+  description.id = "token-usage-details-description";
+  description.className = "token-usage-details-note";
+  description.textContent = "Raw Input 为不含缓存的输入 Token；Cache Write 与 Cache Read 也是输入组成部分，并已包含在总计中。汇总行包含当前范围内全部模型。";
+  body.append(description);
+
+  const tableScroll = document.createElement("div");
+  tableScroll.className = "token-usage-details-table-scroll";
+  const table = document.createElement("table");
+  table.className = "token-usage-details-table";
+  const caption = document.createElement("caption");
+  caption.textContent = `${title}的模型 Token 用量`;
+  table.append(caption);
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  ["模型", "Raw Input", "Cache Write", "Cache Read", "Output", "总计", "调用", "估算调用"].forEach((label) => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    headRow.append(cell);
+  });
+  head.append(headRow);
+  table.append(head);
+  const bodyRows = document.createElement("tbody");
+  const models = Array.isArray(usage?.models) ? usage.models : [];
+  models.forEach((model) => appendTokenUsageDetailRow(bodyRows, model.modelId || "未指定模型", model));
+  if (!models.length) {
+    const emptyRow = document.createElement("tr");
+    const emptyCell = document.createElement("td");
+    emptyCell.colSpan = 8;
+    emptyCell.textContent = "还没有模型用量记录。";
+    emptyRow.append(emptyCell);
+    bodyRows.append(emptyRow);
+  }
+  table.append(bodyRows);
+  const foot = document.createElement("tfoot");
+  appendTokenUsageDetailRow(foot, "汇总", usage?.summary ?? {}, true);
+  table.append(foot);
+  tableScroll.append(table);
+  body.append(tableScroll);
+  element.append(header, body);
+
+  close.addEventListener("click", () => dismissTokenUsageDetails());
+  element.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    dismissTokenUsageDetails();
+  });
+  region.append(element);
+  region.classList.add("token-usage-details-region");
+  tokenUsageDetailsTrigger = trigger;
+  trigger.setAttribute("aria-expanded", "true");
+  raiseToastRegion();
+  close.focus({ preventScroll: true });
+}
+
+function bindTokenUsageDetails(host, usage, title) {
+  const button = host.querySelector("[data-token-usage-details]");
+  if (!button) return;
+  button.addEventListener("click", () => showTokenUsageDetails(usage, title, button));
+}
+
 function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false } = {}) {
   const summary = usage?.summary ?? {};
   const totalTokens = Number(summary.totalTokens) || 0;
@@ -11721,7 +11853,7 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
     ? "供应商尚未返回可计算的缓存明细"
     : `${cachedInputTokens.toLocaleString("zh-CN")} / ${cacheEligibleInputTokens.toLocaleString("zh-CN")} 个可统计输入 Token 命中缓存`;
   const estimatedCost = formatEstimatedCost(summary.estimatedCost);
-  const pricingDescription = "根据 LiteLLM 模型 ID 价格表估算，价格单位为美元；未匹配模型不计入。";
+  const pricingDescription = "根据多来源模型价格表估算，价格单位为美元；未匹配模型不计入。";
   const pricingBadge = summary.pricingAvailable === true && summary.estimatedCost !== null && summary.estimatedCost !== undefined
     ? `<span class="usage-cost-bubble" title="${esc(pricingDescription)}">估价 ${esc(estimatedCost)}</span>`
     : "";
@@ -11739,7 +11871,7 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
     <td>${Number(work.requestCount || 0).toLocaleString("zh-CN")}</td>
   </tr>`).join("");
   return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
-    <div class="config-section-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div></div>
+    <div class="config-section-header usage-overview-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div><button class="ghost-button usage-details-button" type="button" data-token-usage-details aria-haspopup="dialog" aria-expanded="false" aria-controls="token-usage-details-toast">详细数据</button></div>
     <div class="usage-stat-grid">
       <article class="usage-stat is-primary"><div class="usage-stat-label"><span>总消耗</span>${pricingBadge}</div><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
       <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small title="${esc(inputDescription)}">${esc(inputDescription)}</small></article>
@@ -11765,6 +11897,7 @@ async function renderPlatformTokenUsage() {
     description: "汇总所有作品迄今产生的输入与输出 Token；缓存命中率仅基于供应商返回了缓存明细的调用。",
     showWorks: true
   });
+  bindTokenUsageDetails(host, usage, "项目累计用量");
   bindUsageCalendarInteractions(host);
   scrollUsageCalendarsToLatest(host);
 }
@@ -11809,6 +11942,7 @@ async function renderBookAiSettings() {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
   })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度必须设置为大于 0 的整数；低于 10,000 时仅提示风险；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="1" max="2000000000" step="1" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>该阈值按对话历史的独立预算计算，用于显示可选择压缩或忽略的提醒；整次请求达到模型上下文窗口 95% 时仍会强制压缩较早消息，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  bindTokenUsageDetails(host, usage, "本书 Token 用量");
   const dailyQuotaSection = host.querySelector("#daily-token-quota-enabled")?.closest(".config-section");
   dailyQuotaSection?.insertAdjacentHTML("afterend", `<section class="config-section"><div class="config-section-header"><div><h2>每月 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然月（当月 1 日至月末）可使用的输入与输出 Token 总量。额度必须设置为大于 0 的整数；低于 1,000,000 时仅提示风险；达到额度后，新的 AI 请求会等到下月 1 日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="monthly-token-quota-enabled" type="checkbox" ${monthlyTokenQuota === null ? "" : "checked"}>启用每月额度</label><label class="monthly-token-quota-field">每月额度<input id="monthly-token-quota" type="number" min="1" max="2000000000" step="1" value="${esc(String(monthlyTokenQuota ?? 10000))}" aria-label="本书每月 Token 额度" ${monthlyTokenQuota === null ? "disabled" : ""}></label><button id="save-monthly-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="monthly-token-quota-status" class="usage-measurement-note" role="status">${esc(monthlyQuotaStatusText)}</p></section>`);
   const configureTokenQuotaInput = (input, warningId, threshold) => {
@@ -15824,9 +15958,23 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
-  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
+  const streamConnectionStartedAt = Date.now();
+  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流…… <span class="ai-stream-connection-seconds" data-testid="ai-stream-connection-seconds"></span> 秒</div>';
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  const connectionSeconds = message.querySelector(".ai-stream-connection-seconds");
+  const renderStreamConnectionElapsed = () => {
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - streamConnectionStartedAt) / 1000));
+    connectionSeconds.textContent = String(elapsedSeconds);
+  };
+  renderStreamConnectionElapsed();
+  let streamConnectionTimer = window.setInterval(renderStreamConnectionElapsed, 1000);
+  const stopStreamConnectionTimer = () => {
+    if (streamConnectionTimer === null) return;
+    window.clearInterval(streamConnectionTimer);
+    streamConnectionTimer = null;
+  };
+  const streamConnectionEstablishedEvents = new Set(["delta", "process_step", "tool_call", "context_compacted", "complete", "request_status", "error"]);
   const streamSpeedController = createStreamTypewriterSpeedController();
   let messageMounted = false;
   const mountAssistantMessage = () => {
@@ -15903,6 +16051,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     let streamError = null;
     const consume = async (eventName, payload) => {
       assertAiRequestCurrent(requestHolder.snapshot);
+      if (streamConnectionEstablishedEvents.has(eventName)) stopStreamConnectionTimer();
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
         if (!tab.promptSent) setAiChatTabContextUsage(tab, payload.usage);
@@ -16014,7 +16163,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         assertAiRequestCurrent(requestHolder.snapshot);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
-        message.querySelector(".message-heading > span").textContent = "助手";
+        message.querySelector(".message-heading > span").textContent = aiAssistantLabel("", tab.roleplayCharacter);
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
         const processDurationMs = Number.isFinite(payload.processDurationMs) && payload.processDurationMs >= 0
@@ -16082,6 +16231,8 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     if (streamedText) attachAssistantCopyAction(message, streamedText);
     scrollAiFeedToBottom(feed);
     throw streamFailure;
+  } finally {
+    stopStreamConnectionTimer();
   }
 }
 

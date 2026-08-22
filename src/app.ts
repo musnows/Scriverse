@@ -495,7 +495,7 @@ const modelSchema = z.object({
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
   thinkingEnabled: z.boolean().optional(),
-  thinkingEffort: z.enum(["default", "low", "medium", "high", "xhigh", "max"]).optional(),
+  thinkingEffort: z.enum(["default", "auto", "low", "medium", "high", "xhigh", "max"]).optional(),
   multimodalEnabled: z.boolean().optional(),
   imageToolDefault: z.boolean().optional(),
   enabled: z.boolean().optional(),
@@ -2738,12 +2738,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     parse(z.object({}).strict(), request.body ?? {});
     const refreshed = await liteLlmPriceCache.refresh();
     if (!refreshed) {
-      throw new AppError(502, "LITELLM_PRICE_REFRESH_FAILED", "LiteLLM 模型价格刷新失败，历史缓存未改变");
+      throw new AppError(502, "MODEL_PRICE_REFRESH_FAILED", "模型价格刷新失败，历史缓存未改变");
     }
     data(response, {
       refreshed: true,
       pricingAvailable: liteLlmPriceCache.hasData(),
-      modelCount: liteLlmPriceCache.getPriceTable().size
+      modelCount: liteLlmPriceCache.getPriceTable().size,
+      sources: liteLlmPriceCache.getSourceStatuses()
     });
   });
   app.get("/api/platform/ai-conversations", (request, response) => {

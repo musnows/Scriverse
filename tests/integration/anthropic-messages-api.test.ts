@@ -173,9 +173,9 @@ describe("Anthropic Messages 供应商", () => {
     });
   });
 
-  it("模型连通性测试通过 Anthropic output_config 携带思考强度", async () => {
-    const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "max" }).expect(200);
-    expect(updated.body.data.thinkingEffort).toBe("max");
+  it("模型连通性测试通过 Anthropic output_config 透传自动思考强度", async () => {
+    const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "auto" }).expect(200);
+    expect(updated.body.data.thinkingEffort).toBe("auto");
 
     const tested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
     expect(tested.body.data.ok).toBe(true);
@@ -185,7 +185,7 @@ describe("Anthropic Messages 供应商", () => {
     expect(body).toMatchObject({
       max_tokens: 10,
       thinking: { type: "enabled" },
-      output_config: { effort: "max" }
+      output_config: { effort: "auto" }
     });
   });
 

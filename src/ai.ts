@@ -134,7 +134,7 @@ type ModelInput = {
   outputNote?: string;
   preset?: Record<string, unknown>;
   thinkingEnabled?: boolean;
-  thinkingEffort?: "default" | "low" | "medium" | "high" | "xhigh" | "max";
+  thinkingEffort?: "default" | "auto" | "low" | "medium" | "high" | "xhigh" | "max";
   multimodalEnabled?: boolean;
   imageToolDefault?: boolean;
   enabled?: boolean;
@@ -622,7 +622,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   const protocol = providerProtocol(provider);
   const thinkingType = providerThinkingType(provider);
   if (protocol === "openai-responses" && !thinkingEnabled) return { reasoning_effort: "none" };
-  const effortParameters = thinkingEnabled && ["low", "medium", "high", "xhigh", "max"].includes(thinkingEffort)
+  const effortParameters = thinkingEnabled && ["auto", "low", "medium", "high", "xhigh", "max"].includes(thinkingEffort)
     ? protocol === "anthropic-messages"
       ? { output_config: { effort: thinkingEffort } }
       : { reasoning_effort: thinkingEffort }
@@ -3047,25 +3047,33 @@ export class AiManager {
       timezoneOffset,
       ...scopeParams
     ).map((row) => this.mapTokenUsageRow(row, { date: stringValue(row, "usage_date") }));
-    const modelUsages: ModelTokenUsage[] = this.store.db.all(
+    const modelRows = this.store.db.all(
       `SELECT
-         COALESCE(model.model_id, call.model_id) AS usage_model_id,
+         COALESCE(model.model_id, call.model_id, '未指定模型') AS usage_model_id,
          COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
          COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
          COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
-         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens
+         COALESCE(SUM(call.cache_write_input_tokens), 0) AS cache_write_input_tokens,
+         COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
+         COUNT(*) AS request_count,
+         COALESCE(SUM(CASE WHEN call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count
        FROM ai_calls call
        JOIN works work ON work.id = call.work_id
        LEFT JOIN models model ON model.id = call.model_id
        WHERE COALESCE(work.is_internal, 0) = 0 AND ${usageFilter}${scopeSql}
-       GROUP BY COALESCE(model.model_id, call.model_id)`,
+       GROUP BY COALESCE(model.model_id, call.model_id, '未指定模型')
+       ORDER BY (COALESCE(SUM(call.input_tokens), 0) + COALESCE(SUM(call.output_tokens), 0)) DESC, usage_model_id`,
       ...scopeParams
-    ).map((row) => ({
+    );
+    const modelUsages: ModelTokenUsage[] = modelRows.map((row) => ({
       modelId: stringValue(row, "usage_model_id"),
       inputTokens: numberValue(row, "input_tokens"),
       outputTokens: numberValue(row, "output_tokens"),
       cachedInputTokens: numberValue(row, "cached_input_tokens"),
       cacheWriteInputTokens: numberValue(row, "cache_write_input_tokens")
+    }));
+    const models = modelRows.map((row) => this.mapTokenUsageRow(row, {
+      modelId: stringValue(row, "usage_model_id")
     }));
     const pricing = estimateLiteLlmUsageCost(modelUsages, this.liteLlmPriceCache?.getPriceTable() ?? new Map());
     const works = includeWorks
@@ -3100,6 +3108,7 @@ export class AiManager {
         lastUsedAt: summary.last_used_at === null || summary.last_used_at === undefined ? null : stringValue(summary, "last_used_at"),
         ...pricing
       }),
+      models,
       daily,
       ...(works ? { works } : {}),
       timezoneOffset
