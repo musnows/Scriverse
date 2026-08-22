@@ -104,6 +104,30 @@ describe("AI Token 用量统计 API", () => {
     expect(platform.body.data.daily).toEqual([
       expect.objectContaining({ date: "2026-07-27", totalTokens: 410, requestCount: 3 })
     ]);
+    expect(platform.body.data.models).toEqual([
+      expect.objectContaining({
+        modelId: "not-in-price-table",
+        totalTokens: 250,
+        inputTokens: 200,
+        directInputTokens: 100,
+        cacheReadInputTokens: 100,
+        cacheWriteInputTokens: 0,
+        outputTokens: 50,
+        requestCount: 1,
+        estimatedRequestCount: 0
+      }),
+      expect.objectContaining({
+        modelId: "deepseek-chat",
+        totalTokens: 160,
+        inputTokens: 130,
+        directInputTokens: 90,
+        cacheReadInputTokens: 40,
+        cacheWriteInputTokens: 0,
+        outputTokens: 30,
+        requestCount: 2,
+        estimatedRequestCount: 1
+      })
+    ]);
     expect(platform.body.data.works).toEqual([
       expect.objectContaining({ workId: secondWork.id, workTitle: "第二部作品", totalTokens: 250, cacheHitRate: 50 }),
       expect.objectContaining({ workId: firstWork.id, workTitle: "第一部作品", totalTokens: 160, cacheHitRate: 40 })
@@ -126,6 +150,19 @@ describe("AI Token 用量统计 API", () => {
       estimatedCost: 0.00003892,
       unpricedModelCount: 0
     });
+    expect(work.body.data.models).toEqual([
+      expect.objectContaining({
+        modelId: "deepseek-chat",
+        totalTokens: 160,
+        inputTokens: 130,
+        directInputTokens: 90,
+        cacheReadInputTokens: 40,
+        cacheWriteInputTokens: 0,
+        outputTokens: 30,
+        requestCount: 2,
+        estimatedRequestCount: 1
+      })
+    ]);
     expect(work.body.data).not.toHaveProperty("works");
     expect(work.body.data.quota).toMatchObject({
       dailyTokenQuota: 10_000,
@@ -221,7 +258,7 @@ describe("平台模型价格主动刷新权限", () => {
         .send({})
         .expect(403)
         .expect((response) => expect(response.body.error.code).toBe("ADMIN_REQUIRED"));
-      expect(fetchPrice).toHaveBeenCalledTimes(1);
+      expect(fetchPrice).toHaveBeenCalledTimes(4);
 
       const refreshed = await admin.agent
         .post("/api/platform/ai/usage/pricing/refresh")
@@ -229,15 +266,16 @@ describe("平台模型价格主动刷新权限", () => {
         .send({})
         .expect(200);
       expect(refreshed.body.data).toMatchObject({ refreshed: true, pricingAvailable: true, modelCount: 1 });
-      expect(fetchPrice).toHaveBeenCalledTimes(2);
+      expect(refreshed.body.data.sources).toHaveLength(4);
+      expect(fetchPrice).toHaveBeenCalledTimes(8);
 
-      fetchPrice.mockResolvedValueOnce(new Response("LiteLLM unavailable", { status: 503 }));
+      fetchPrice.mockImplementation(async () => new Response("Model price source unavailable", { status: 503 }));
       const failed = await admin.agent
         .post("/api/platform/ai/usage/pricing/refresh")
         .set("X-CSRF-Token", admin.csrfToken)
         .send({})
         .expect(502);
-      expect(failed.body.error.code).toBe("LITELLM_PRICE_REFRESH_FAILED");
+      expect(failed.body.error.code).toBe("MODEL_PRICE_REFRESH_FAILED");
       expect(priceCache.hasData()).toBe(true);
       expect(priceCache.getPriceTable().get("deepseek-chat")?.output_cost_per_token).toBe(4.2e-7);
     } finally {
