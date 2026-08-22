@@ -3578,8 +3578,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
       prefix: null,
       createdAt: null,
       rotatedAt: null,
-      lastUsedAt: null
+      lastUsedAt: null,
+      copyable: false
     });
+    await admin.agent.post("/api/auth/api-key/reveal")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({})
+      .expect(404);
 
     const firstReset = await admin.agent.post("/api/auth/api-key/reset")
       .set("X-CSRF-Token", admin.csrfToken)
@@ -3587,10 +3592,18 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     const firstKey = String(firstReset.body.data.apiKey);
     expect(firstKey).toMatch(/^scrv_[A-Za-z0-9_-]{43}$/u);
-    expect(firstReset.body.data).toMatchObject({ configured: true, prefix: firstKey.slice(0, 13), lastUsedAt: null });
+    expect(firstReset.body.data).toMatchObject({ configured: true, prefix: firstKey.slice(0, 13), lastUsedAt: null, copyable: true });
     const storedKey = runtime.database.get("SELECT * FROM user_api_keys WHERE user_id = ?", admin.user.userId);
     expect(storedKey?.key_hash).not.toBe(firstKey);
+    expect(storedKey?.key_encrypted).toBeTruthy();
     expect(JSON.stringify(storedKey)).not.toContain(firstKey);
+    const copied = await admin.agent.post("/api/auth/api-key/reveal")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({})
+      .expect(200);
+    expect(copied.body.data).toEqual({ apiKey: firstKey });
+    await admin.agent.post("/api/auth/api-key/reveal").send({}).expect(403);
+    await request(runtime.app).post("/api/auth/api-key/reveal").send({}).expect(401);
 
     const cliSession = await request(runtime.app).get("/api/cli/session").set("Authorization", `Bearer ${firstKey}`).expect(200);
     expect(cliSession.body.data).toMatchObject({
@@ -3672,6 +3685,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await request(runtime.app).get("/api/platform/ai/providers").set("Authorization", `Bearer ${firstKey}`).expect(403);
     await request(runtime.app).get(`/api/works/${adminWorkId}/members`).set("Authorization", `Bearer ${firstKey}`).expect(403);
     await request(runtime.app).post("/api/auth/api-key/reset").set("Authorization", `Bearer ${firstKey}`).send({}).expect(403);
+    await request(runtime.app).post("/api/auth/api-key/reveal").set("Authorization", `Bearer ${firstKey}`).send({}).expect(403);
     await request(runtime.app).delete(`/api/chapters/${chapter.body.data.id}`).set("Authorization", `Bearer ${firstKey}`).expect(403);
     await request(runtime.app).delete(`/api/drafts/${draft.body.data.id}`).set("Authorization", `Bearer ${firstKey}`).expect(403);
 
@@ -3699,6 +3713,37 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     await request(runtime.app).get("/api/cli/session").set("Authorization", `Bearer ${writerKey}`).expect(401);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("升级前仅保存摘要的 API Key 无法复制，重置后可复制", async () => {
+    const admin = await register(runtime, "api_copy_legacy");
+    const created = await admin.agent.post("/api/auth/api-key/reset")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({})
+      .expect(200);
+    const apiKey = String(created.body.data.apiKey);
+    runtime.database.run(
+      "UPDATE user_api_keys SET key_encrypted = NULL, key_iv = NULL, key_tag = NULL WHERE user_id = ?",
+      admin.user.userId
+    );
+    const status = await admin.agent.get("/api/auth/api-key").expect(200);
+    expect(status.body.data).toMatchObject({ configured: true, copyable: false, prefix: apiKey.slice(0, 13) });
+    const blocked = await admin.agent.post("/api/auth/api-key/reveal")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({})
+      .expect(409);
+    expect(blocked.body.error.code).toBe("API_KEY_NOT_RECOVERABLE");
+    const rotated = await admin.agent.post("/api/auth/api-key/reset")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({})
+      .expect(200);
+    expect(rotated.body.data.copyable).toBe(true);
+    const copied = await admin.agent.post("/api/auth/api-key/reveal")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({})
+      .expect(200);
+    expect(copied.body.data.apiKey).toBe(rotated.body.data.apiKey);
+    expect(copied.body.data.apiKey).not.toBe(apiKey);
   });
 
   it("仅允许具备删除权限的成员查看和操作对应回收站", async () => {

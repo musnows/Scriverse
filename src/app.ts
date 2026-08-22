@@ -1282,7 +1282,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     CHARACTER_AVATAR_IMAGE_MAX_BYTES
   );
   mkdirSync(characterAvatarStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
-  const auth = new UserAuthService(database);
+  const credentialVault = new CredentialVault(options.masterSecret);
+  const auth = new UserAuthService(database, credentialVault);
   const collaborationPresence = new CollaborationPresence(
     45_000,
     Date.now,
@@ -1381,7 +1382,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return lockedModelId ?? requestedModelId;
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
-  const credentialVault = new CredentialVault(options.masterSecret);
   const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
     ...options.backupOptions,
     characterAvatarStorage,
@@ -1607,6 +1607,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/auth/api-key", (request, response) => {
     if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
     data(response, auth.getApiKeyStatus(request.authUser.userId));
+  });
+  app.post("/api/auth/api-key/reveal", (request, response) => {
+    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
+    parse(z.object({}).strict(), request.body ?? {});
+    const userId = request.authUser.userId;
+    const revealed = database.transaction(() => {
+      const secret = auth.revealApiKey(userId);
+      store.audit(null, "user.api-key-copied", "user", userId, { prefix: secret.prefix });
+      return { apiKey: secret.apiKey };
+    });
+    data(response, revealed);
   });
   app.post("/api/auth/api-key/reset", (request, response) => {
     if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");

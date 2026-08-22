@@ -1015,6 +1015,63 @@ describe("数据库版本化迁移", () => {
     migrated.close();
   });
 
+  it("迁移 112 为已有 API Key 增加可复制密文列并保留摘要", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-api-key-copy-"));
+    roots.push(root);
+    const filename = join(root, "api-key-copy.db");
+    const timestamp = "2026-08-22T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO users (id, username, normalized_username, display_name, password_hash, password_salt, role, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'user', 'active', ?, ?)`,
+      "api-key-copy-user",
+      "api_key_copy_user",
+      "api_key_copy_user",
+      "API Key 复制迁移用户",
+      "hash",
+      "salt",
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO user_api_keys (user_id, key_hash, key_prefix, created_at, rotated_at, last_used_at)
+       VALUES (?, 'legacy-api-key-hash', 'scrv_legacyxx', ?, ?, NULL)`,
+      "api-key-copy-user",
+      timestamp,
+      timestamp
+    );
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DELETE FROM schema_migrations WHERE version = 112;
+      ALTER TABLE user_api_keys DROP COLUMN key_encrypted;
+      ALTER TABLE user_api_keys DROP COLUMN key_iv;
+      ALTER TABLE user_api_keys DROP COLUMN key_tag;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.all("PRAGMA table_info(user_api_keys)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "key_hash",
+      "key_prefix",
+      "key_encrypted",
+      "key_iv",
+      "key_tag"
+    ]));
+    expect(migrated.get("SELECT key_hash, key_prefix, key_encrypted, key_iv, key_tag FROM user_api_keys WHERE user_id = 'api-key-copy-user'")).toEqual({
+      key_hash: "legacy-api-key-hash",
+      key_prefix: "scrv_legacyxx",
+      key_encrypted: null,
+      key_iv: null,
+      key_tag: null
+    });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 112")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 110 将日、月 Token 额度约束调整为正整数并保留数据", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-positive-quota-"));
     roots.push(root);

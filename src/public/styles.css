@@ -1240,11 +1240,8 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .password-settings-form { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
 .api-key-settings { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; margin-top: 16px; }
 .api-key-settings > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
-.api-key-result { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
-.api-key-result.hidden { display: none; }
-.api-key-result label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
-.api-key-result input { width: 100%; min-height: 38px; padding: 9px 10px; background: var(--surface); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; }
-.api-key-result button { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; }
+.api-key-actions { display: inline-flex; align-items: center; gap: 8px; }
+.api-key-actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; }
 .book-access-badge { display: inline-flex; width: fit-content; margin-top: 7px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--accent-dark); font-size: 9px; }
 .book-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: clamp(22px, 3vw, 38px); width: 100%; min-width: 0; max-width: 1400px; margin: 0 auto; }
 .book-card { position: relative; min-width: 0; border: 0; background: transparent; text-align: left; }
@@ -3802,7 +3799,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .ai-history-dialog-body { min-height: min(360px, 62vh); padding: 12px 14px 18px; }
   .account-settings-body { padding: 16px; }
   .account-settings-section { padding: 15px; }
-  .account-settings-form, .password-settings-form, .api-key-settings, .api-key-result { grid-template-columns: minmax(0, 1fr); }
+  .account-settings-form, .password-settings-form, .api-key-settings { grid-template-columns: minmax(0, 1fr); }
+  .api-key-actions { width: 100%; }
+  .api-key-actions button { flex: 1; }
   .avatar-settings { grid-template-columns: 64px minmax(0, 1fr); }
   .profile-avatar-preview { width: 64px; height: 64px; }
   .character-avatar-editor-preview { width: 64px; height: 64px; }
