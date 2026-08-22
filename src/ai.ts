@@ -134,7 +134,7 @@ type ModelInput = {
   outputNote?: string;
   preset?: Record<string, unknown>;
   thinkingEnabled?: boolean;
-  thinkingEffort?: "default" | "low" | "medium" | "high" | "xhigh" | "max";
+  thinkingEffort?: "default" | "auto" | "low" | "medium" | "high" | "xhigh" | "max";
   multimodalEnabled?: boolean;
   imageToolDefault?: boolean;
   enabled?: boolean;
@@ -622,7 +622,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   const protocol = providerProtocol(provider);
   const thinkingType = providerThinkingType(provider);
   if (protocol === "openai-responses" && !thinkingEnabled) return { reasoning_effort: "none" };
-  const effortParameters = thinkingEnabled && ["low", "medium", "high", "xhigh", "max"].includes(thinkingEffort)
+  const effortParameters = thinkingEnabled && ["auto", "low", "medium", "high", "xhigh", "max"].includes(thinkingEffort)
     ? protocol === "anthropic-messages"
       ? { output_config: { effort: thinkingEffort } }
       : { reasoning_effort: thinkingEffort }

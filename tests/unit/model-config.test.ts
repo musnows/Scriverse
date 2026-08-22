@@ -30,15 +30,18 @@ describe("AI 模型配置", () => {
   it("显示全部思考强度的原始英文值并保留扩展档位", () => {
     expect(MODEL_THINKING_EFFORT_OPTIONS).toEqual([
       ["default", "模型默认"],
+      ["auto", "自动（auto）"],
       ["low", "低（low）"],
       ["medium", "中（medium）"],
       ["high", "高（high）"],
       ["xhigh", "超高（xhigh）"],
       ["max", "最高（max）"]
     ]);
+    expect(modelFormValues({ thinkingEffort: "auto" }).thinkingEffort).toBe("auto");
     expect(modelFormValues({ thinkingEffort: "xhigh" }).thinkingEffort).toBe("xhigh");
     const values = modelFormValues({ thinkingEffort: "max" });
     expect(modelPayload({ ...values, displayName: "最高强度模型", modelId: "max-effort-model" }).thinkingEffort).toBe("max");
+    expect(modelPayload({ ...values, displayName: "自动强度模型", modelId: "auto-effort-model", thinkingEffort: "auto" }).thinkingEffort).toBe("auto");
   });
 
   it("保留模型已有的 thinking 关闭状态", () => {
@@ -53,6 +56,7 @@ describe("AI 模型配置", () => {
 
   it("仅为开启 thinking 的模型显示思考强度", () => {
     expect(modelThinkingEffortLabel({ thinkingEnabled: true, thinkingEffort: "high" })).toBe("high");
+    expect(modelThinkingEffortLabel({ thinkingEnabled: true, thinkingEffort: "auto" })).toBe("auto");
     expect(modelThinkingEffortLabel({ thinkingEnabled: true, thinkingEffort: "default" })).toBe("default");
     expect(modelThinkingEffortLabel({ thinkingEnabled: true })).toBe("default");
     expect(modelThinkingEffortLabel({ thinkingEnabled: false, thinkingEffort: "high" })).toBe("");
