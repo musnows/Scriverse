@@ -3065,17 +3065,23 @@ export class AiManager {
        ORDER BY (COALESCE(SUM(call.input_tokens), 0) + COALESCE(SUM(call.output_tokens), 0)) DESC, usage_model_id`,
       ...scopeParams
     );
-    const modelUsages: ModelTokenUsage[] = modelRows.map((row) => ({
-      modelId: stringValue(row, "usage_model_id"),
-      inputTokens: numberValue(row, "input_tokens"),
-      outputTokens: numberValue(row, "output_tokens"),
-      cachedInputTokens: numberValue(row, "cached_input_tokens"),
-      cacheWriteInputTokens: numberValue(row, "cache_write_input_tokens")
+    const modelUsageEntries = modelRows.map((row) => ({
+      row,
+      usage: {
+        modelId: stringValue(row, "usage_model_id"),
+        inputTokens: numberValue(row, "input_tokens"),
+        outputTokens: numberValue(row, "output_tokens"),
+        cachedInputTokens: numberValue(row, "cached_input_tokens"),
+        cacheWriteInputTokens: numberValue(row, "cache_write_input_tokens")
+      } satisfies ModelTokenUsage
     }));
-    const models = modelRows.map((row) => this.mapTokenUsageRow(row, {
-      modelId: stringValue(row, "usage_model_id")
+    const modelUsages = modelUsageEntries.map(({ usage }) => usage);
+    const priceTable = this.liteLlmPriceCache?.getPriceTable() ?? new Map();
+    const pricing = estimateLiteLlmUsageCost(modelUsages, priceTable);
+    const models = modelUsageEntries.map(({ row, usage }) => this.mapTokenUsageRow(row, {
+      modelId: usage.modelId,
+      estimatedCost: estimateLiteLlmUsageCost([usage], priceTable).estimatedCost
     }));
-    const pricing = estimateLiteLlmUsageCost(modelUsages, this.liteLlmPriceCache?.getPriceTable() ?? new Map());
     const works = includeWorks
       ? this.store.db.all(
         `SELECT

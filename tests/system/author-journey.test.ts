@@ -373,6 +373,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("pricingAvailable === true");
     expect(application.text).toContain("Cache Read");
     expect(application.text).toContain("Cache Write");
+    expect(application.text).toContain("估算价格");
     expect(application.text).toContain('data-token-usage-details');
     expect(application.text).toContain('function showTokenUsageDetails(usage, title, trigger)');
     expect(application.text).toContain('classList.add("token-usage-details-region")');
