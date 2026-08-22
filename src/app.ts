@@ -2076,6 +2076,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.createDraft(request.params.workId, parse(draftSchema, request.body)), 201);
   });
   app.get("/api/drafts/:draftId", (request, response) => data(response, store.getDraft(request.params.draftId)));
+  app.patch("/api/drafts/:draftId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    data(response, store.setDraftFavorite(request.params.draftId, input.isFavorite));
+  });
   app.patch("/api/drafts/:draftId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(draftSchema.partial().extend({
       changeNote: changeNoteSchema,
@@ -2100,6 +2104,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/works/:workId/settings/context", (request, response) => data(response, store.listSettings(request.params.workId, true)));
   app.get("/api/settings/:settingId", (request, response) => data(response, store.getSetting(request.params.settingId)));
+  app.patch("/api/settings/:settingId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    const setting = store.setSettingFavorite(request.params.settingId, input.isFavorite);
+    publishEntityChange(String(setting.workId), "setting", String(setting.id));
+    data(response, setting);
+  });
   app.patch("/api/settings/:settingId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(settingSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const setting = store.updateSetting(request.params.settingId, input, "manual", null, changeNote, expectedVersionNo);
@@ -2410,6 +2420,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/organizations/:organizationId", (request, response) => {
     data(response, redactOrganizationMembers(store.getOrganization(request.params.organizationId), requestPermissions(request)));
+  });
+  app.patch("/api/organizations/:organizationId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    const organization = store.setOrganizationFavorite(request.params.organizationId, input.isFavorite);
+    publishEntityChange(String(organization.workId), "organization", String(organization.id));
+    data(response, redactOrganizationMembers(organization, requestPermissions(request)));
   });
   app.patch("/api/organizations/:organizationId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(organizationSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);

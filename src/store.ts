@@ -5229,7 +5229,7 @@ export class Store {
       `SELECT draft.*, volume.title AS volume_title FROM drafts draft
        LEFT JOIN volumes volume ON volume.id = draft.volume_id
        WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
-       ORDER BY draft.updated_at DESC, draft.title`,
+       ORDER BY draft.is_favorite DESC, draft.updated_at DESC, draft.title`,
       workId,
       draftType ?? null,
       draftType ?? null
@@ -5248,7 +5248,7 @@ export class Store {
       `SELECT draft.*, volume.title AS volume_title FROM drafts draft
        LEFT JOIN volumes volume ON volume.id = draft.volume_id
        WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
-       ORDER BY draft.updated_at DESC, draft.title${page.sql}`,
+       ORDER BY draft.is_favorite DESC, draft.updated_at DESC, draft.title${page.sql}`,
       workId,
       draftType ?? null,
       draftType ?? null,
@@ -5307,6 +5307,21 @@ export class Store {
     return this.mapDraft(row, true);
   }
 
+  setDraftFavorite(draftId: string, isFavorite: boolean): Record<string, unknown> {
+    const draft = this.db.get("SELECT id, work_id, is_favorite FROM drafts WHERE id = ?", draftId);
+    if (!draft) throw notFound("想法");
+    const workId = requiredString(draft, "work_id");
+    const previousFavorite = booleanValue(draft, "is_favorite");
+    this.db.transaction(() => {
+      this.db.run("UPDATE drafts SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, draftId);
+      this.audit(workId, "draft.favorite-updated", "draft", draftId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getDraft(draftId);
+  }
+
   updateDraft(
     draftId: string,
     input: Partial<DraftInput>,
@@ -5363,6 +5378,7 @@ export class Store {
       volumeTitle: optionalString(row, "volume_title"),
       settingModule: optionalString(row, "setting_module"),
       title: requiredString(row, "title"),
+      isFavorite: booleanValue(row, "is_favorite"),
       ...(includeContent ? { content } : { contentPreview: content.replace(/\s+/gu, " ").trim().slice(0, 320) }),
       versionNo: this.currentEntityVersionNo("draft", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
@@ -5467,13 +5483,13 @@ export class Store {
 
   listSettings(workId: string, includeContent = true): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title", workId).map((row) => this.mapSetting(row, includeContent));
+    return this.db.all("SELECT * FROM settings WHERE work_id = ? ORDER BY is_favorite DESC, locked DESC, category, title", workId).map((row) => this.mapSetting(row, includeContent));
   }
 
   listSettingsPage(workId: string, pagination: Pagination, includeContent = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title${page.sql}`, workId, ...page.params);
+    const rows = this.db.all(`SELECT * FROM settings WHERE work_id = ? ORDER BY is_favorite DESC, locked DESC, category, title${page.sql}`, workId, ...page.params);
     return paginated(rows.map((row) => this.mapSetting(row, includeContent)), pagination);
   }
 
@@ -5481,6 +5497,21 @@ export class Store {
     const row = this.db.get("SELECT * FROM settings WHERE id = ?", settingId);
     if (!row) throw notFound("设定");
     return this.mapSetting(row);
+  }
+
+  setSettingFavorite(settingId: string, isFavorite: boolean): Record<string, unknown> {
+    const setting = this.db.get("SELECT id, work_id, is_favorite FROM settings WHERE id = ?", settingId);
+    if (!setting) throw notFound("设定");
+    const workId = requiredString(setting, "work_id");
+    const previousFavorite = booleanValue(setting, "is_favorite");
+    this.db.transaction(() => {
+      this.db.run("UPDATE settings SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, settingId);
+      this.audit(workId, "setting.favorite-updated", "setting", settingId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getSetting(settingId);
   }
 
   updateSetting(
@@ -5539,6 +5570,7 @@ export class Store {
       tags: json(requiredString(row, "tags_json"), []),
       status: requiredString(row, "status"),
       locked: booleanValue(row, "locked"),
+      isFavorite: booleanValue(row, "is_favorite"),
       evidence: json(requiredString(row, "evidence_json"), []),
       scope: json(requiredString(row, "scope_json"), {}),
       authorNote: requiredString(row, "author_note"),
@@ -5934,7 +5966,7 @@ export class Store {
 
   listOrganizations(workId: string, includeMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
-    const rows = this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId);
+    const rows = this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY is_favorite DESC, name", workId);
     const batch = this.organizationListBatch(rows);
     return rows.map((row) => this.mapOrganization(row, includeMarkdown, batch));
   }
@@ -5942,7 +5974,7 @@ export class Store {
   listOrganizationsPage(workId: string, pagination: Pagination, includeMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY name${page.sql}`, workId, ...page.params);
+    const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY is_favorite DESC, name${page.sql}`, workId, ...page.params);
     const batch = this.organizationListBatch(rows);
     return paginated(rows.map((row) => this.mapOrganization(row, includeMarkdown, batch)), pagination);
   }
@@ -5951,6 +5983,21 @@ export class Store {
     const row = this.db.get("SELECT * FROM organizations WHERE id = ?", organizationId);
     if (!row) throw notFound("组织");
     return this.mapOrganization(row);
+  }
+
+  setOrganizationFavorite(organizationId: string, isFavorite: boolean): Record<string, unknown> {
+    const organization = this.db.get("SELECT id, work_id, is_favorite FROM organizations WHERE id = ?", organizationId);
+    if (!organization) throw notFound("组织");
+    const workId = requiredString(organization, "work_id");
+    const previousFavorite = booleanValue(organization, "is_favorite");
+    this.db.transaction(() => {
+      this.db.run("UPDATE organizations SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, organizationId);
+      this.audit(workId, "organization.favorite-updated", "organization", organizationId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getOrganization(organizationId);
   }
 
   updateOrganization(
@@ -6125,6 +6172,7 @@ export class Store {
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       isDissolved: booleanValue(row, "is_dissolved"),
+      isFavorite: booleanValue(row, "is_favorite"),
       ...(includeMarkdown
         ? { settings, settingsMarkdown: settingsMarkdownFromList(settings), settingsSections }
         : { settings: [], settingsCount: settingsSections.length }),

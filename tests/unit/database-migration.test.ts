@@ -81,7 +81,13 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA index_list(characters)").some((index) => index.name === "idx_characters_favorite")).toBe(true);
     expect(first.get("SELECT is_favorite FROM characters WHERE id = 'character-a'")).toEqual({ is_favorite: 0 });
     expect(first.all("PRAGMA table_info(races)").map((column) => column.name)).toContain("is_extinct");
-    expect(first.all("PRAGMA table_info(organizations)").map((column) => column.name)).toContain("is_dissolved");
+    expect(first.all("PRAGMA table_info(races)").map((column) => column.name)).not.toContain("is_favorite");
+    expect(first.all("PRAGMA table_info(drafts)").map((column) => column.name)).toContain("is_favorite");
+    expect(first.all("PRAGMA table_info(settings)").map((column) => column.name)).toContain("is_favorite");
+    expect(first.all("PRAGMA table_info(organizations)").map((column) => column.name)).toEqual(expect.arrayContaining(["is_dissolved", "is_favorite"]));
+    expect(first.all("PRAGMA index_list(drafts)").some((index) => index.name === "idx_drafts_favorite")).toBe(true);
+    expect(first.all("PRAGMA index_list(settings)").some((index) => index.name === "idx_settings_favorite")).toBe(true);
+    expect(first.all("PRAGMA index_list(organizations)").some((index) => index.name === "idx_organizations_favorite")).toBe(true);
     expect(first.all("PRAGMA table_info(s3_backup_targets)").map((column) => column.name)).toEqual(expect.arrayContaining([
       "id",
       "endpoint",

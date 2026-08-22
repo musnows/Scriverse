@@ -1510,6 +1510,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 13px; }
 .record-card { position: relative; border: 1px solid var(--line); background: var(--surface-soft); padding: 18px; min-height: 130px; border-radius: 4px; }
 .record-card.has-card-edit h3 { padding-right: 34px; }
+.record-card.has-favorite-control h3 { padding-right: 70px; }
 .record-card-edit { position: absolute; top: 12px; right: 12px; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
 .record-card-edit:hover, .record-card-edit:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
 .record-card-edit svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
@@ -1519,6 +1520,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-favorite-button:disabled { cursor: not-allowed; opacity: .5; }
 .character-favorite-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
 .character-favorite-button.is-favorite svg { fill: currentColor; }
+.record-favorite-button { display: inline-grid; flex: 0 0 auto; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
+.record-favorite-button.is-card-control { position: absolute; top: 12px; right: 48px; }
+.record-favorite-button:hover, .record-favorite-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
+.record-favorite-button.is-favorite { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
+.record-favorite-button:disabled { cursor: not-allowed; opacity: .5; }
+.record-favorite-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.record-favorite-button.is-favorite svg { fill: currentColor; }
 .record-card h3 { font-size: 16px; margin: 5px 0 10px; font-weight: 600; }
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
 .record-card small { color: var(--accent); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
@@ -1557,6 +1565,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .record-card.has-card-edit .character-card-heading { padding-right: 70px; }
 .record-card.has-card-edit .character-card-heading h3 { padding-right: 0; }
 .module-row .character-favorite-button { position: static; }
+.module-row .record-favorite-button { position: static; }
 .character-lock-badge { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; min-height: 20px; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-size: 9px; font-variant-numeric: tabular-nums; line-height: 1; }
 .entity-lifecycle-badge { display: inline-flex; align-items: center; min-height: 20px; margin-left: 7px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 13%, var(--surface)); color: var(--accent-dark); font-size: 9px; font-weight: 650; line-height: 1; vertical-align: middle; white-space: nowrap; }
 .character-lock-badge svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
@@ -1601,6 +1610,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .card-actions { display: flex; gap: 6px; margin-top: 15px; }
 .card-actions button { border: 1px solid var(--line); background: transparent; border-radius: 3px; font-size: 10px; padding: 5px 8px; }
 .card-actions .record-card-edit { position: static; padding: 0; }
+.card-actions .record-favorite-button { position: static; padding: 0; }
 .danger-button { border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line)); border-radius: 4px; background: transparent; color: var(--accent-dark); padding: 8px 13px; font-size: 12px; }
 .danger-button:hover, .danger-button:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); outline: none; }
 .card-actions .danger-button { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); color: var(--accent-dark); }

@@ -731,6 +731,58 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(updated.body.data).toMatchObject({ id: character.body.data.id, isFavorite: true });
   });
 
+  it("资料收藏接口校验登录、CSRF 和对应模块写权限", async () => {
+    const owner = await register(runtime, "record_favorites_owner");
+    const viewer = await register(runtime, "record_favorites_viewer");
+    const editor = await register(runtime, "record_favorites_editor");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "资料收藏权限测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: editor.user.userId, role: "editor" })
+      .expect(201);
+    const draft = await owner.agent.post(`/api/works/${workId}/drafts`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ draftType: "prose", title: "权限想法", content: "" })
+      .expect(201);
+    const setting = await owner.agent.post(`/api/works/${workId}/settings`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "权限设定", category: "规则", content: "权限测试内容" })
+      .expect(201);
+    const organization = await owner.agent.post(`/api/works/${workId}/organizations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "权限组织" })
+      .expect(201);
+    const endpoints = [
+      `/api/drafts/${String(draft.body.data.id)}/favorite`,
+      `/api/settings/${String(setting.body.data.id)}/favorite`,
+      `/api/organizations/${String(organization.body.data.id)}/favorite`
+    ];
+
+    for (const endpoint of endpoints) {
+      await request(runtime.app).patch(endpoint).send({ isFavorite: true }).expect(401);
+      const missingCsrf = await owner.agent.patch(endpoint).send({ isFavorite: true }).expect(403);
+      expect(missingCsrf.body.error.code).toBe("CSRF_TOKEN_INVALID");
+      const viewerDenied = await viewer.agent.patch(endpoint)
+        .set("X-CSRF-Token", viewer.csrfToken)
+        .send({ isFavorite: true })
+        .expect(403);
+      expect(viewerDenied.body.error.code).toBe("WORK_EDIT_DENIED");
+      const updated = await editor.agent.patch(endpoint)
+        .set("X-CSRF-Token", editor.csrfToken)
+        .send({ isFavorite: true })
+        .expect(200);
+      expect(updated.body.data.isFavorite).toBe(true);
+    }
+  });
+
   it("按用户在数据库中记录新手引导完成状态", async () => {
     const firstUser = await register(runtime, "onboarding_first");
     const secondUser = await register(runtime, "onboarding_second");
