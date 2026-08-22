@@ -368,6 +368,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain("formatEstimatedCost");
     expect(application.text).toContain("估价");
+    expect(application.text).toContain("根据多来源模型价格表估算");
     expect(application.text).toContain("pricingAvailable === true");
     expect(application.text).toContain("Cache Read");
     expect(application.text).toContain("Cache Write");

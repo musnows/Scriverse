@@ -11721,7 +11721,7 @@ function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false
     ? "供应商尚未返回可计算的缓存明细"
     : `${cachedInputTokens.toLocaleString("zh-CN")} / ${cacheEligibleInputTokens.toLocaleString("zh-CN")} 个可统计输入 Token 命中缓存`;
   const estimatedCost = formatEstimatedCost(summary.estimatedCost);
-  const pricingDescription = "根据 LiteLLM 模型 ID 价格表估算，价格单位为美元；未匹配模型不计入。";
+  const pricingDescription = "根据多来源模型价格表估算，价格单位为美元；未匹配模型不计入。";
   const pricingBadge = summary.pricingAvailable === true && summary.estimatedCost !== null && summary.estimatedCost !== undefined
     ? `<span class="usage-cost-bubble" title="${esc(pricingDescription)}">估价 ${esc(estimatedCost)}</span>`
     : "";

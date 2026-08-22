@@ -221,7 +221,7 @@ describe("平台模型价格主动刷新权限", () => {
         .send({})
         .expect(403)
         .expect((response) => expect(response.body.error.code).toBe("ADMIN_REQUIRED"));
-      expect(fetchPrice).toHaveBeenCalledTimes(1);
+      expect(fetchPrice).toHaveBeenCalledTimes(4);
 
       const refreshed = await admin.agent
         .post("/api/platform/ai/usage/pricing/refresh")
@@ -229,15 +229,16 @@ describe("平台模型价格主动刷新权限", () => {
         .send({})
         .expect(200);
       expect(refreshed.body.data).toMatchObject({ refreshed: true, pricingAvailable: true, modelCount: 1 });
-      expect(fetchPrice).toHaveBeenCalledTimes(2);
+      expect(refreshed.body.data.sources).toHaveLength(4);
+      expect(fetchPrice).toHaveBeenCalledTimes(8);
 
-      fetchPrice.mockResolvedValueOnce(new Response("LiteLLM unavailable", { status: 503 }));
+      fetchPrice.mockImplementation(async () => new Response("Model price source unavailable", { status: 503 }));
       const failed = await admin.agent
         .post("/api/platform/ai/usage/pricing/refresh")
         .set("X-CSRF-Token", admin.csrfToken)
         .send({})
         .expect(502);
-      expect(failed.body.error.code).toBe("LITELLM_PRICE_REFRESH_FAILED");
+      expect(failed.body.error.code).toBe("MODEL_PRICE_REFRESH_FAILED");
       expect(priceCache.hasData()).toBe(true);
       expect(priceCache.getPriceTable().get("deepseek-chat")?.output_cost_per_token).toBe(4.2e-7);
     } finally {
