@@ -15824,9 +15824,23 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
-  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
+  const streamConnectionStartedAt = Date.now();
+  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流…… <span class="ai-stream-connection-seconds" data-testid="ai-stream-connection-seconds"></span> 秒</div>';
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  const connectionSeconds = message.querySelector(".ai-stream-connection-seconds");
+  const renderStreamConnectionElapsed = () => {
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - streamConnectionStartedAt) / 1000));
+    connectionSeconds.textContent = String(elapsedSeconds);
+  };
+  renderStreamConnectionElapsed();
+  let streamConnectionTimer = window.setInterval(renderStreamConnectionElapsed, 1000);
+  const stopStreamConnectionTimer = () => {
+    if (streamConnectionTimer === null) return;
+    window.clearInterval(streamConnectionTimer);
+    streamConnectionTimer = null;
+  };
+  const streamConnectionEstablishedEvents = new Set(["delta", "process_step", "tool_call", "context_compacted", "complete", "request_status", "error"]);
   const streamSpeedController = createStreamTypewriterSpeedController();
   let messageMounted = false;
   const mountAssistantMessage = () => {
@@ -15903,6 +15917,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     let streamError = null;
     const consume = async (eventName, payload) => {
       assertAiRequestCurrent(requestHolder.snapshot);
+      if (streamConnectionEstablishedEvents.has(eventName)) stopStreamConnectionTimer();
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
         if (!tab.promptSent) setAiChatTabContextUsage(tab, payload.usage);
@@ -16082,6 +16097,8 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     if (streamedText) attachAssistantCopyAction(message, streamedText);
     scrollAiFeedToBottom(feed);
     throw streamFailure;
+  } finally {
+    stopStreamConnectionTimer();
   }
 }
 
