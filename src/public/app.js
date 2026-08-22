@@ -16,7 +16,7 @@ import {
   visibleForeshadowReminders
 } from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260821-ai-model-thinking-label-v1&feature=ai-provider-responses-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
@@ -15958,9 +15958,23 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
-  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
+  const streamConnectionStartedAt = Date.now();
+  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流…… <span class="ai-stream-connection-seconds" data-testid="ai-stream-connection-seconds"></span> 秒</div>';
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  const connectionSeconds = message.querySelector(".ai-stream-connection-seconds");
+  const renderStreamConnectionElapsed = () => {
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - streamConnectionStartedAt) / 1000));
+    connectionSeconds.textContent = String(elapsedSeconds);
+  };
+  renderStreamConnectionElapsed();
+  let streamConnectionTimer = window.setInterval(renderStreamConnectionElapsed, 1000);
+  const stopStreamConnectionTimer = () => {
+    if (streamConnectionTimer === null) return;
+    window.clearInterval(streamConnectionTimer);
+    streamConnectionTimer = null;
+  };
+  const streamConnectionEstablishedEvents = new Set(["delta", "process_step", "tool_call", "context_compacted", "complete", "request_status", "error"]);
   const streamSpeedController = createStreamTypewriterSpeedController();
   let messageMounted = false;
   const mountAssistantMessage = () => {
@@ -16037,6 +16051,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     let streamError = null;
     const consume = async (eventName, payload) => {
       assertAiRequestCurrent(requestHolder.snapshot);
+      if (streamConnectionEstablishedEvents.has(eventName)) stopStreamConnectionTimer();
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
         if (!tab.promptSent) setAiChatTabContextUsage(tab, payload.usage);
@@ -16148,7 +16163,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         assertAiRequestCurrent(requestHolder.snapshot);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
-        message.querySelector(".message-heading > span").textContent = "助手";
+        message.querySelector(".message-heading > span").textContent = aiAssistantLabel("", tab.roleplayCharacter);
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
         const processDurationMs = Number.isFinite(payload.processDurationMs) && payload.processDurationMs >= 0
@@ -16216,6 +16231,8 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     if (streamedText) attachAssistantCopyAction(message, streamedText);
     scrollAiFeedToBottom(feed);
     throw streamFailure;
+  } finally {
+    stopStreamConnectionTimer();
   }
 }
 

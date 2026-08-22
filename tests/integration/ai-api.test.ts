@@ -12,7 +12,7 @@ describe("AI 供应商、模型与建议 API", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
   let expectedMaxTokens: number;
   let expectedThinkingType: "enabled" | "adaptive" | "disabled";
-  let expectedThinkingEffort: "low" | "medium" | "high" | "xhigh" | "max" | undefined;
+  let expectedThinkingEffort: "auto" | "low" | "medium" | "high" | "xhigh" | "max" | undefined;
 
   beforeEach(async () => {
     expectedMaxTokens = 32_000;
@@ -922,9 +922,14 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(maxEffortUpdated.body.data.thinkingEffort).toBe("max");
     const modelTested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
     expect(modelTested.body.data.ok).toBe(true);
+    expectedThinkingEffort = "auto";
+    const autoEffortUpdated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "auto" }).expect(200);
+    expect(autoEffortUpdated.body.data.thinkingEffort).toBe("auto");
+    const autoModelTested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
+    expect(autoModelTested.body.data.ok).toBe(true);
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
-      instruction: "验证最高思考强度参数",
+      instruction: "验证自动思考强度参数",
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(201);
@@ -933,7 +938,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expectedThinkingType = "disabled";
     const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEnabled: false }).expect(200);
     expect(updated.body.data.thinkingEnabled).toBe(false);
-    expect(updated.body.data.thinkingEffort).toBe("max");
+    expect(updated.body.data.thinkingEffort).toBe("auto");
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
       instruction: "验证关闭思考参数",

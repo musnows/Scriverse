@@ -1009,6 +1009,7 @@ describe("作者完整创作流程", () => {
     expect(modelConfig.text).toContain("contextWindow: model?.contextWindow ?? 128000");
     expect(modelConfig.text).toContain("thinkingEnabled: model?.thinkingEnabled ?? true");
     expect(modelConfig.text).toContain('thinkingEffort: modelThinkingEfforts.has(model?.thinkingEffort) ? model.thinkingEffort : "default"');
+    expect(modelConfig.text).toContain('["auto", "自动（auto）"]');
     expect(modelConfig.text).toContain('["low", "低（low）"]');
     expect(modelConfig.text).toContain('["medium", "中（medium）"]');
     expect(modelConfig.text).toContain('["high", "高（high）"]');
