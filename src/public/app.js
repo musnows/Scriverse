@@ -3409,16 +3409,22 @@ function favoriteCharactersFirst(characters) {
   ];
 }
 
+function roleplayCharacterOptionLabel(character) {
+  const favoriteLabel = character?.isFavorite === true ? "[已收藏] " : "";
+  const deathLabel = character?.isDead ? "（已死亡）" : "";
+  return `${favoriteLabel}${String(character?.name ?? "")}${deathLabel}`;
+}
+
 function renderAiRoleplayCharacterSelect() {
   const select = $("#ai-roleplay-character");
   const selectedId = String(state.aiRoleplayCharacter?.id ?? "");
   const availableCharacters = favoriteCharactersFirst(state.characters.filter((character) => !character.mergedIntoCharacterId));
   const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
+    name: roleplayCharacterOptionLabel(character)
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
-    options.push({ id: selectedId, name: String(state.aiRoleplayCharacter.name) });
+    options.push({ id: selectedId, name: roleplayCharacterOptionLabel(state.aiRoleplayCharacter) });
   }
   select.replaceChildren(...options.map((option) => {
     const element = document.createElement("option");
@@ -3448,10 +3454,10 @@ function renderAiRoleplayUserCharacterSelect() {
   )));
   const options = [{ id: "", name: "选择我的角色（可选）" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
+    name: roleplayCharacterOptionLabel(character)
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
-    options.push({ id: selectedId, name: String(state.aiRoleplayUserCharacter.name) });
+    options.push({ id: selectedId, name: roleplayCharacterOptionLabel(state.aiRoleplayUserCharacter) });
   }
   select.replaceChildren(...options.map((option) => {
     const element = document.createElement("option");
@@ -8572,6 +8578,7 @@ function characterFavoriteButton(item) {
 }
 
 const recordFavoriteConfigs = Object.freeze({
+  character: { module: "characters", resource: "characters", label: "角色", nameField: "name" },
   draft: { module: "drafts", resource: "drafts", label: "想法", nameField: "title" },
   setting: { module: "settings", resource: "settings", label: "设定", nameField: "title" },
   organization: { module: "organizations", resource: "organizations", label: "组织", nameField: "name" }
@@ -8618,6 +8625,54 @@ function bindRecordFavoriteButtons(type, items, render) {
       toast(`${config.label}收藏状态更新失败：${error.message}`, "error");
     }
   }));
+}
+
+function syncEntityDetailFavoriteButton(button, type, item) {
+  const config = recordFavoriteConfigs[type];
+  const visible = Boolean(config && item);
+  button.classList.toggle("hidden", !visible);
+  button.innerHTML = characterFavoriteIconMarkup();
+  if (!visible) {
+    button.disabled = true;
+    button.classList.remove("is-favorite");
+    button.setAttribute("aria-pressed", "false");
+    button.removeAttribute("aria-label");
+    button.removeAttribute("title");
+    return;
+  }
+  const isFavorite = item.isFavorite === true;
+  const canFavorite = canEditModule(config.module);
+  const action = isFavorite ? "取消收藏" : "收藏";
+  const name = String(item[config.nameField] ?? "");
+  button.classList.toggle("is-favorite", isFavorite);
+  button.setAttribute("aria-pressed", String(isFavorite));
+  button.setAttribute("aria-label", `${action}${config.label}“${name}”`);
+  button.title = canFavorite ? action : `当前账户没有${config.label}模块写入权限`;
+  button.disabled = !canFavorite;
+}
+
+function bindEntityDetailFavoriteButton(button, type, getItem, onUpdated) {
+  syncEntityDetailFavoriteButton(button, type, getItem());
+  button.onclick = async () => {
+    const config = recordFavoriteConfigs[type];
+    const item = getItem();
+    if (!config || !item || !canEditModule(config.module)) return;
+    button.disabled = true;
+    try {
+      const updated = await api(`/api/${config.resource}/${encodeURIComponent(item.id)}/favorite`, {
+        method: "PATCH",
+        body: { isFavorite: item.isFavorite !== true }
+      });
+      onUpdated(updated);
+      syncEntityDetailFavoriteButton(button, type, getItem() ?? updated);
+      button.focus({ preventScroll: true });
+      const name = String(updated[config.nameField] ?? "");
+      toast(updated.isFavorite ? `已收藏${config.label}“${name}”` : `已取消收藏${config.label}“${name}”`);
+    } catch (error) {
+      syncEntityDetailFavoriteButton(button, type, getItem());
+      toast(`${config.label}收藏状态更新失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    }
+  };
 }
 
 function recordCardEditButton(attribute, id, label) {
@@ -9012,6 +9067,7 @@ async function deleteDraft(item) {
 }
 
 function openDraftDialog(item = null, { readOnly = false } = {}) {
+  let draftDialogItem = item;
   const viewOnly = readOnly || !canEditModule("drafts");
   const volumeOptions = [["", "全局（不绑定分卷）"], ...(state.work?.volumes ?? []).map((volume) => [volume.id, volume.title])];
   const settingModuleOptions = [["", "全局（不绑定设定模块）"], ...draftSettingModules];
@@ -9067,6 +9123,18 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     $("#dialog-fields").querySelectorAll("input, select, textarea").forEach((control) => {
       if (control instanceof HTMLSelectElement) control.disabled = true;
       else control.readOnly = true;
+    });
+  }
+  if (item && viewOnly) {
+    const headerActions = $("#dialog-context-actions");
+    headerActions.innerHTML = `<button id="draft-dialog-favorite" class="entity-detail-favorite-button" type="button" aria-pressed="false"></button>${canEditModule("drafts") ? '<button id="draft-dialog-edit" class="ghost-button" type="button">编辑想法</button>' : ""}`;
+    bindEntityDetailFavoriteButton($("#draft-dialog-favorite"), "draft", () => draftDialogItem, (updated) => {
+      draftDialogItem = updated;
+      void renderDrafts(moduleListPages.drafts).catch((error) => toast(`想法列表刷新失败：${error instanceof Error ? error.message : "未知错误"}`, "error"));
+    });
+    $("#draft-dialog-edit")?.addEventListener("click", () => {
+      $("#form-dialog").close();
+      openDraftDialog(draftDialogItem);
     });
   }
 }
@@ -12820,6 +12888,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   const submitLabel = options.submitLabel ?? "保存";
   let submitting = false;
   let disabledStates = [];
+  $("#dialog-context-actions").replaceChildren();
   $("#dialog-title").textContent = title;
   $("#dialog-title").classList.toggle("hidden", Boolean(options.titleInput));
   titleInput.classList.toggle("hidden", !options.titleInput);
@@ -13289,6 +13358,10 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   const editButton = $("#setting-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("settings"));
   editButton.onclick = () => openSettingEditor(settingEditorItem);
+  bindEntityDetailFavoriteButton($("#setting-editor-favorite"), "setting", () => viewOnly ? settingEditorItem : null, (updated) => {
+    settingEditorItem = updated;
+    state.settings = upsertEntityCollection(state.settings, updated);
+  });
   const statusButtons = [$("#setting-editor-confirm"), $("#setting-editor-deprecate")];
   syncSettingEditorChrome(viewOnly);
   $("#setting-editor-history").onclick = async () => {
@@ -14519,6 +14592,13 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   const editButton = $("#character-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("characters"));
   editButton.onclick = () => void openCharacterEditor(characterEditorItem);
+  bindEntityDetailFavoriteButton($("#character-editor-favorite"), "character", () => viewOnly ? characterEditorItem : null, (updated) => {
+    characterEditorItem = updated;
+    if (loadedAiReferencesWorkId === state.work?.id) {
+      state.characters = upsertEntityCollection(state.characters, updated);
+      renderAiRoleplayCharacterSelect();
+    }
+  });
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
@@ -14705,6 +14785,10 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   editButton.textContent = `编辑${label}`;
   editButton.classList.toggle("hidden", !readOnly || !canEditModule(module));
   editButton.onclick = () => void openKnowledgeEditor(kind, knowledgeEditorItem);
+  bindEntityDetailFavoriteButton($("#knowledge-editor-favorite"), "organization", () => !isRace && viewOnly ? knowledgeEditorItem : null, (updated) => {
+    knowledgeEditorItem = updated;
+    state.organizations = upsertEntityCollection(state.organizations, updated);
+  });
   const form = $("#knowledge-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();

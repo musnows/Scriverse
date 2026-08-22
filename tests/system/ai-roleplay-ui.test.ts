@@ -18,7 +18,8 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain("选择我的角色（可选）");
     expect(page).toContain("feature=ai-relationship-roleplay-v1");
     expect(page).toContain("feature=ai-roleplay-story-recall-v1");
-    expect(application).toContain('name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`');
+    expect(application).toContain("function roleplayCharacterOptionLabel(character)");
+    expect(application).toContain('const favoriteLabel = character?.isFavorite === true ? "[已收藏] " : "";');
     expect(application).toContain("与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……");
     expect(application).toContain("以 ${String(state.aiRoleplayUserCharacter.name)} 的身份与 ${String(state.aiRoleplayCharacter.name)} 对话……");
     expect(application).toContain("/roleplay`");

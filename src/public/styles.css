@@ -1527,6 +1527,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .record-favorite-button:disabled { cursor: not-allowed; opacity: .5; }
 .record-favorite-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
 .record-favorite-button.is-favorite svg { fill: currentColor; }
+.entity-detail-favorite-button { display: inline-grid; flex: 0 0 36px; place-items: center; width: 36px; min-width: 36px; height: 36px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
+.entity-detail-favorite-button:hover, .entity-detail-favorite-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
+.entity-detail-favorite-button.is-favorite { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); }
+.entity-detail-favorite-button:disabled { cursor: not-allowed; opacity: .5; }
+.entity-detail-favorite-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.entity-detail-favorite-button.is-favorite svg { fill: currentColor; }
 .record-card h3 { font-size: 16px; margin: 5px 0 10px; font-weight: 600; }
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
 .record-card small { color: var(--accent); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
@@ -3089,6 +3095,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .dialog::backdrop { background: rgba(34,30,25,.42); backdrop-filter: blur(3px); }
 .dialog-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 22px 24px 16px; border-bottom: 1px solid var(--line); }
 .dialog-header h2 { margin: 0; font-size: 23px; font-weight: 500; }
+#form-dialog .dialog-header { gap: 12px; }
+#form-dialog .dialog-header > div:first-child { flex: 1 1 auto; min-width: 0; }
+#form-dialog .settings-dialog-header-actions { flex: 0 0 auto; }
+#form-dialog .dialog-title-input { width: min(560px, 100%); }
+.dialog-context-actions { display: flex; align-items: center; gap: 8px; }
+.dialog-context-actions:empty { display: none; }
+.dialog-context-actions .ghost-button { min-height: 36px; white-space: nowrap; }
 .dialog-title-input { display: block; width: min(560px, calc(100vw - 150px)); min-width: 0; margin: -5px 0 0; padding: 0 0 4px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--ink); font-size: 23px; font-weight: 500; line-height: 1.3; }
 .dialog-title-input:focus { border-bottom-color: var(--accent); outline: none; }
 .dialog-title-input::placeholder { color: var(--muted); opacity: .8; }
@@ -4115,6 +4128,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .entity-editor-header, .character-editor-header { grid-template-columns: auto minmax(0, 1fr); gap: 8px; padding: 12px var(--mobile-gutter); }
   .entity-editor-mode-actions, .character-editor-header-actions { grid-column: 1 / -1; justify-content: stretch; flex-wrap: wrap; }
   .entity-editor-mode-actions > button, .character-editor-header-actions > button { flex: 1 1 auto; }
+  .entity-editor-mode-actions > .entity-detail-favorite-button, .character-editor-header-actions > .entity-detail-favorite-button { flex: 0 0 40px; width: 40px; min-width: 40px; height: 40px; }
+  .dialog-context-actions .entity-detail-favorite-button { flex-basis: 40px; width: 40px; min-width: 40px; height: 40px; }
   .setting-editor-header { min-height: 0; }
   .setting-editor-content { padding: 12px; }
   .setting-markdown-field { height: 68dvh; }
