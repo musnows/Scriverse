@@ -104,6 +104,28 @@ describe("AI Token 用量统计 API", () => {
     expect(platform.body.data.daily).toEqual([
       expect.objectContaining({ date: "2026-07-27", totalTokens: 410, requestCount: 3 })
     ]);
+    expect(platform.body.data.models).toEqual([
+      expect.objectContaining({
+        modelId: "not-in-price-table",
+        totalTokens: 250,
+        inputTokens: 200,
+        cacheReadInputTokens: 100,
+        cacheWriteInputTokens: 0,
+        outputTokens: 50,
+        requestCount: 1,
+        estimatedRequestCount: 0
+      }),
+      expect.objectContaining({
+        modelId: "deepseek-chat",
+        totalTokens: 160,
+        inputTokens: 130,
+        cacheReadInputTokens: 40,
+        cacheWriteInputTokens: 0,
+        outputTokens: 30,
+        requestCount: 2,
+        estimatedRequestCount: 1
+      })
+    ]);
     expect(platform.body.data.works).toEqual([
       expect.objectContaining({ workId: secondWork.id, workTitle: "第二部作品", totalTokens: 250, cacheHitRate: 50 }),
       expect.objectContaining({ workId: firstWork.id, workTitle: "第一部作品", totalTokens: 160, cacheHitRate: 40 })
@@ -126,6 +148,18 @@ describe("AI Token 用量统计 API", () => {
       estimatedCost: 0.00003892,
       unpricedModelCount: 0
     });
+    expect(work.body.data.models).toEqual([
+      expect.objectContaining({
+        modelId: "deepseek-chat",
+        totalTokens: 160,
+        inputTokens: 130,
+        cacheReadInputTokens: 40,
+        cacheWriteInputTokens: 0,
+        outputTokens: 30,
+        requestCount: 2,
+        estimatedRequestCount: 1
+      })
+    ]);
     expect(work.body.data).not.toHaveProperty("works");
     expect(work.body.data.quota).toMatchObject({
       dailyTokenQuota: 10_000,
