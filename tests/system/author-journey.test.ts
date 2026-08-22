@@ -376,6 +376,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('data-token-usage-details');
     expect(application.text).toContain('function showTokenUsageDetails(usage, title, trigger)');
     expect(application.text).toContain('classList.add("token-usage-details-region")');
+    expect(application.text).toContain('["directInputTokens", "cacheWriteInputTokens", "cacheReadInputTokens"');
+    expect(application.text).toContain('"Raw Input"');
     expect(application.text).toContain("/api/platform/ai/usage/pricing/refresh");
     expect(application.text).toContain('state.user?.role !== "admin"');
     expect(application.text).toContain("有 ${unpricedModelCount.toLocaleString(\"zh-CN\")} 个模型在价格表中未找到对应价格");

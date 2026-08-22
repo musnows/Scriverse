@@ -11738,7 +11738,7 @@ function appendTokenUsageDetailRow(parent, label, usage, isSummary = false) {
   model.scope = "row";
   model.textContent = label;
   row.append(model);
-  ["inputTokens", "cacheWriteInputTokens", "cacheReadInputTokens", "outputTokens", "totalTokens", "requestCount", "estimatedRequestCount"].forEach((key) => {
+  ["directInputTokens", "cacheWriteInputTokens", "cacheReadInputTokens", "outputTokens", "totalTokens", "requestCount", "estimatedRequestCount"].forEach((key) => {
     const cell = document.createElement("td");
     cell.textContent = tokenUsageDetailCount(usage?.[key]);
     row.append(cell);
@@ -11778,7 +11778,7 @@ function showTokenUsageDetails(usage, title, trigger) {
   const description = document.createElement("p");
   description.id = "token-usage-details-description";
   description.className = "token-usage-details-note";
-  description.textContent = "Input 为总输入 Token；Cache Write 与 Cache Read 是其中可区分的缓存子量，不要与 Input 重复相加。汇总行包含当前范围内全部模型。";
+  description.textContent = "Raw Input 为不含缓存的输入 Token；Cache Write 与 Cache Read 也是输入组成部分，并已包含在总计中。汇总行包含当前范围内全部模型。";
   body.append(description);
 
   const tableScroll = document.createElement("div");
@@ -11790,7 +11790,7 @@ function showTokenUsageDetails(usage, title, trigger) {
   table.append(caption);
   const head = document.createElement("thead");
   const headRow = document.createElement("tr");
-  ["模型", "Input（总）", "Cache Write", "Cache Read", "Output", "总计", "调用", "估算调用"].forEach((label) => {
+  ["模型", "Raw Input", "Cache Write", "Cache Read", "Output", "总计", "调用", "估算调用"].forEach((label) => {
     const cell = document.createElement("th");
     cell.scope = "col";
     cell.textContent = label;
