@@ -3401,10 +3401,18 @@ async function createNewAiConversation(taskType = "chat") {
   }
 }
 
+function favoriteCharactersFirst(characters) {
+  const items = Array.isArray(characters) ? characters : [];
+  return [
+    ...items.filter((character) => character.isFavorite === true),
+    ...items.filter((character) => character.isFavorite !== true)
+  ];
+}
+
 function renderAiRoleplayCharacterSelect() {
   const select = $("#ai-roleplay-character");
   const selectedId = String(state.aiRoleplayCharacter?.id ?? "");
-  const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
+  const availableCharacters = favoriteCharactersFirst(state.characters.filter((character) => !character.mergedIntoCharacterId));
   const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
     name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
@@ -3435,9 +3443,9 @@ function renderAiRoleplayUserCharacterSelect() {
   const select = $("#ai-roleplay-user-character");
   const selectedId = String(state.aiRoleplayUserCharacter?.id ?? "");
   const aiCharacterId = String(state.aiRoleplayCharacter?.id ?? "");
-  const availableCharacters = state.characters.filter((character) => (
+  const availableCharacters = favoriteCharactersFirst(state.characters.filter((character) => (
     !character.mergedIntoCharacterId && String(character.id) !== aiCharacterId
-  ));
+  )));
   const options = [{ id: "", name: "选择我的角色（可选）" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
     name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
@@ -8551,6 +8559,18 @@ function pencilIconMarkup() {
   return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"></path><path d="m16.5 3.5 1.4-1.4a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z"></path></svg>';
 }
 
+function characterFavoriteIconMarkup() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"></path></svg>';
+}
+
+function characterFavoriteButton(item) {
+  const isFavorite = item.isFavorite === true;
+  const canFavorite = canEditModule("characters");
+  const action = isFavorite ? "取消收藏" : "收藏";
+  const title = canFavorite ? action : "当前账户没有角色模块写入权限";
+  return `<button class="character-favorite-button${isFavorite ? " is-favorite" : ""}" type="button" data-character-favorite="${esc(item.id)}" aria-label="${action}角色“${esc(item.name)}”" aria-pressed="${isFavorite}" title="${title}" ${canFavorite ? "" : "disabled"}>${characterFavoriteIconMarkup()}</button>`;
+}
+
 function recordCardEditButton(attribute, id, label) {
   return `<button class="record-card-edit" type="button" data-${attribute}="${esc(id)}" aria-label="编辑${esc(label)}" title="编辑">${pencilIconMarkup()}</button>`;
 }
@@ -9189,6 +9209,21 @@ async function renderSettings(page = moduleListPages.settings) {
   renderSettingResults(page);
 }
 
+async function toggleCharacterFavorite(item) {
+  const updated = await api(`/api/characters/${encodeURIComponent(item.id)}/favorite`, {
+    method: "PATCH",
+    body: { isFavorite: item.isFavorite !== true }
+  });
+  if (loadedAiReferencesWorkId === state.work?.id) {
+    state.characters = upsertEntityCollection(state.characters, updated);
+    renderAiRoleplayCharacterSelect();
+  }
+  characterListPage = 1;
+  await renderCharacters(1);
+  $("#module-content").querySelector(`[data-character-favorite="${CSS.escape(String(updated.id))}"]`)?.focus({ preventScroll: true });
+  toast(updated.isFavorite ? `已收藏角色“${updated.name}”` : `已取消收藏角色“${updated.name}”`);
+}
+
 async function renderCharacters(page = characterListPage) {
   const hasCharacterFilters = characterFilters.raceIds.length > 0
     || characterFilters.organizationIds.length > 0
@@ -9211,14 +9246,14 @@ async function renderCharacters(page = characterListPage) {
   [state.races, state.organizations] = [races, organizations];
   mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
-  const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
+  const characterActions = (item) => `${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}`;
   const characterLockBadge = (item) => item.lockedFields.length
     ? `<span class="character-lock-badge" aria-label="${item.lockedFields.length} 个锁定字段" title="锁定字段：${esc(item.lockedFields.join("、"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>${item.lockedFields.length}</span></span>`
     : "";
   const characterCards = () => `<div class="card-grid">${pageCharacters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
+    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
     <div class="character-card-heading">${characterAvatarHtml(item)}<h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     <div class="character-gender"><b>性别</b><span class="pill">${esc(characterGenderLabel(item.gender))}</span></div>
@@ -9284,6 +9319,17 @@ async function renderCharacters(page = characterListPage) {
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
+  $("#module-content").querySelectorAll("[data-character-favorite]").forEach((button) => button.addEventListener("click", async () => {
+    const item = pageCharacters.find((candidate) => candidate.id === button.dataset.characterFavorite);
+    if (!item || !canEditModule("characters")) return;
+    button.disabled = true;
+    try {
+      await toggleCharacterFavorite(item);
+    } catch (error) {
+      button.disabled = false;
+      toast(`角色收藏状态更新失败：${error.message}`, "error");
+    }
+  }));
   const readSelectedValues = (selector) => [...$(selector).querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
   $("#character-race-filter").addEventListener("change", async () => {
     characterFiltersPanelOpen = true;

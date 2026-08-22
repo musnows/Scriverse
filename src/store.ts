@@ -6314,7 +6314,7 @@ export class Store {
   listCharacters(workId: string, includeProfileSections = false, includeMerged = false, includeRaceMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db.all(
-      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name`,
+      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY is_favorite DESC, name`,
       workId
     )
       .map((row) => this.mapCharacter(row, includeProfileSections, includeRaceMarkdown));
@@ -6328,7 +6328,7 @@ export class Store {
       workId
     );
     const rows = this.db.all(
-      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name${page.sql}`,
+      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY is_favorite DESC, name${page.sql}`,
       workId,
       ...page.params
     );
@@ -7022,6 +7022,25 @@ export class Store {
     return this.mapCharacter(row);
   }
 
+  setCharacterFavorite(characterId: string, isFavorite: boolean): Record<string, unknown> {
+    const character = this.db.get("SELECT id, work_id, is_favorite, merged_into_character_id FROM characters WHERE id = ?", characterId);
+    if (!character) throw notFound("角色");
+    if (optionalString(character, "merged_into_character_id")) {
+      throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能收藏");
+    }
+    const workId = requiredString(character, "work_id");
+    const previousFavorite = booleanValue(character, "is_favorite");
+    if (previousFavorite === isFavorite) return this.getCharacter(characterId);
+    this.db.transaction(() => {
+      this.db.run("UPDATE characters SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, characterId);
+      this.audit(workId, "character.favorite-updated", "character", characterId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getCharacter(characterId);
+  }
+
   getCharacterAvatar(characterId: string): CharacterAvatarMetadata | null {
     const character = this.db.get("SELECT id FROM characters WHERE id = ?", characterId);
     if (!character) throw notFound("角色");
@@ -7385,6 +7404,7 @@ export class Store {
       profileSectionCount,
       currentState: json(requiredString(row, "current_state_json"), {}),
       isDead: booleanValue(row, "is_dead"),
+      isFavorite: booleanValue(row, "is_favorite"),
       avatarUrl: avatarSha256
         ? `/api/characters/${encodeURIComponent(characterId)}/avatar?v=${encodeURIComponent(avatarSha256)}`
         : null,

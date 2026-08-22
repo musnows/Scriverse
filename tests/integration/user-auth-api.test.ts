@@ -693,6 +693,44 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("角色收藏接口校验登录、CSRF 和角色写权限", async () => {
+    const owner = await register(runtime, "character_favorite_owner");
+    const viewer = await register(runtime, "character_favorite_viewer");
+    const editor = await register(runtime, "character_favorite_editor");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "角色收藏权限测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: editor.user.userId, role: "editor" })
+      .expect(201);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "林舟" })
+      .expect(201);
+    const endpoint = `/api/characters/${String(character.body.data.id)}/favorite`;
+
+    await request(runtime.app).patch(endpoint).send({ isFavorite: true }).expect(401);
+    const missingCsrf = await owner.agent.patch(endpoint).send({ isFavorite: true }).expect(403);
+    expect(missingCsrf.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    const viewerDenied = await viewer.agent.patch(endpoint)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ isFavorite: true })
+      .expect(403);
+    expect(viewerDenied.body.error.code).toBe("WORK_EDIT_DENIED");
+    const updated = await editor.agent.patch(endpoint)
+      .set("X-CSRF-Token", editor.csrfToken)
+      .send({ isFavorite: true })
+      .expect(200);
+    expect(updated.body.data).toMatchObject({ id: character.body.data.id, isFavorite: true });
+  });
+
   it("按用户在数据库中记录新手引导完成状态", async () => {
     const firstUser = await register(runtime, "onboarding_first");
     const secondUser = await register(runtime, "onboarding_second");

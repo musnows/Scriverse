@@ -2184,6 +2184,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     data(response, redactCharacterLinks(result.character, requestPermissions(request)));
   });
+  app.patch("/api/characters/:characterId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    const character = store.setCharacterFavorite(request.params.characterId, input.isFavorite);
+    publishEntityChange(String(character.workId), "character", String(character.id));
+    data(response, redactCharacterLinks(character, requestPermissions(request)));
+  });
   app.patch("/api/characters/:characterId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(characterUpdateSchema.extend({ expectedVersionNo: expectedVersionNoSchema }), request.body);
     const character = store.updateCharacter(request.params.characterId, input, "manual", null, changeNote, expectedVersionNo);
