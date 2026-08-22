@@ -490,6 +490,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain("新 Key 仅显示一次");
     expect(styles.text).toContain(".api-key-result button { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; }");
     expect(application.text).toContain('api("/api/auth/api-key/reset"');
+    expect(application.text).toContain("/toast-layer.js?v=20260822-toast-modal-host-v1");
+    expect(application.text).toContain("function syncToastRegionHost()");
     expect(application.text).toContain('/analysis-types.js?v=20260721-analysis-descriptions');
     expect(analysisTypes.text).toContain('label: "世界观分析"');
     expect(analysisTypes.text).toContain('desc: "归纳正文中的自然、社会、历史、科技、文化等世界观维度，同时标出冲突和证据不足之处。"');
