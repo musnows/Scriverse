@@ -16029,7 +16029,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         assertAiRequestCurrent(requestHolder.snapshot);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
-        message.querySelector(".message-heading > span").textContent = "助手";
+        message.querySelector(".message-heading > span").textContent = aiAssistantLabel("", tab.roleplayCharacter);
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
         const processDurationMs = Number.isFinite(payload.processDurationMs) && payload.processDurationMs >= 0
