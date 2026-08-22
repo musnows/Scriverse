@@ -3409,16 +3409,22 @@ function favoriteCharactersFirst(characters) {
   ];
 }
 
+function roleplayCharacterOptionLabel(character) {
+  const favoriteLabel = character?.isFavorite === true ? "[已收藏] " : "";
+  const deathLabel = character?.isDead ? "（已死亡）" : "";
+  return `${favoriteLabel}${String(character?.name ?? "")}${deathLabel}`;
+}
+
 function renderAiRoleplayCharacterSelect() {
   const select = $("#ai-roleplay-character");
   const selectedId = String(state.aiRoleplayCharacter?.id ?? "");
   const availableCharacters = favoriteCharactersFirst(state.characters.filter((character) => !character.mergedIntoCharacterId));
   const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
+    name: roleplayCharacterOptionLabel(character)
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
-    options.push({ id: selectedId, name: String(state.aiRoleplayCharacter.name) });
+    options.push({ id: selectedId, name: roleplayCharacterOptionLabel(state.aiRoleplayCharacter) });
   }
   select.replaceChildren(...options.map((option) => {
     const element = document.createElement("option");
@@ -3448,10 +3454,10 @@ function renderAiRoleplayUserCharacterSelect() {
   )));
   const options = [{ id: "", name: "选择我的角色（可选）" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
+    name: roleplayCharacterOptionLabel(character)
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
-    options.push({ id: selectedId, name: String(state.aiRoleplayUserCharacter.name) });
+    options.push({ id: selectedId, name: roleplayCharacterOptionLabel(state.aiRoleplayUserCharacter) });
   }
   select.replaceChildren(...options.map((option) => {
     const element = document.createElement("option");
