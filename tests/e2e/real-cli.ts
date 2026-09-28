@@ -385,7 +385,37 @@ async function run(): Promise<void> {
   })]) as Record<string, unknown>;
   assert.deepEqual(batchResult, { processed: 1, action: "setAnalysisExclusion" });
   assert.equal(getResource("chapter", chapterId)?.excludedFromAnalysis, true);
-  checked("recent-authoring-commands", "writing goals, annotations, chapter move and batch management passed through the compiled CLI");
+  const titleFormat = cliJson(["chapter", "title-format", "set", workId, "--input", jsonFile("title-format", {
+    chapterTitleFormat: "chapter-arabic"
+  })]) as Record<string, unknown>;
+  assert.equal(titleFormat.preference, "chapter-arabic");
+  assert.equal(titleFormat.resolved, "chapter-arabic");
+  const numberedVolume = createResource("volume", workId, { title: "编号卷", kind: "extra" });
+  const numberedVolumeId = String(numberedVolume.id);
+  const numberedHead = cliJson(["resource", "create", "chapter", workId, "--input", jsonFile("numbered-head", {
+    volumeId: numberedVolumeId,
+    title: "启程",
+    content: "甲。",
+    numberTitle: true
+  })]) as Record<string, unknown>;
+  assert.equal(numberedHead.title, "第1章 启程");
+  const insertedBefore = cliJson(["resource", "create", "chapter", workId, "--input", jsonFile("numbered-before", {
+    volumeId: numberedVolumeId,
+    title: "山门",
+    content: "乙。",
+    insertBeforeChapterId: numberedHead.id,
+    numberTitle: true
+  })]) as Record<string, unknown>;
+  assert.equal(insertedBefore.title, "第1章 山门");
+  assert.equal(getResource("chapter", String(numberedHead.id))?.title, "第2章 启程");
+  const renumberedVolume = cliJson(["chapter", "renumber", numberedVolumeId]) as Record<string, unknown>;
+  assert.equal(renumberedVolume.volumeId, numberedVolumeId);
+  assert.equal(renumberedVolume.format, "chapter-arabic");
+  const appliedNumber = cliJson(["chapter", "apply-number", String(insertedBefore.id), "--input", jsonFile("apply-number", {
+    title: "夜雨"
+  })]) as Record<string, unknown>;
+  assert.equal(appliedNumber.title, "第1章 夜雨");
+  checked("recent-authoring-commands", "writing goals, annotations, chapter move, batch, title numbering and positioned insert passed through the compiled CLI");
 
   const setting = createResource("setting", workId, {
     title: "北港",
@@ -591,7 +621,7 @@ async function run(): Promise<void> {
     entityVersions: Number((database.prepare("SELECT COUNT(*) AS count FROM entity_versions").get() as { count?: unknown } | undefined)?.count ?? 0)
   };
   database.close();
-  assert.deepEqual(finalCounts, { works: 2, chapters: 1, chapterVersions: 4, entityVersions: 34 });
+  assert.deepEqual(finalCounts, { works: 2, chapters: 3, chapterVersions: 8, entityVersions: 36 });
   checked("complete", `all CLI commands passed against isolated server; counts=${JSON.stringify(finalCounts)}`);
 }
 

@@ -94,6 +94,11 @@ describe("Scriverse CLI 核心", () => {
     expect(cliResourceDefinitions.draft.create.properties.volumeId).toContain("分卷 ID");
     expect(cliResourceDefinitions.volume.create.properties.storyOrder).toContain("故事顺序");
     expect(cliResourceDefinitions.volume.update.properties.storyOrder).toContain("故事顺序");
+    expect(cliWorkDefinition.create.properties.chapterTitleFormat).toContain("off | auto");
+    expect(cliWorkDefinition.update.properties.chapterTitleFormat).toContain("chapter-arabic");
+    expect(cliResourceDefinitions.chapter.create.properties.insertBeforeChapterId).toContain("之前");
+    expect(cliResourceDefinitions.chapter.create.properties.insertAfterChapterId).toContain("之后");
+    expect(cliResourceDefinitions.chapter.create.properties.numberTitle).toContain("后移本卷后续序号");
     expect(cliResourceDefinitions.draft.actions).toEqual(["list", "get", "create", "update", "history", "restore"]);
   });
 
@@ -442,11 +447,21 @@ describe("Scriverse CLI 核心", () => {
     expect(await run(["writing", "goal", "work-1", "--input", goalPath])).toBe(0);
     expect(await run(["chapter", "move", "chapter-1", "--input", movePath])).toBe(0);
     expect(await run(["chapter", "batch", "work-1", "--input", batchPath])).toBe(0);
+    const formatPath = jsonFile(root, "title-format.json", { chapterTitleFormat: "chapter-arabic", expectedVersionNo: 4 });
+    const applyPath = jsonFile(root, "apply-number.json", { title: "夜雨", expectedVersionNo: 2 });
+    expect(await run(["chapter", "title-format", "get", "work-1"])).toBe(0);
+    expect(await run(["chapter", "title-format", "set", "work-1", "--input", formatPath])).toBe(0);
+    expect(await run(["chapter", "renumber", "volume-1"])).toBe(0);
+    expect(await run(["chapter", "apply-number", "chapter-1", "--input", applyPath])).toBe(0);
     expect(calls).toEqual([
       { url: "http://127.0.0.1:13210/api/works/work-1/writing-progress", method: "GET", body: null },
       { url: "http://127.0.0.1:13210/api/works/work-1/writing-goal", method: "PUT", body: { dailyGoal: 2000, targetTotal: 120000, deadline: "2026-12-31" } },
       { url: "http://127.0.0.1:13210/api/chapters/chapter-1/move", method: "POST", body: { volumeId: "volume-2", sortOrder: 0, expectedVersionNo: 2 } },
-      { url: "http://127.0.0.1:13210/api/works/work-1/chapters/batch", method: "POST", body: batchBody }
+      { url: "http://127.0.0.1:13210/api/works/work-1/chapters/batch", method: "POST", body: batchBody },
+      { url: "http://127.0.0.1:13210/api/works/work-1/chapter-title-format", method: "GET", body: null },
+      { url: "http://127.0.0.1:13210/api/works/work-1/chapter-title-format", method: "PATCH", body: { chapterTitleFormat: "chapter-arabic", expectedVersionNo: 4 } },
+      { url: "http://127.0.0.1:13210/api/volumes/volume-1/renumber-titles", method: "POST", body: {} },
+      { url: "http://127.0.0.1:13210/api/chapters/chapter-1/apply-title-number", method: "POST", body: { title: "夜雨", expectedVersionNo: 2 } }
     ]);
   });
 
