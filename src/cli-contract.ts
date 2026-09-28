@@ -44,9 +44,10 @@ export const cliWorkDefinition = {
       description: "作品简介",
       language: "语言标识，例如 zh-CN",
       coverUrl: "外部封面 URL 或 null",
-      tags: "标签数组"
+      tags: "标签数组",
+      chapterTitleFormat: "章节标题编号：off | auto | dot | chapter-arabic | chapter-chinese | enumeration | english"
     },
-    example: { title: "潮汐尽头", author: "慕雪", description: "一部发生在星港群岛的长篇小说。", language: "zh-CN", tags: ["科幻", "群像"] }
+    example: { title: "潮汐尽头", author: "慕雪", description: "一部发生在星港群岛的长篇小说。", language: "zh-CN", tags: ["科幻", "群像"], chapterTitleFormat: "off" }
   },
   update: {
     properties: {
@@ -55,7 +56,8 @@ export const cliWorkDefinition = {
       description: "新简介",
       language: "语言标识",
       coverUrl: "外部封面 URL 或 null",
-      tags: "完整标签数组"
+      tags: "完整标签数组",
+      chapterTitleFormat: "章节标题编号：off | auto | dot | chapter-arabic | chapter-chinese | enumeration | english"
     },
     example: { description: "补充北港议会与潮汐航线的主线简介。", tags: ["科幻", "群像", "政治"] }
   },
@@ -101,9 +103,12 @@ export const cliResourceDefinitions = {
         volumeId: "所属分卷 ID",
         title: "章节标题，最多 300 字",
         content: "正文，最多 200 万字符",
-        chapterType: "正文 | 设定 | 作者的话 | 其他"
+        chapterType: "正文 | 设定 | 作者的话 | 其他",
+        insertAfterChapterId: "插入到该章节之后；与 insertBeforeChapterId 互斥",
+        insertBeforeChapterId: "插入到该章节之前；与 insertAfterChapterId 互斥",
+        numberTitle: "为 true 时按作品标题编号给新章节编号，并后移本卷后续序号"
       },
-      example: { volumeId: "volume_xxx", title: "第一章 抵达", content: "黎明时，林舟抵达北港。", chapterType: "正文" }
+      example: { volumeId: "volume_xxx", title: "第一章 抵达", content: "黎明时，林舟抵达北港。", chapterType: "正文", insertBeforeChapterId: "chapter_xxx", numberTitle: true }
     },
     update: {
       properties: {
@@ -115,7 +120,11 @@ export const cliResourceDefinitions = {
       },
       example: { content: "黎明时，林舟抵达北港，潮声掩住了警报。", changeNote: "增强开场危机感" }
     },
-    notes: ["标题或正文变化会生成新章节版本；restore 也会生成新版本。"]
+    notes: [
+      "标题或正文变化会生成新章节版本；restore 也会生成新版本。",
+      "未提供插入锚点时追加到分卷末尾。insertAfterChapterId 与 insertBeforeChapterId 不能同时指定。",
+      "numberTitle 只在作品章节标题编号不是 off 时改写本卷序号。"
+    ]
   },
   draft: {
     description: "正文想法或设定想法",
