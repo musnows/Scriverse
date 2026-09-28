@@ -21456,8 +21456,8 @@ $("#login-form").addEventListener("submit", async (event) => {
     window.location.reload();
   } catch (error) {
     $("#auth-error").textContent = error.message;
-    // 仅在验证码已显示时自动换一张，未加载过则保持默认隐藏状态
-    if (!$("#login-captcha-image").hidden) refreshAuthCaptcha("login").catch(() => {});
+    // 答案错误时保留同一张图；过期、已核销或其他失败才换一张
+    if (error?.code !== "CAPTCHA_INCORRECT" && !$("#login-captcha-image").hidden) refreshAuthCaptcha("login").catch(() => {});
   }
 });
 $("#register-form").addEventListener("submit", async (event) => {
@@ -21485,8 +21485,8 @@ $("#register-form").addEventListener("submit", async (event) => {
     window.location.reload();
   } catch (error) {
     $("#auth-error").textContent = error.message;
-    // 仅在验证码已显示时自动换一张，未加载过则保持默认隐藏状态
-    if (!$("#register-captcha-image").hidden) refreshAuthCaptcha("register").catch(() => {});
+    // 答案错误时保留同一张图；过期、已核销或其他失败才换一张
+    if (error?.code !== "CAPTCHA_INCORRECT" && !$("#register-captcha-image").hidden) refreshAuthCaptcha("register").catch(() => {});
   }
 });
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));

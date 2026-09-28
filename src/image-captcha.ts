@@ -200,18 +200,22 @@ export class ImageCaptchaService {
     };
   }
 
-  /** 校验并消费验证码；成功或失败都会使该挑战失效。 */
+  /**
+   * 校验验证码。答案错误时保留挑战，允许用同一张图继续重试。
+   * 只有答案正确后才核销。过期，以及已核销或未知的挑战，返回已失效。
+   */
   consume(captchaId: string, answer: string): void {
     const currentTime = this.currentTime();
     const challenge = this.challenges.get(captchaId);
-    this.challenges.delete(captchaId);
     if (!challenge || challenge.expiresAt <= currentTime) {
+      if (challenge) this.challenges.delete(captchaId);
       throw new AppError(400, "CAPTCHA_INVALID", "验证码已失效，请刷新后重试");
     }
     const provided = digestAnswer(answer);
     if (provided.length !== challenge.answerDigest.length || !timingSafeEqual(provided, challenge.answerDigest)) {
-      throw new AppError(400, "CAPTCHA_INVALID", "验证码不正确");
+      throw new AppError(400, "CAPTCHA_INCORRECT", "验证码不正确");
     }
+    this.challenges.delete(captchaId);
   }
 
   private pruneExpired(): void {
