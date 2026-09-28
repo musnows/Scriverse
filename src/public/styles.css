@@ -1433,7 +1433,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-nav .ai-assistant-entry:hover,
 .module-nav .ai-assistant-entry.active { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent-dark); font-weight: 650; }
 #module-more-button { grid-column: 2; color: var(--accent-dark); text-align: center; }
-.panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 0 9px 7px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.panel-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 15px 0 9px 7px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.chapter-title-format-field { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; flex: 1 0 100%; min-width: 0; margin: 0; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: 0; line-height: 1.35; text-transform: none; }
+.chapter-title-format-field select { width: 100%; min-width: 0; min-height: 32px; appearance: none; -webkit-appearance: none; padding: 6px 32px 6px 10px; border: 1px solid color-mix(in srgb, var(--line) 82%, var(--ink)); border-radius: 5px; background-color: var(--surface); background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: right 16px center, right 11px center; background-repeat: no-repeat; background-size: 5px 5px, 5px 5px; color: var(--ink); font-size: 12px; font-weight: 500; letter-spacing: 0; line-height: 1.4; text-transform: none; cursor: pointer; }
+.chapter-title-format-field select:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.chapter-title-format-field select:disabled { cursor: not-allowed; opacity: .52; }
+.chapter-title-format-note { flex: 1 0 100%; margin: 0; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0; line-height: 1.45; text-transform: none; }
 .panel-heading-label { min-width: 0; white-space: nowrap; }
 .panel-heading-label-compact { display: none; }
 .panel-heading-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; white-space: nowrap; }
@@ -3538,7 +3543,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-insight-toast-detail { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px; padding-top: 9px; border-top: 1px solid var(--line); }
 .chapter-insight-toast-detail strong { color: var(--ink); font-size: 10px; }
 .chapter-insight-toast-empty { color: var(--muted); }
-.chapter-type-menu { position: fixed; z-index: 80; width: 176px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
+.chapter-type-menu { position: fixed; z-index: 80; width: 188px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .chapter-type-menu strong { display: block; overflow: hidden; margin: 0 2px 8px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-type-menu > div { display: grid; gap: 3px; }
 .chapter-type-menu button { border: 0; border-radius: 3px; padding: 7px 8px; background: transparent; text-align: left; font-size: 11px; }

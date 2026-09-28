@@ -58,7 +58,7 @@ import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./goog
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { MAX_CHAPTER_LINE_IDS } from "./chapter-annotation-anchor.js";
-import { isChapterNumberTemplate } from "./chapter-title-numbering.js";
+import { chapterTitlePreferences, isChapterNumberTemplate } from "./chapter-title-numbering.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
 import { composeRoleplayStoredUserContent } from "./roleplay-turn.js";
 import {
@@ -317,7 +317,8 @@ const workSchema = z.object({
   coverUrl: z.string().url().nullable().optional(),
   tags: optionalStrings,
   editorAutoIndentEnabled: z.boolean().optional(),
-  editorTypewriterModeEnabled: z.boolean().optional()
+  editorTypewriterModeEnabled: z.boolean().optional(),
+  chapterTitleFormat: z.enum(chapterTitlePreferences).optional()
 });
 const workOfflineAccessSchema = z.object({ enabled: z.boolean() }).strict();
 
@@ -2650,6 +2651,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.deleteVolume(request.params.volumeId, input.expectedVersionNo);
     noContent(response);
   });
+  app.post("/api/volumes/:volumeId/renumber-titles", (request, response) => {
+    data(response, store.renumberVolumeChapterTitles(request.params.volumeId));
+  });
   app.post("/api/volumes/:volumeId/restore", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     data(response, store.restoreVolume(request.params.volumeId, input.expectedVersionNo));
@@ -2661,8 +2665,36 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
+  app.get("/api/works/:workId/chapter-title-format", (request, response) => {
+    data(response, store.describeChapterTitleFormat(request.params.workId));
+  });
+  app.patch("/api/works/:workId/chapter-title-format", (request, response) => {
+    const input = parse(z.object({
+      chapterTitleFormat: z.enum(chapterTitlePreferences),
+      expectedVersionNo: expectedVersionNoSchema
+    }).strict(), request.body);
+    const work = store.updateWork(
+      request.params.workId,
+      { chapterTitleFormat: input.chapterTitleFormat },
+      input.expectedVersionNo,
+      "manual",
+      null,
+      "更新章节标题编号格式"
+    );
+    data(response, {
+      ...store.describeChapterTitleFormat(request.params.workId),
+      versionNo: Number(work.versionNo)
+    });
+  });
   app.post("/api/works/:workId/chapters", (request, response) => {
-    const input = parse(z.object({ volumeId: identifier, title: nonEmpty.max(300), content: z.string().max(2_000_000).optional(), chapterType: chapterTypeSchema.optional() }), request.body);
+    const input = parse(z.object({
+      volumeId: identifier,
+      title: nonEmpty.max(300),
+      content: z.string().max(2_000_000).optional(),
+      chapterType: chapterTypeSchema.optional(),
+      insertAfterChapterId: identifier.optional(),
+      numberTitle: z.boolean().optional()
+    }).strict(), request.body);
     data(response, store.createChapter(request.params.workId, input), 201);
   });
   app.get("/api/works/:workId/deleted-chapters", (request, response) => {
@@ -2675,6 +2707,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.getRecycleBin(request.params.workId));
   });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
+  app.post("/api/chapters/:chapterId/apply-title-number", (request, response) => {
+    const input = parse(z.object({ title: nonEmpty.max(300), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    const chapter = store.applyChapterTitleNumber(request.params.chapterId, input.title, input.expectedVersionNo);
+    publishEditorChange(String(chapter.workId), String(chapter.id));
+    data(response, chapter);
+  });
   app.patch("/api/chapters/:chapterId", (request, response) => {
     const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), lineIds: z.array(z.union([identifier, z.null()])).max(MAX_CHAPTER_LINE_IDS).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const { source, changeNote, expectedVersionNo, ...chapterInput } = input;
