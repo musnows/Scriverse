@@ -1066,6 +1066,110 @@ describe("作品、导入和章节版本 API", () => {
     await request(runtime.app).get(`/api/chapters/${tail.body.data.id}`).expect(200);
   });
 
+  it("在指定章节上方或下方插入，并沿用本卷自动编号", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "插入位置作品", chapterTitleFormat: "dot" }).expect(201);
+    const workId = work.body.data.id;
+    const main = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "正文" }).expect(201);
+    const extra = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "番外" }).expect(201);
+    const first = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "36. 甲"
+    }).expect(201);
+    const second = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "37. 乙"
+    }).expect(201);
+    const side = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: extra.body.data.id,
+      title: "1. 番外开场"
+    }).expect(201);
+
+    const plain = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "手写插入",
+      insertBeforeChapterId: second.body.data.id
+    }).expect(201);
+    expect(plain.body.data.title).toBe("手写插入");
+
+    const above = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "上方新章",
+      insertBeforeChapterId: second.body.data.id,
+      numberTitle: true
+    }).expect(201);
+    const below = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "下方新章",
+      insertAfterChapterId: first.body.data.id,
+      numberTitle: true
+    }).expect(201);
+    expect(above.body.data.title).toBe("37. 上方新章");
+    expect(below.body.data.title).toBe("37. 下方新章");
+
+    const inserted = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(inserted.body.data.volumes[0].chapters.map((chapter: { title: string; sortOrder: number }) => [chapter.title, chapter.sortOrder])).toEqual([
+      ["36. 甲", 0],
+      ["37. 下方新章", 1],
+      ["手写插入", 2],
+      ["38. 上方新章", 3],
+      ["39. 乙", 4]
+    ]);
+    expect(inserted.body.data.volumes[1].chapters.map((chapter: { title: string; versionNo: number }) => [chapter.title, chapter.versionNo])).toEqual([
+      ["1. 番外开场", 1]
+    ]);
+    expect(inserted.body.data.volumes[0].chapters.find((chapter: { title: string }) => chapter.title === "手写插入").versionNo).toBe(1);
+
+    const head = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "卷首",
+      insertBeforeChapterId: first.body.data.id,
+      numberTitle: true
+    }).expect(201);
+    expect(head.body.data.title).toBe("1. 卷首");
+    const headed = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(headed.body.data.volumes[0].chapters.map((chapter: { title: string }) => chapter.title)).toEqual([
+      "1. 卷首",
+      "37. 甲",
+      "38. 下方新章",
+      "手写插入",
+      "39. 上方新章",
+      "40. 乙"
+    ]);
+
+    const conflict = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "冲突",
+      insertBeforeChapterId: first.body.data.id,
+      insertAfterChapterId: second.body.data.id
+    }).expect(400);
+    expect(conflict.body.error.code).toBe("VALIDATION_ERROR");
+
+    const missing = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "不存在的锚点",
+      insertBeforeChapterId: "missing-chapter"
+    }).expect(404);
+    expect(missing.body.error.code).toBe("NOT_FOUND");
+
+    const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
+    const otherVolume = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/volumes`).send({ title: "正文" }).expect(201);
+    const foreign = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/chapters`).send({
+      volumeId: otherVolume.body.data.id,
+      title: "外卷章节"
+    }).expect(201);
+    const mismatched = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "跨作品插入",
+      insertBeforeChapterId: foreign.body.data.id
+    }).expect(400);
+    expect(mismatched.body.error.code).toBe("CHAPTER_WORK_MISMATCH");
+
+    const unchangedSide = await request(runtime.app).get(`/api/chapters/${side.body.data.id}`).expect(200);
+    expect(unchangedSide.body.data).toMatchObject({ title: "1. 番外开场", versionNo: 1 });
+    const afterConflict = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(afterConflict.body.data.volumes[0].chapters).toHaveLength(6);
+  });
+
   it("排序只更新位置变化的章节且每章仅触发一次数据库更新", async () => {
     const work = runtime.store.createWork({ title: "排序写入范围" });
     const workId = String(work.id);

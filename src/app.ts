@@ -2693,8 +2693,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       content: z.string().max(2_000_000).optional(),
       chapterType: chapterTypeSchema.optional(),
       insertAfterChapterId: identifier.optional(),
+      insertBeforeChapterId: identifier.optional(),
       numberTitle: z.boolean().optional()
-    }).strict(), request.body);
+    }).strict().refine((value) => value.insertAfterChapterId === undefined || value.insertBeforeChapterId === undefined, {
+      message: "不能同时指定章节前后插入位置"
+    }), request.body);
     data(response, store.createChapter(request.params.workId, input), 201);
   });
   app.get("/api/works/:workId/deleted-chapters", (request, response) => {
