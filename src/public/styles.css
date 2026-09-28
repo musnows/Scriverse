@@ -3539,10 +3539,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-insight-toast-detail { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px; padding-top: 9px; border-top: 1px solid var(--line); }
 .chapter-insight-toast-detail strong { color: var(--ink); font-size: 10px; }
 .chapter-insight-toast-empty { color: var(--muted); }
-.chapter-type-menu { position: fixed; z-index: 80; width: 188px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
+.chapter-type-menu { position: fixed; z-index: 80; width: 220px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .chapter-type-menu strong { display: block; overflow: hidden; margin: 0 2px 8px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-type-menu > div { display: grid; gap: 3px; }
-.chapter-type-menu button { border: 0; border-radius: 3px; padding: 7px 8px; background: transparent; text-align: left; font-size: 11px; }
+.chapter-type-menu button { border: 0; border-radius: 3px; padding: 7px 8px; background: transparent; text-align: left; font-size: 11px; white-space: nowrap; }
 .chapter-type-menu button:hover, .chapter-type-menu button.active { background: var(--paper-deep); color: var(--accent-dark); }
 .chapter-type-menu .danger-button { margin-top: 5px; border-top: 1px solid var(--line); border-radius: 0; color: var(--accent-dark); }
 .line-citation-menu { position: fixed; z-index: 82; display: grid; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }

@@ -3241,9 +3241,13 @@ export class Store {
     content?: string;
     chapterType?: ChapterType;
     insertAfterChapterId?: string;
+    insertBeforeChapterId?: string;
     numberTitle?: boolean;
   }): Record<string, unknown> {
     return this.db.transaction(() => {
+      if (input.insertAfterChapterId && input.insertBeforeChapterId) {
+        throw new AppError(400, "CHAPTER_INSERT_ANCHOR_CONFLICT", "不能同时指定章节前后插入位置");
+      }
       this.getWork(workId);
       const volume = this.getVolume(input.volumeId);
       if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
@@ -3251,13 +3255,17 @@ export class Store {
       const rows = this.listActiveChapterRows(workId, input.volumeId);
       let sortOrder = numberValue(this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId) ?? {}, "value") + 1;
       let insertIndex = rows.length;
-      if (input.insertAfterChapterId) {
-        const anchor = this.getChapter(input.insertAfterChapterId);
+      const anchorId = input.insertBeforeChapterId ?? input.insertAfterChapterId;
+      if (anchorId) {
+        const anchor = this.getChapter(anchorId);
         if (anchor.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
-        if (String(anchor.volumeId) === input.volumeId) {
-          sortOrder = Number(anchor.sortOrder) + 1;
-          insertIndex = rows.findIndex((row) => requiredString(row, "id") === input.insertAfterChapterId) + 1;
-          if (insertIndex <= 0) insertIndex = rows.length;
+        const anchorIndex = String(anchor.volumeId) === input.volumeId
+          ? rows.findIndex((row) => requiredString(row, "id") === anchorId)
+          : -1;
+        if (anchorIndex >= 0) {
+          const before = Boolean(input.insertBeforeChapterId);
+          sortOrder = Number(anchor.sortOrder) + (before ? 0 : 1);
+          insertIndex = anchorIndex + (before ? 0 : 1);
           this.db.run(
             "UPDATE chapters SET sort_order = sort_order + 1, updated_at = ? WHERE volume_id = ? AND deleted_at IS NULL AND sort_order >= ?",
             timestamp,

@@ -9953,9 +9953,10 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
   const canManageChapter = canEditProse();
   const canAddAiReference = canWritePermissionModule(state.work, "ai-chat");
   menu.querySelector("strong").textContent = `操作“${chapter.title}”`;
-  menu.querySelectorAll("[data-chapter-type], [data-delete-chapter], [data-insert-chapter-after]").forEach((button) => button.classList.toggle("hidden", !canManageChapter));
+  menu.querySelectorAll("[data-chapter-type], [data-delete-chapter], [data-insert-chapter-before], [data-insert-chapter-after]").forEach((button) => button.classList.toggle("hidden", !canManageChapter));
   menu.querySelector("[data-add-chapter-ai-reference]")?.classList.toggle("hidden", !canAddAiReference);
   menu.querySelector("#chapter-type-ai-reference-separator")?.classList.toggle("hidden", !(canManageChapter && canAddAiReference));
+  menu.querySelector("#chapter-insert-separator")?.classList.toggle("hidden", !canManageChapter);
   menu.querySelectorAll("[data-chapter-type]").forEach((button) => {
     button.classList.toggle("active", button.dataset.chapterType === (chapter.chapterType || "正文"));
     button.setAttribute("aria-checked", String(button.classList.contains("active")));
@@ -16375,7 +16376,30 @@ async function reloadWorkDirectory(workId) {
   loadedVolumeChapterIds.clear();
   for (const volume of state.work.volumes) loadedVolumeChapterIds.add(volume.id);
   renderTree();
-  if (state.chapter) syncChapterTreeSelection();
+  if (state.chapter) {
+    const fresh = state.work.volumes.flatMap((volume) => volume.chapters).find((item) => item.id === state.chapter.id);
+    // 插入或重排会改写已打开章节的序号。目录已经是新标题，但内存中的当前章节仍可能是旧标题；先对齐再同步，避免把旧序号写回目录节点。
+    if (fresh && fresh.title !== state.chapter.title) {
+      const previousTitle = state.chapter.title;
+      state.chapter = {
+        ...state.chapter,
+        title: fresh.title,
+        sortOrder: fresh.sortOrder,
+        versionNo: fresh.versionNo,
+        wordCount: fresh.wordCount,
+        chapterType: fresh.chapterType ?? state.chapter.chapterType
+      };
+      const titleInput = $("#chapter-title");
+      if (titleInput.value.trim() === previousTitle) {
+        titleInput.value = fresh.title;
+        chapterTitleOnFocus = fresh.title;
+        if (lastSavedChapterSnapshot?.chapterId === state.chapter.id) {
+          lastSavedChapterSnapshot = { ...lastSavedChapterSnapshot, title: fresh.title };
+        }
+      }
+    }
+    syncChapterTreeSelection();
+  }
   return state.work;
 }
 
@@ -16387,19 +16411,23 @@ function rememberWorkVersion(work) {
 
 async function openChapterDialog(volumeId = null) {
   const insertAfterChapterId = openChapterDialog.insertAfterChapterId ?? null;
+  const insertBeforeChapterId = openChapterDialog.insertBeforeChapterId ?? null;
   openChapterDialog.insertAfterChapterId = null;
+  openChapterDialog.insertBeforeChapterId = null;
   if (!state.work) return openWorkDialog();
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，正文为只读", "error");
   if (!state.work.volumes.length) {
     await api(`/api/works/${state.work.id}/volumes`, { method: "POST", body: { title: "正文", kind: "main" } });
     await reloadWorkDirectory(state.work.id);
   }
-  const anchorLocation = insertAfterChapterId ? findChapterLocation(insertAfterChapterId) : null;
+  const anchorId = insertBeforeChapterId ?? insertAfterChapterId;
+  const anchorLocation = anchorId ? findChapterLocation(anchorId) : null;
   const anchor = anchorLocation?.chapter ?? null;
+  const insertBefore = Boolean(anchor && insertBeforeChapterId);
   const preferredVolumeId = anchorLocation?.volume.id ?? volumeId;
   const selectedVolumeId = state.work.volumes.some((volume) => volume.id === preferredVolumeId) ? preferredVolumeId : state.work.volumes[0].id;
   const volumeField = anchor
-    ? `<input type="hidden" name="volumeId" value="${esc(selectedVolumeId)}"><p class="form-field-note">插入到“${esc(anchor.title)}”之后。开启标题编号时，只为本卷补序号并后移本卷后续章节，其他分卷保持不变。</p>`
+    ? `<input type="hidden" name="volumeId" value="${esc(selectedVolumeId)}"><p class="form-field-note">插入到“${esc(anchor.title)}”${insertBefore ? "之前" : "之后"}。开启标题编号时，只为本卷补序号并后移本卷后续章节，其他分卷保持不变。</p>`
     : field("volumeId", "所属卷", "select", selectedVolumeId, state.work.volumes.map((volume) => [volume.id, volume.title]));
   openDialog(anchor ? "插入章节" : "新建章节", field("title", "章节标题") + volumeField + field("chapterType", "章节类型", "select", "正文", chapterTypes.map((value) => [value, value])), async (form) => {
     const preference = currentChapterTitlePreference();
@@ -16409,7 +16437,8 @@ async function openChapterDialog(volumeId = null) {
       chapterType: form.get("chapterType"),
       content: ""
     };
-    if (anchor) body.insertAfterChapterId = anchor.id;
+    if (anchor && insertBefore) body.insertBeforeChapterId = anchor.id;
+    else if (anchor) body.insertAfterChapterId = anchor.id;
     if (preference !== "off") body.numberTitle = true;
     const chapter = await api(`/api/works/${state.work.id}/chapters`, { method: "POST", body });
     await reloadWorkDirectory(state.work.id);
@@ -22387,13 +22416,15 @@ $("#chapter-type-menu").addEventListener("click", async (event) => {
     if (chapterId) addChapterAsAiReference(chapterId);
     return;
   }
-  const insertButton = event.target.closest("[data-insert-chapter-after]");
-  if (insertButton) {
+  const insertBeforeButton = event.target.closest("[data-insert-chapter-before]");
+  const insertAfterButton = event.target.closest("[data-insert-chapter-after]");
+  if (insertBeforeButton || insertAfterButton) {
     const chapterId = state.contextChapterId;
     const location = chapterId ? findChapterLocation(chapterId) : null;
     closeChapterTypeMenu();
     if (location) {
-      openChapterDialog.insertAfterChapterId = chapterId;
+      if (insertBeforeButton) openChapterDialog.insertBeforeChapterId = chapterId;
+      else openChapterDialog.insertAfterChapterId = chapterId;
       await openChapterDialog(location.volume.id);
     }
     return;
