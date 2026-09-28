@@ -259,7 +259,8 @@ const state = {
   relationshipExpandedMap: null,
   collapsedVolumeIds: new Set(),
   collapsedRaceIds: new Set(),
-  contextChapterId: null
+  contextChapterId: null,
+  contextVolumeId: null
 };
 
 let platformAiProtocolOptions = [];
@@ -1274,6 +1275,7 @@ let latestAiContextUsage = null;
 const aiConversationHistoryPageLimit = 20;
 let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
+let workDirectoryRevision = 0;
 let workSelectionRequestGeneration = 0;
 let initialWorkDetail = null;
 let initialReaderChapterRequest = null;
@@ -9471,6 +9473,7 @@ async function selectWork(workId, preferredChapterId = null) {
   chapterEditorReadOnly = true;
   if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
   applyWorkAccessMode();
+  void refreshChapterTitleFormat();
   startBackgroundTaskCenter(nextWork.id);
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
@@ -9490,26 +9493,27 @@ async function loadVolumeChapters(volumeId) {
   if (existingRequest) return existingRequest;
   const workId = state.work.id;
   const generation = workScopedUiGeneration;
+  const directoryRevision = workDirectoryRevision;
   volumeChapterLoadingIds.add(volumeId);
   renderTree([volumeId]);
   const request = (async () => {
     try {
       const chapters = await apiAllPages(`/api/volumes/${encodeURIComponent(volumeId)}/chapters`, 100);
-      if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
+      if (state.work?.id !== workId || generation !== workScopedUiGeneration || directoryRevision !== workDirectoryRevision) return;
       const volume = state.work.volumes.find((item) => item.id === volumeId);
       if (!volume) return;
       volume.chapters = chapters;
       volume.chapterCount = chapters.length;
       loadedVolumeChapterIds.add(volumeId);
     } catch (error) {
-      if (state.work?.id === workId && generation === workScopedUiGeneration) {
+      if (state.work?.id === workId && generation === workScopedUiGeneration && directoryRevision === workDirectoryRevision) {
         toast(`加载分卷章节失败：${error.message}`, "error");
       }
     } finally {
       if (volumeChapterRequests.get(volumeId) === request) {
         volumeChapterLoadingIds.delete(volumeId);
         volumeChapterRequests.delete(volumeId);
-        if (state.work?.id === workId && generation === workScopedUiGeneration) renderTree([volumeId]);
+        if (state.work?.id === workId && generation === workScopedUiGeneration && directoryRevision === workDirectoryRevision) renderTree([volumeId]);
       }
     }
   })();
@@ -9616,7 +9620,7 @@ function renderTree(volumeIds = null) {
     return `
     <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
-        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键打开分卷详情；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span class="volume-chapter-count"><span class="volume-chapter-count-number">${Number(volume.chapterCount ?? chapters.length)}</span><span class="volume-chapter-count-unit"> 章</span></span></button>
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键打开分卷菜单；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span class="volume-chapter-count"><span class="volume-chapter-count-number">${Number(volume.chapterCount ?? chapters.length)}</span><span class="volume-chapter-count-unit"> 章</span></span></button>
         ${proseEditable ? `<button class="ghost-button volume-detail-button" type="button" data-volume-detail="${esc(volume.id)}" aria-label="打开“${esc(volume.title)}”分卷详情" title="打开“${esc(volume.title)}”分卷详情"><svg class="volume-detail-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 10.5v5.5M12 7.5h.01"></path></svg></button>` : ""}
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
@@ -9650,12 +9654,13 @@ function renderTree(volumeIds = null) {
     button.addEventListener("contextmenu", (event) => {
       if (!canEditProse()) return;
       event.preventDefault();
-      openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
+      openVolumeContextMenu(button.dataset.volumeToggle, event.clientX, event.clientY);
     });
     button.addEventListener("keydown", (event) => {
       if (!canEditProse() || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
       event.preventDefault();
-      openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
+      const rect = button.getBoundingClientRect();
+      openVolumeContextMenu(button.dataset.volumeToggle, rect.left, rect.bottom);
     });
     if (proseEditable) {
       button.addEventListener("dragover", (event) => {
@@ -9940,6 +9945,7 @@ function closeChapterTypeMenu() {
 }
 
 function openChapterTypeMenu(chapterId, clientX, clientY) {
+  closeVolumeContextMenu();
   const chapter = state.work?.volumes.flatMap((volume) => volume.chapters).find((item) => item.id === chapterId);
   if (!chapter) return;
   state.contextChapterId = chapterId;
@@ -9947,7 +9953,7 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
   const canManageChapter = canEditProse();
   const canAddAiReference = canWritePermissionModule(state.work, "ai-chat");
   menu.querySelector("strong").textContent = `操作“${chapter.title}”`;
-  menu.querySelectorAll("[data-chapter-type], [data-delete-chapter]").forEach((button) => button.classList.toggle("hidden", !canManageChapter));
+  menu.querySelectorAll("[data-chapter-type], [data-delete-chapter], [data-insert-chapter-after]").forEach((button) => button.classList.toggle("hidden", !canManageChapter));
   menu.querySelector("[data-add-chapter-ai-reference]")?.classList.toggle("hidden", !canAddAiReference);
   menu.querySelector("#chapter-type-ai-reference-separator")?.classList.toggle("hidden", !(canManageChapter && canAddAiReference));
   menu.querySelectorAll("[data-chapter-type]").forEach((button) => {
@@ -16285,19 +16291,131 @@ async function deleteWork(work) {
   }
 }
 
+const chapterTitleFormatLabels = {
+  off: "不自动编号",
+  auto: "自动识别",
+  dot: "N. 标题",
+  "chapter-arabic": "第N章 标题",
+  "chapter-chinese": "第N章（中文数字）",
+  enumeration: "N、标题",
+  english: "Chapter N:"
+};
+let chapterTitleFormatStatus = null;
+let chapterTitleOnFocus = "";
+
+function chapterTitleHasNumber(title) {
+  const source = String(title ?? "").trim();
+  return /^(?:第\s*(?:[0-9０-９]+|[〇零一二三四五六七八九十百千万两]+)\s*章|chap(?:ter)?\.?\s*[0-9０-９]+|[0-9０-９]+\s*[.．、])/iu.test(source);
+}
+
+function currentChapterTitleFormatStatus() {
+  if (!chapterTitleFormatStatus || chapterTitleFormatStatus.workId !== state.work?.id) return null;
+  return chapterTitleFormatStatus;
+}
+
+function currentChapterTitlePreference() {
+  const preference = state.work?.chapterTitleFormat || currentChapterTitleFormatStatus()?.preference || "off";
+  return chapterTitleFormatLabels[preference] ? preference : "off";
+}
+
+function describeChapterTitleFormatNote(preference, status) {
+  if (!state.work) return "选择作品后，可以识别已有标题格式，或指定一种常见格式。";
+  if (preference === "off") return "关闭后，新建和插入章节保持手写标题。需要整理某一卷时，再打开该卷的标题编号并重新编号。";
+  if (preference === "auto") {
+    if (status?.detected) return `已识别为「${chapterTitleFormatLabels[status.detected]}」。插入章节时按此格式编号，并只后移本卷后面的序号。`;
+    return "现有标题还没有压倒性的同一种格式。请选择一种常见格式，或重新编号本卷。";
+  }
+  const label = chapterTitleFormatLabels[preference] ?? preference;
+  return `新插入的章节使用「${label}」。切换格式不会改写已有标题；只有重新编号本卷才会改写这一卷。`;
+}
+
+function syncVolumeTitleNumberingNote() {
+  const note = $("#volume-title-number-note");
+  const select = $("#dialog-fields select[name='chapterTitleFormat']");
+  if (!note || !select) return;
+  const preference = currentChapterTitlePreference();
+  if (document.activeElement !== select && chapterTitleFormatLabels[preference]) select.value = preference;
+  note.textContent = describeChapterTitleFormatNote(select.value || preference, currentChapterTitleFormatStatus());
+}
+
+async function refreshChapterTitleFormat() {
+  const workId = state.work?.id;
+  if (!workId) {
+    chapterTitleFormatStatus = null;
+    syncVolumeTitleNumberingNote();
+    return;
+  }
+  const requestId = ++refreshChapterTitleFormat.requestId;
+  try {
+    const status = await api(`/api/works/${encodeURIComponent(workId)}/chapter-title-format`);
+    if (requestId !== refreshChapterTitleFormat.requestId || state.work?.id !== workId) return;
+    chapterTitleFormatStatus = { ...status, workId };
+    state.work.chapterTitleFormat = status.preference;
+    syncVolumeTitleNumberingNote();
+  } catch (error) {
+    if (requestId === refreshChapterTitleFormat.requestId && state.work?.id === workId) syncVolumeTitleNumberingNote();
+  }
+}
+refreshChapterTitleFormat.requestId = 0;
+
+async function reloadWorkDirectory(workId) {
+  const revision = ++workDirectoryRevision;
+  const directory = await api(`/api/works/${encodeURIComponent(workId)}`);
+  if (state.work?.id !== workId || revision !== workDirectoryRevision) return null;
+  const collapsed = state.collapsedVolumeIds;
+  state.work = {
+    ...directory,
+    volumes: (directory.volumes ?? []).map((volume) => ({
+      ...volume,
+      chapters: Array.isArray(volume.chapters) ? volume.chapters : [],
+      chapterCount: Array.isArray(volume.chapters) ? volume.chapters.length : Number(volume.chapterCount ?? 0)
+    }))
+  };
+  state.collapsedVolumeIds = collapsed;
+  loadedVolumeChapterIds.clear();
+  for (const volume of state.work.volumes) loadedVolumeChapterIds.add(volume.id);
+  renderTree();
+  if (state.chapter) syncChapterTreeSelection();
+  return state.work;
+}
+
+function rememberWorkVersion(work) {
+  if (!work?.id) return;
+  const listed = state.works.find((item) => item.id === work.id);
+  if (listed) listed.versionNo = work.versionNo;
+}
+
 async function openChapterDialog(volumeId = null) {
+  const insertAfterChapterId = openChapterDialog.insertAfterChapterId ?? null;
+  openChapterDialog.insertAfterChapterId = null;
   if (!state.work) return openWorkDialog();
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，正文为只读", "error");
   if (!state.work.volumes.length) {
     await api(`/api/works/${state.work.id}/volumes`, { method: "POST", body: { title: "正文", kind: "main" } });
-    state.work = await api(`/api/works/${state.work.id}`);
-    renderTree();
+    await reloadWorkDirectory(state.work.id);
   }
-  const selectedVolumeId = state.work.volumes.some((volume) => volume.id === volumeId) ? volumeId : state.work.volumes[0].id;
-  openDialog("新建章节", field("title", "章节标题") + field("volumeId", "所属卷", "select", selectedVolumeId, state.work.volumes.map((volume) => [volume.id, volume.title])) + field("chapterType", "章节类型", "select", "正文", chapterTypes.map((value) => [value, value])), async (form) => {
-    const chapter = await api(`/api/works/${state.work.id}/chapters`, { method: "POST", body: { title: form.get("title"), volumeId: form.get("volumeId"), chapterType: form.get("chapterType"), content: "" } });
-    state.work = await api(`/api/works/${state.work.id}`);
+  const anchorLocation = insertAfterChapterId ? findChapterLocation(insertAfterChapterId) : null;
+  const anchor = anchorLocation?.chapter ?? null;
+  const preferredVolumeId = anchorLocation?.volume.id ?? volumeId;
+  const selectedVolumeId = state.work.volumes.some((volume) => volume.id === preferredVolumeId) ? preferredVolumeId : state.work.volumes[0].id;
+  const volumeField = anchor
+    ? `<input type="hidden" name="volumeId" value="${esc(selectedVolumeId)}"><p class="form-field-note">插入到“${esc(anchor.title)}”之后。开启标题编号时，只为本卷补序号并后移本卷后续章节，其他分卷保持不变。</p>`
+    : field("volumeId", "所属卷", "select", selectedVolumeId, state.work.volumes.map((volume) => [volume.id, volume.title]));
+  openDialog(anchor ? "插入章节" : "新建章节", field("title", "章节标题") + volumeField + field("chapterType", "章节类型", "select", "正文", chapterTypes.map((value) => [value, value])), async (form) => {
+    const preference = currentChapterTitlePreference();
+    const body = {
+      title: form.get("title"),
+      volumeId: form.get("volumeId"),
+      chapterType: form.get("chapterType"),
+      content: ""
+    };
+    if (anchor) body.insertAfterChapterId = anchor.id;
+    if (preference !== "off") body.numberTitle = true;
+    const chapter = await api(`/api/works/${state.work.id}/chapters`, { method: "POST", body });
+    await reloadWorkDirectory(state.work.id);
     await selectChapter(chapter.id, { editMode: true });
+    if (state.chapter?.id === chapter.id) $("#chapter-title").value = state.chapter.title;
+    void refreshChapterTitleFormat();
   });
 }
 
@@ -16338,6 +16456,145 @@ function openVolumeDialog(item) {
   $("#dialog-fields").querySelector("[data-dialog-volume-delete]")?.addEventListener("click", () => {
     void deleteVolume(item);
   });
+}
+
+function closeVolumeContextMenu() {
+  state.contextVolumeId = null;
+  $("#volume-context-menu")?.classList.add("hidden");
+}
+
+function openVolumeContextMenu(volumeId, clientX, clientY) {
+  const volume = state.work?.volumes.find((item) => item.id === volumeId);
+  if (!volume || !canEditProse()) return;
+  closeChapterTypeMenu();
+  state.contextVolumeId = volumeId;
+  const menu = $("#volume-context-menu");
+  menu.querySelector("strong").textContent = `操作“${volume.title}”`;
+  menu.classList.remove("hidden");
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - rect.height - 8))}px`;
+}
+
+let chapterTitleFormatSave = null;
+
+async function saveChapterTitleFormat(next, select = null) {
+  const run = () => saveChapterTitleFormatNow(next, select);
+  const pending = (chapterTitleFormatSave ?? Promise.resolve()).then(run, run);
+  chapterTitleFormatSave = pending.finally(() => {
+    if (chapterTitleFormatSave === pending) chapterTitleFormatSave = null;
+  });
+  return chapterTitleFormatSave;
+}
+
+async function saveChapterTitleFormatNow(next, select = null) {
+  const previous = currentChapterTitlePreference();
+  if (!state.work || !chapterTitleFormatLabels[next] || next === previous) {
+    syncVolumeTitleNumberingNote();
+    return next === previous;
+  }
+  if (!canEditProse()) {
+    if (select) select.value = previous;
+    toast("当前权限不能修改正文目录", "error");
+    return false;
+  }
+  if (select) select.disabled = true;
+  try {
+    const status = await api(`/api/works/${encodeURIComponent(state.work.id)}/chapter-title-format`, {
+      method: "PATCH",
+      body: { chapterTitleFormat: next, expectedVersionNo: state.work.versionNo }
+    });
+    if (state.work?.id) {
+      state.work.chapterTitleFormat = status.preference;
+      state.work.versionNo = status.versionNo;
+      rememberWorkVersion(state.work);
+      chapterTitleFormatStatus = { ...status, workId: state.work.id };
+    }
+    syncVolumeTitleNumberingNote();
+    toast(next === "off"
+      ? "已关闭自动编号，已有章节标题保持不变"
+      : `标题编号已改为「${chapterTitleFormatLabels[next]}」。已有章节不会立刻改写，可在该卷的标题编号里重新编号。`);
+    return true;
+  } catch (error) {
+    if (select) select.value = previous;
+    toast(error.message, "error");
+    return false;
+  } finally {
+    if (select?.isConnected) select.disabled = false;
+    syncVolumeTitleNumberingNote();
+  }
+}
+
+function openVolumeTitleNumberingDialog(item) {
+  if (!state.work || !item || !canEditProse()) return toast("当前权限不能修改分卷", "error");
+  const preference = currentChapterTitlePreference();
+  openDialog("标题编号",
+    field("chapterTitleFormat", "编号格式", "select", preference, Object.entries(chapterTitleFormatLabels)) +
+    `<p id="volume-title-number-note" class="form-field-note">${esc(describeChapterTitleFormatNote(preference, currentChapterTitleFormatStatus()))}</p>` +
+    `<p class="form-field-note">编号格式供这部作品的新章节使用，切换后不会改写已有标题。重新编号只改写“${esc(item.title)}”，其他分卷保持不变。插入章节时，也只给所在分卷补序号并后移该卷后续章节。</p>` +
+    `<div class="entity-dialog-management-actions"><button class="ghost-button" type="button" data-volume-title-renumber>重新编号本卷</button></div>`,
+    async () => {},
+    "分卷",
+    { submitLabel: "完成", meta: item.title }
+  );
+  const select = $("#dialog-fields select[name='chapterTitleFormat']");
+  select?.addEventListener("change", () => {
+    void saveChapterTitleFormat(select.value, select);
+  });
+  $("#dialog-fields").querySelector("[data-volume-title-renumber]")?.addEventListener("click", async () => {
+    if (select && select.value !== currentChapterTitlePreference()) {
+      const saved = await saveChapterTitleFormat(select.value, select);
+      if (!saved) return;
+    }
+    await renumberVolumeChapterTitles(item);
+  });
+  void refreshChapterTitleFormat();
+}
+
+async function renumberVolumeChapterTitles(item) {
+  if (!state.work || !item || !canEditProse()) return toast("当前权限不能修改分卷", "error");
+  const preference = $("#dialog-fields select[name='chapterTitleFormat']")?.value || currentChapterTitlePreference();
+  const status = currentChapterTitleFormatStatus();
+  if (preference === "off" || (preference === "auto" && status && !status.resolved)) {
+    toast("请先选择标题编号格式，或使用自动识别", "error");
+    return;
+  }
+  $("#form-dialog").close();
+  const confirmed = await confirmToast(`按当前标题编号格式，重新编排分卷“${item.title}”里的章节序号。只影响这一卷，序号以外的标题文字会保留，其他分卷不变。`, {
+    title: "重新编号本卷",
+    confirmLabel: "重新编号"
+  });
+  if (!confirmed) return openVolumeTitleNumberingDialog(item);
+  try {
+    const result = await api(`/api/volumes/${encodeURIComponent(item.id)}/renumber-titles`, { method: "POST", body: {} });
+    const workId = state.work.id;
+    const selectedId = state.chapter?.id ?? null;
+    const selectedVolumeId = state.chapter?.volumeId ?? null;
+    const contentBefore = selectedId ? $("#chapter-content").value : "";
+    await reloadWorkDirectory(workId);
+    if (selectedId && selectedVolumeId === item.id && state.work?.id === workId) {
+      const fresh = await api(`/api/chapters/${encodeURIComponent(selectedId)}`);
+      if (state.chapter?.id === selectedId) {
+        const contentDirty = Boolean(lastSavedChapterSnapshot) && contentBefore !== lastSavedChapterSnapshot.content;
+        state.chapter = { ...state.chapter, title: fresh.title, versionNo: fresh.versionNo, updatedAt: fresh.updatedAt };
+        $("#chapter-title").value = fresh.title;
+        lastSavedChapterSnapshot = {
+          chapterId: selectedId,
+          title: fresh.title,
+          content: contentDirty ? lastSavedChapterSnapshot.content : state.chapter.content
+        };
+        updateChapterPath();
+        syncChapterTreeSelection();
+        if (contentDirty) scheduleChapterAutoSave(120);
+      }
+    }
+    const label = chapterTitleFormatLabels[result.format] ?? result.format;
+    toast(`已按「${label}」重新编号分卷“${item.title}”，从 ${result.startAt} 起更新 ${result.updated} 章`);
+    void refreshChapterTitleFormat();
+  } catch (error) {
+    toast(error.message, "error");
+    openVolumeTitleNumberingDialog(item);
+  }
 }
 
 async function deleteVolume(item) {
@@ -21567,6 +21824,12 @@ $("#appearance-form").addEventListener("submit", (event) => {
   $("#appearance-dialog").close();
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
+$("#chapter-title").addEventListener("focus", () => {
+  chapterTitleOnFocus = $("#chapter-title").value.trim();
+});
+$("#chapter-title").addEventListener("blur", () => {
+  void applyEditedChapterTitleNumber();
+});
 $("#chapter-title").addEventListener("input", () => scheduleChapterAutoSave());
 $("#chapter-content").addEventListener("beforeinput", (event) => {
   if (!state.chapter) return;
@@ -22063,12 +22326,76 @@ $("#cover-file").addEventListener("change", async (event) => {
     event.target.value = "";
   }
 });
+async function applyEditedChapterTitleNumber() {
+  if (!state.chapter || !canEditProse() || chapterEditorReadOnly) return;
+  const preference = currentChapterTitlePreference();
+  if (preference === "off") return;
+  if (chapterSaveInFlight) await chapterSaveInFlight;
+  if (!state.chapter || chapterEditorReadOnly) return;
+  const title = $("#chapter-title").value.trim();
+  const titleAtFocus = chapterTitleOnFocus;
+  if (!title || chapterTitleHasNumber(title)) return;
+  if (title === titleAtFocus && title === lastSavedChapterSnapshot?.title) return;
+  cancelChapterAutoSave();
+  const chapterId = state.chapter.id;
+  const workId = state.work.id;
+  const contentBefore = $("#chapter-content").value;
+  try {
+    const chapter = await api(`/api/chapters/${encodeURIComponent(chapterId)}/apply-title-number`, {
+      method: "POST",
+      body: { title, expectedVersionNo: state.chapter.versionNo }
+    });
+    if (state.work?.id !== workId) return;
+    await reloadWorkDirectory(workId);
+    if (state.chapter?.id !== chapterId || state.work?.id !== workId) return;
+    const contentDirty = Boolean(lastSavedChapterSnapshot) && contentBefore !== lastSavedChapterSnapshot.content;
+    state.chapter = { ...state.chapter, ...chapter, content: state.chapter.content };
+    $("#chapter-title").value = chapter.title;
+    chapterTitleOnFocus = chapter.title;
+    lastSavedChapterSnapshot = {
+      chapterId,
+      title: chapter.title,
+      content: contentDirty ? lastSavedChapterSnapshot.content : state.chapter.content
+    };
+    syncChapterTreeSelection();
+    if (contentDirty) scheduleChapterAutoSave(120);
+    else setSaveState("已保存");
+    void refreshChapterTitleFormat();
+  } catch (error) {
+    toast(error.message, "error");
+    if (state.chapter?.id === chapterId) scheduleChapterAutoSave(120);
+  }
+}
+
+$("#volume-context-menu").addEventListener("click", (event) => {
+  const volume = state.work?.volumes.find((item) => item.id === state.contextVolumeId);
+  if (event.target.closest("[data-volume-menu-detail]")) {
+    closeVolumeContextMenu();
+    if (volume) openVolumeDialog(volume);
+    return;
+  }
+  if (event.target.closest("[data-volume-menu-numbering]")) {
+    closeVolumeContextMenu();
+    if (volume) openVolumeTitleNumberingDialog(volume);
+  }
+});
 $("#chapter-type-menu").addEventListener("click", async (event) => {
   const aiReferenceButton = event.target.closest("[data-add-chapter-ai-reference]");
   if (aiReferenceButton) {
     const chapterId = state.contextChapterId;
     closeChapterTypeMenu();
     if (chapterId) addChapterAsAiReference(chapterId);
+    return;
+  }
+  const insertButton = event.target.closest("[data-insert-chapter-after]");
+  if (insertButton) {
+    const chapterId = state.contextChapterId;
+    const location = chapterId ? findChapterLocation(chapterId) : null;
+    closeChapterTypeMenu();
+    if (location) {
+      openChapterDialog.insertAfterChapterId = chapterId;
+      await openChapterDialog(location.volume.id);
+    }
     return;
   }
   const deleteButton = event.target.closest("[data-delete-chapter]");
@@ -22112,6 +22439,7 @@ document.addEventListener("contextmenu", (event) => {
 });
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#chapter-type-menu")) closeChapterTypeMenu();
+  if (!event.target.closest("#volume-context-menu")) closeVolumeContextMenu();
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
   if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
   if (!event.target.closest("#manuscript-export-menu") && !event.target.closest("#export-button") && !event.target.closest("#work-export-button")) {

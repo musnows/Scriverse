@@ -976,7 +976,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
     expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");
-    expect(application.text).toContain('title="左键展开或折叠；右键打开分卷详情；可将章节拖到这里追加"');
+    expect(application.text).toContain('title="左键展开或折叠；右键打开分卷菜单；可将章节拖到这里追加"');
+    expect(application.text).toContain("openVolumeContextMenu(button.dataset.volumeToggle, event.clientX, event.clientY)");
     expect(application.text).toContain("const proseEditable = canEditProse();");
     expect(application.text).toContain("${proseEditable ? `<button class=\"add-button chapter-add-button\"");
     expect(application.text).toContain('class="add-button chapter-add-button"');
@@ -986,7 +987,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".volume-detail-button { display: inline-flex; flex: 0 0 40px;");
     expect(styles.text).not.toContain(".panel-heading, #novel-tree { display: none; }");
     expect(application.text).toContain('aria-label="在“${esc(volume.title)}”中新建章节"');
-    expect(application.text).toContain('button.dataset.volumeToggle));');
+    expect(application.text).toContain("openVolumeContextMenu(button.dataset.volumeToggle, rect.left, rect.bottom)");
     expect(application.text).toContain('class="record-card character-card preview-record-card has-card-edit has-pin-control" data-open-character');
     expect(application.text).toContain('class="character-lock-badge"');
     expect(application.text).toContain('class="record-card module-row character-row character-card preview-record-card"');

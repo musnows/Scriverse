@@ -935,6 +935,137 @@ describe("作品、导入和章节版本 API", () => {
     expect(rangeOverflow.body.error.code).toBe("CHAPTER_NUMBER_RANGE");
   });
 
+  it("按本卷自动编号，并允许只重排一个分卷", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "自动编号作品" }).expect(201);
+    const workId = work.body.data.id;
+    const main = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "正文" }).expect(201);
+    const extra = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "番外" }).expect(201);
+    const before = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "36. 拜访孤爪 | 摩斯拉"
+    }).expect(201);
+    const after = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "37. 下一章 | 摩斯拉"
+    }).expect(201);
+    const side = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: extra.body.data.id,
+      title: "1. 番外开场 | 角色"
+    }).expect(201);
+
+    const detected = await request(runtime.app).get(`/api/works/${workId}/chapter-title-format`).expect(200);
+    expect(detected.body.data).toEqual({ preference: "off", detected: "dot", resolved: null });
+
+    const unchanged = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "未开启时保持原文",
+      insertAfterChapterId: before.body.data.id,
+      numberTitle: true
+    }).expect(201);
+    expect(unchanged.body.data.title).toBe("未开启时保持原文");
+
+    const preference = await request(runtime.app).patch(`/api/works/${workId}/chapter-title-format`).send({
+      chapterTitleFormat: "auto",
+      expectedVersionNo: work.body.data.versionNo
+    }).expect(200);
+    expect(preference.body.data).toMatchObject({ preference: "auto", detected: "dot", resolved: "dot" });
+
+    const firstInsert = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "偷偷去找她 | 哥斯拉",
+      insertAfterChapterId: before.body.data.id,
+      numberTitle: true
+    }).expect(201);
+    const secondInsert = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: main.body.data.id,
+      title: "噩梦与相伴 | 摩斯拉",
+      insertAfterChapterId: firstInsert.body.data.id,
+      numberTitle: true
+    }).expect(201);
+    expect(firstInsert.body.data.title).toBe("37. 偷偷去找她 | 哥斯拉");
+    expect(secondInsert.body.data.title).toBe("38. 噩梦与相伴 | 摩斯拉");
+
+    const insertedTree = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(insertedTree.body.data.volumes[0].chapters.map((chapter: { title: string }) => chapter.title)).toEqual([
+      "36. 拜访孤爪 | 摩斯拉",
+      "37. 偷偷去找她 | 哥斯拉",
+      "38. 噩梦与相伴 | 摩斯拉",
+      "未开启时保持原文",
+      "39. 下一章 | 摩斯拉"
+    ]);
+    expect(insertedTree.body.data.volumes[1].chapters.map((chapter: { title: string }) => chapter.title)).toEqual([
+      "1. 番外开场 | 角色"
+    ]);
+
+    const manual = await request(runtime.app).post(`/api/chapters/${unchanged.body.data.id}/apply-title-number`).send({
+      title: "补上的标题 | 哥斯拉",
+      expectedVersionNo: unchanged.body.data.versionNo
+    }).expect(200);
+    expect(manual.body.data.title).toBe("39. 补上的标题 | 哥斯拉");
+    const afterManual = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(afterManual.body.data.volumes[0].chapters.map((chapter: { title: string }) => chapter.title)).toEqual([
+      "36. 拜访孤爪 | 摩斯拉",
+      "37. 偷偷去找她 | 哥斯拉",
+      "38. 噩梦与相伴 | 摩斯拉",
+      "39. 补上的标题 | 哥斯拉",
+      "40. 下一章 | 摩斯拉"
+    ]);
+    expect(afterManual.body.data.volumes[1].chapters[0].title).toBe("1. 番外开场 | 角色");
+
+    await request(runtime.app).patch(`/api/works/${workId}/chapter-title-format`).send({
+      chapterTitleFormat: "chapter-arabic",
+      expectedVersionNo: preference.body.data.versionNo
+    }).expect(200);
+    const switched = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(switched.body.data.volumes[0].chapters[0].title).toBe("36. 拜访孤爪 | 摩斯拉");
+
+    const renumbered = await request(runtime.app).post(`/api/volumes/${main.body.data.id}/renumber-titles`).send({}).expect(200);
+    expect(renumbered.body.data).toMatchObject({ format: "chapter-arabic", startAt: 36, updated: 5 });
+    const renumberedTree = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(renumberedTree.body.data.volumes[0].chapters.map((chapter: { title: string }) => chapter.title)).toEqual([
+      "第36章 拜访孤爪 | 摩斯拉",
+      "第37章 偷偷去找她 | 哥斯拉",
+      "第38章 噩梦与相伴 | 摩斯拉",
+      "第39章 补上的标题 | 哥斯拉",
+      "第40章 下一章 | 摩斯拉"
+    ]);
+    expect(renumberedTree.body.data.volumes[1].chapters.map((chapter: { title: string; versionNo: number }) => [chapter.title, chapter.versionNo])).toEqual([
+      ["1. 番外开场 | 角色", 1]
+    ]);
+    expect(renumberedTree.body.data.chapterTitleFormat).toBe("chapter-arabic");
+
+    await request(runtime.app).patch(`/api/works/${workId}/chapter-title-format`).send({ chapterTitleFormat: "off" }).expect(200);
+    const required = await request(runtime.app).post(`/api/volumes/${extra.body.data.id}/renumber-titles`).send({}).expect(400);
+    expect(required.body.error.code).toBe("CHAPTER_TITLE_FORMAT_REQUIRED");
+    const preservedSide = await request(runtime.app).get(`/api/chapters/${side.body.data.id}`).expect(200);
+    expect(preservedSide.body.data).toMatchObject({ title: "1. 番外开场 | 角色", versionNo: 1 });
+
+    const oversizedSuffix = "长".repeat(297);
+    const longWork = await request(runtime.app).post("/api/works").send({ title: "编号回滚作品", chapterTitleFormat: "dot" }).expect(201);
+    const longVolume = await request(runtime.app).post(`/api/works/${longWork.body.data.id}/volumes`).send({ title: "正文" }).expect(201);
+    const head = await request(runtime.app).post(`/api/works/${longWork.body.data.id}/chapters`).send({
+      volumeId: longVolume.body.data.id,
+      title: "8. 甲"
+    }).expect(201);
+    const tail = await request(runtime.app).post(`/api/works/${longWork.body.data.id}/chapters`).send({
+      volumeId: longVolume.body.data.id,
+      title: `9. ${oversizedSuffix}`
+    }).expect(201);
+    const overflow = await request(runtime.app).post(`/api/works/${longWork.body.data.id}/chapters`).send({
+      volumeId: longVolume.body.data.id,
+      title: "插入",
+      insertAfterChapterId: head.body.data.id,
+      numberTitle: true
+    }).expect(400);
+    expect(overflow.body.error.code).toBe("CHAPTER_TITLE_TOO_LONG");
+    const rolledBack = await request(runtime.app).get(`/api/works/${longWork.body.data.id}`).expect(200);
+    expect(rolledBack.body.data.volumes[0].chapters.map((chapter: { title: string; versionNo: number }) => [chapter.title, chapter.versionNo])).toEqual([
+      ["8. 甲", 1],
+      [`9. ${oversizedSuffix}`, 1]
+    ]);
+    await request(runtime.app).get(`/api/chapters/${tail.body.data.id}`).expect(200);
+  });
+
   it("排序只更新位置变化的章节且每章仅触发一次数据库更新", async () => {
     const work = runtime.store.createWork({ title: "排序写入范围" });
     const workId = String(work.id);
