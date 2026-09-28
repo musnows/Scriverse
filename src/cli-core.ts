@@ -522,6 +522,10 @@ function helpText(): string {
   scriverse writing goal <workId> --input <json-file|->
   scriverse chapter move <chapterId> --input <json-file|->
   scriverse chapter batch <workId> --input <json-file|->
+  scriverse chapter title-format get <workId>
+  scriverse chapter title-format set <workId> --input <json-file|->
+  scriverse chapter renumber <volumeId>
+  scriverse chapter apply-number <chapterId> --input <json-file|->
   scriverse annotation create <chapterId> --input <json-file|->
   scriverse annotation update <annotationId> --input <json-file|->
   scriverse annotation delete <annotationId> [--expected-version <number>]
@@ -557,7 +561,7 @@ function schemaList(): Record<string, unknown> {
     },
     commands: {
       writing: ["progress", "goal"],
-      chapter: ["move", "batch"],
+      chapter: ["move", "batch", "title-format", "renumber", "apply-number"],
       annotation: ["list", "list-work", "create", "update", "delete"],
       manuscript: ["get"],
       ai: ["rename", "questions"]
@@ -855,6 +859,38 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
   }
 
   if (group === "chapter") {
+    if (action === "title-format") {
+      const subaction = requiredPosition(parsed.positionals, 2, "title-format 子命令");
+      const workId = requiredPosition(parsed.positionals, 3, "workId");
+      assertPositionCount(parsed.positionals, 4);
+      if (subaction === "get") {
+        assertAllowedOptions(parsed, []);
+        emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/chapter-title-format`), compact);
+        return;
+      }
+      if (subaction === "set") {
+        assertAllowedOptions(parsed, ["input", "field-file"]);
+        const body = await editInput(parsed, dependencies, false);
+        emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/chapter-title-format`, { method: "PATCH", body }), compact);
+        return;
+      }
+      throw new CliError("CLI_COMMAND_UNKNOWN", "未知 chapter title-format 子命令");
+    }
+    if (action === "renumber") {
+      assertAllowedOptions(parsed, []);
+      const volumeId = requiredPosition(parsed.positionals, 2, "volumeId");
+      assertPositionCount(parsed.positionals, 3);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/volumes/${encoded(volumeId)}/renumber-titles`, { method: "POST", body: {} }), compact);
+      return;
+    }
+    if (action === "apply-number") {
+      assertAllowedOptions(parsed, ["input", "field-file"]);
+      const chapterId = requiredPosition(parsed.positionals, 2, "chapterId");
+      assertPositionCount(parsed.positionals, 3);
+      const body = await editInput(parsed, dependencies, false);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/chapters/${encoded(chapterId)}/apply-title-number`, { method: "POST", body }), compact);
+      return;
+    }
     const id = requiredPosition(parsed.positionals, 2, action === "batch" ? "workId" : "chapterId");
     assertPositionCount(parsed.positionals, 3);
     if (action === "move") {

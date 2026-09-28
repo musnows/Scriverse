@@ -1227,15 +1227,17 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|outline-board|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|chapter-annotations|search|export|audit-logs)$/u },
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/writing-progress$/u },
   { methods: ["PUT"], path: /^\/api\/works\/[^/]+\/writing-goal$/u },
+  { methods: ["GET", "PATCH"], path: /^\/api\/works\/[^/]+\/chapter-title-format$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/chapters\/batch$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/volumes\/[^/]+$/u },
+  { methods: ["POST"], path: /^\/api\/volumes\/[^/]+\/renumber-titles$/u },
   { methods: ["GET"], path: /^\/api\/volumes\/[^/]+\/export$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/chapters\/[^/]+$/u },
   { methods: ["GET"], path: /^\/api\/chapters\/[^/]+\/(?:versions|outline)$/u },
   { methods: ["GET", "POST"], path: /^\/api\/chapters\/[^/]+\/annotations$/u },
   { methods: ["PATCH", "DELETE"], path: /^\/api\/chapter-annotations\/[^/]+$/u },
-  { methods: ["POST"], path: /^\/api\/chapters\/[^/]+\/(?:restore|move)$/u },
+  { methods: ["POST"], path: /^\/api\/chapters\/[^/]+\/(?:restore|move|apply-title-number)$/u },
   { methods: ["PUT"], path: /^\/api\/chapters\/[^/]+\/outline$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/(?:drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows)\/[^/]+$/u },
   { methods: ["GET"], path: /^\/api\/characters\/[^/]+\/versions$/u },
@@ -1372,6 +1374,7 @@ export function workModuleRequirements(request: Request, write: boolean, annotat
   if (/^\/api\/works\/[^/]+\/presence$/u.test(pathname)) return {};
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
+  if (/^\/api\/works\/[^/]+\/chapter-title-format$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return { anyRead: ["comments", "todos"] };
   if (/^\/api\/works\/[^/]+\/(?:deleted-chapters|recycle-bin)$/u.test(pathname)) return { write: ["prose"] };
   if (/^\/api\/works\/[^/]+\/chapters\/[^/]+\/foreshadow-reminders(?:\/[^/]+\/resolve)?$/u.test(pathname)) {

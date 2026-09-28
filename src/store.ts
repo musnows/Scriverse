@@ -55,7 +55,19 @@ import {
   reconcileChapterLineIds,
   reanchorChapterAnnotations
 } from "./chapter-annotation-anchor.js";
-import { renumberChapterTitle, type ChapterNumberStyle } from "./chapter-title-numbering.js";
+import {
+  chapterTitleFormats,
+  isChapterTitlePreference,
+  parseChapterTitleNumber,
+  planAutoNumberedTitles,
+  planVolumeTitleRenumber,
+  renumberChapterTitle,
+  resolveChapterTitleFormat,
+  type ChapterNumberStyle,
+  type ChapterTitleFormatId,
+  type ChapterTitlePreference,
+  type ChapterTitleUpdate
+} from "./chapter-title-numbering.js";
 import {
   normalizeRoleplayMemoryContent,
   roleplayMemoryCandidateIsSafe,
@@ -75,6 +87,7 @@ type WorkInput = {
   tags?: string[];
   editorAutoIndentEnabled?: boolean;
   editorTypewriterModeEnabled?: boolean;
+  chapterTitleFormat?: ChapterTitlePreference;
 };
 
 type WorkListBatch = {
@@ -1262,6 +1275,7 @@ export class Store {
       tags: entity.tags,
       editorAutoIndentEnabled: entity.editorAutoIndentEnabled,
       editorTypewriterModeEnabled: entity.editorTypewriterModeEnabled,
+      chapterTitleFormat: entity.chapterTitleFormat,
       ownerUserId: entity.ownerUserId
     };
     if (type === "volume") return {
@@ -1589,8 +1603,8 @@ export class Store {
         const timestamp = now();
         this.db.run(
           `INSERT INTO works (id, title, author, description, language, cover_url, tags_json,
-           editor_auto_indent_enabled, editor_typewriter_mode_enabled, version_no, created_at, updated_at, owner_user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+           editor_auto_indent_enabled, editor_typewriter_mode_enabled, chapter_title_format, version_no, created_at, updated_at, owner_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
           entityId,
           String(snapshot.title ?? "未命名作品"),
           String(snapshot.author ?? ""),
@@ -1600,6 +1614,7 @@ export class Store {
           JSON.stringify(Array.isArray(snapshot.tags) ? snapshot.tags : []),
           snapshot.editorAutoIndentEnabled === true ? 1 : 0,
           snapshot.editorTypewriterModeEnabled === true ? 1 : 0,
+          isChapterTitlePreference(String(snapshot.chapterTitleFormat ?? "")) ? String(snapshot.chapterTitleFormat) : "off",
           timestamp,
           timestamp,
           ownerUserId
@@ -1685,11 +1700,13 @@ export class Store {
     const workId = id("work");
     const timestamp = now();
     const resolvedOwnerUserId = this.resolveWorkOwnerUserId(ownerUserId);
+    const requestedTitleFormat = input.chapterTitleFormat ?? "";
+    const chapterTitleFormat = isChapterTitlePreference(requestedTitleFormat) ? requestedTitleFormat : "off";
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO works (id, title, author, description, language, cover_url, tags_json,
-         editor_auto_indent_enabled, editor_typewriter_mode_enabled, created_at, updated_at, owner_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         editor_auto_indent_enabled, editor_typewriter_mode_enabled, chapter_title_format, created_at, updated_at, owner_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         workId,
         input.title,
         input.author ?? "",
@@ -1699,6 +1716,7 @@ export class Store {
         JSON.stringify(input.tags ?? []),
         input.editorAutoIndentEnabled === true ? 1 : 0,
         input.editorTypewriterModeEnabled === true ? 1 : 0,
+        chapterTitleFormat,
         timestamp,
         timestamp,
         resolvedOwnerUserId
@@ -2296,7 +2314,7 @@ export class Store {
       const timestamp = now();
       this.db.run(
         `UPDATE works SET title = ?, author = ?, description = ?, language = ?, cover_url = ?, tags_json = ?,
-         editor_auto_indent_enabled = ?, editor_typewriter_mode_enabled = ?, version_no = version_no + 1, updated_at = ?
+         editor_auto_indent_enabled = ?, editor_typewriter_mode_enabled = ?, chapter_title_format = ?, version_no = version_no + 1, updated_at = ?
          WHERE id = ?`,
         input.title ?? String(current.title),
         input.author ?? String(current.author),
@@ -2306,6 +2324,7 @@ export class Store {
         JSON.stringify(input.tags ?? current.tags),
         input.editorAutoIndentEnabled === undefined ? (current.editorAutoIndentEnabled ? 1 : 0) : input.editorAutoIndentEnabled ? 1 : 0,
         input.editorTypewriterModeEnabled === undefined ? (current.editorTypewriterModeEnabled ? 1 : 0) : input.editorTypewriterModeEnabled ? 1 : 0,
+        input.chapterTitleFormat === undefined ? String(current.chapterTitleFormat ?? "off") : input.chapterTitleFormat,
         timestamp,
         workId
       );
@@ -3216,25 +3235,220 @@ export class Store {
     });
   }
 
-  createChapter(workId: string, input: { volumeId: string; title: string; content?: string; chapterType?: ChapterType }): Record<string, unknown> {
+  createChapter(workId: string, input: {
+    volumeId: string;
+    title: string;
+    content?: string;
+    chapterType?: ChapterType;
+    insertAfterChapterId?: string;
+    insertBeforeChapterId?: string;
+    numberTitle?: boolean;
+  }): Record<string, unknown> {
     return this.db.transaction(() => {
+      if (input.insertAfterChapterId && input.insertBeforeChapterId) {
+        throw new AppError(400, "CHAPTER_INSERT_ANCHOR_CONFLICT", "不能同时指定章节前后插入位置");
+      }
       this.getWork(workId);
       const volume = this.getVolume(input.volumeId);
       if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
-      const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId);
+      const timestamp = now();
+      const rows = this.listActiveChapterRows(workId, input.volumeId);
+      let sortOrder = numberValue(this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId) ?? {}, "value") + 1;
+      let insertIndex = rows.length;
+      const anchorId = input.insertBeforeChapterId ?? input.insertAfterChapterId;
+      if (anchorId) {
+        const anchor = this.getChapter(anchorId);
+        if (anchor.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+        const anchorIndex = String(anchor.volumeId) === input.volumeId
+          ? rows.findIndex((row) => requiredString(row, "id") === anchorId)
+          : -1;
+        if (anchorIndex >= 0) {
+          const before = Boolean(input.insertBeforeChapterId);
+          sortOrder = Number(anchor.sortOrder) + (before ? 0 : 1);
+          insertIndex = anchorIndex + (before ? 0 : 1);
+          this.db.run(
+            "UPDATE chapters SET sort_order = sort_order + 1, updated_at = ? WHERE volume_id = ? AND deleted_at IS NULL AND sort_order >= ?",
+            timestamp,
+            input.volumeId,
+            sortOrder
+          );
+        }
+      }
+      const pendingId = "__pending_chapter__";
+      const ordered = [
+        ...rows.slice(0, insertIndex).map((row) => ({ id: requiredString(row, "id"), title: requiredString(row, "title") })),
+        { id: pendingId, title: input.title },
+        ...rows.slice(insertIndex).map((row) => ({ id: requiredString(row, "id"), title: requiredString(row, "title") }))
+      ];
+      const formatId = input.numberTitle ? this.resolveWorkChapterTitleFormat(workId, ordered.map((chapter) => chapter.title)) : null;
+      let title = input.title;
+      let numberingUpdates: ChapterTitleUpdate[] = [];
+      if (formatId) {
+        try {
+          numberingUpdates = planAutoNumberedTitles(ordered, pendingId, input.title, formatId);
+        } catch (error) {
+          this.rethrowChapterNumberError(error);
+        }
+        title = numberingUpdates.find((item) => item.id === pendingId)?.title ?? input.title;
+        numberingUpdates = numberingUpdates.filter((item) => item.id !== pendingId);
+        if (title.length > 300) throw new AppError(400, "CHAPTER_TITLE_TOO_LONG", "编号后的章节标题超过 300 个字符");
+      }
       const chapterId = this.insertChapter(
         workId,
         input.volumeId,
-        input.title,
+        title,
         input.content ?? "",
-        numberValue(last ?? {}, "value") + 1,
+        sortOrder,
         "manual",
         null,
         input.chapterType ?? "正文"
       );
-      this.audit(workId, "chapter.created", "chapter", chapterId);
+      if (numberingUpdates.length) {
+        const shiftedRows = this.listActiveChapterRows(workId, input.volumeId);
+        this.writeChapterTitleUpdates(workId, numberingUpdates, shiftedRows, "自动顺延章节序号", timestamp);
+      }
+      this.audit(workId, "chapter.created", "chapter", chapterId, formatId ? { chapterTitleFormat: formatId, numbered: numberingUpdates.length > 0 || title !== input.title } : {});
       return this.getChapter(chapterId);
     });
+  }
+
+  describeChapterTitleFormat(workId: string): { preference: ChapterTitlePreference; detected: ChapterTitleFormatId | null; resolved: ChapterTitleFormatId | null } {
+    const work = this.getWork(workId);
+    const preference = isChapterTitlePreference(String(work.chapterTitleFormat ?? ""))
+      ? String(work.chapterTitleFormat) as ChapterTitlePreference
+      : "off";
+    const detected = resolveChapterTitleFormat("auto", this.listActiveChapterRows(workId).map((row) => requiredString(row, "title")));
+    return {
+      preference,
+      detected,
+      resolved: resolveChapterTitleFormat(preference, this.listActiveChapterRows(workId).map((row) => requiredString(row, "title")))
+    };
+  }
+
+  applyChapterTitleNumber(chapterId: string, title: string, expectedVersionNo?: number): Record<string, unknown> {
+    return this.db.transaction(() => {
+      const current = this.getChapter(chapterId);
+      this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(current.versionNo));
+      const workId = String(current.workId);
+      const volumeId = String(current.volumeId);
+      const rows = this.listActiveChapterRows(workId, volumeId);
+      const formatId = this.resolveWorkChapterTitleFormat(workId, rows.map((row) => requiredString(row, "title")));
+      const savedNumber = parseChapterTitleNumber(String(current.title));
+      if (!formatId || parseChapterTitleNumber(title) || savedNumber) {
+        const nextTitle = formatId && savedNumber && !parseChapterTitleNumber(title)
+          ? renumberChapterTitle(title, savedNumber.number, chapterTitleFormats[savedNumber.formatId].template, chapterTitleFormats[savedNumber.formatId].style)
+          : title;
+        return this.saveChapter(chapterId, { title: nextTitle }, "manual", null, nextTitle === title ? "" : "补回章节序号", expectedVersionNo);
+      }
+      const ordered = rows.map((row) => ({
+        id: requiredString(row, "id"),
+        title: requiredString(row, "id") === chapterId ? title : requiredString(row, "title")
+      }));
+      let updates: ChapterTitleUpdate[];
+      try {
+        updates = planAutoNumberedTitles(ordered, chapterId, title, formatId);
+      } catch (error) {
+        this.rethrowChapterNumberError(error);
+      }
+      const timestamp = now();
+      this.writeChapterTitleUpdates(workId, updates, rows, "补写章节序号", timestamp);
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      return this.getChapter(chapterId);
+    });
+  }
+
+  renumberVolumeChapterTitles(volumeId: string): { volumeId: string; updated: number; format: ChapterTitleFormatId; startAt: number } {
+    return this.db.transaction(() => {
+      const volume = this.getVolume(volumeId);
+      const workId = String(volume.workId);
+      const rows = this.listActiveChapterRows(workId, volumeId);
+      const formatId = this.resolveWorkChapterTitleFormat(workId, rows.map((row) => requiredString(row, "title")));
+      if (!formatId) throw new AppError(400, "CHAPTER_TITLE_FORMAT_REQUIRED", "请先在目录的标题编号中选择格式，或使用自动识别");
+      let plan: { updates: ChapterTitleUpdate[]; startAt: number };
+      try {
+        plan = planVolumeTitleRenumber(rows.map((row) => ({ id: requiredString(row, "id"), title: requiredString(row, "title") })), formatId);
+      } catch (error) {
+        this.rethrowChapterNumberError(error);
+      }
+      const timestamp = now();
+      const updated = this.writeChapterTitleUpdates(workId, plan.updates, rows, "按分卷重排章节标题序号", timestamp);
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      this.audit(workId, "chapter.volume-renumbered", "volume", volumeId, {
+        format: formatId,
+        startAt: plan.startAt,
+        updated,
+        chapterCount: rows.length
+      });
+      return { volumeId, updated, format: formatId, startAt: plan.startAt };
+    });
+  }
+
+  private resolveWorkChapterTitleFormat(workId: string, titles: string[]): ChapterTitleFormatId | null {
+    const preference = String(this.getWork(workId).chapterTitleFormat ?? "off");
+    return resolveChapterTitleFormat(preference, titles);
+  }
+
+  private listActiveChapterRows(workId: string, volumeId?: string): Row[] {
+    return this.db.all(
+      `SELECT chapter.* FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+         ${volumeId ? "AND chapter.volume_id = ?" : ""}
+       ORDER BY volume.sort_order, volume.created_at, volume.id,
+         chapter.sort_order, chapter.created_at, chapter.id`,
+      ...(volumeId ? [workId, volumeId] : [workId])
+    );
+  }
+
+  private rethrowChapterNumberError(error: unknown): never {
+    if (error instanceof RangeError) throw new AppError(400, "CHAPTER_NUMBER_RANGE", "章节序号超出 1 到 999999");
+    throw error;
+  }
+
+  private writeChapterTitleUpdates(workId: string, updates: ChapterTitleUpdate[], rows: Row[], changeNote: string, timestamp: string): number {
+    const rowsById = new Map(rows.map((row) => [requiredString(row, "id"), row]));
+    let updated = 0;
+    for (const item of updates) {
+      const row = rowsById.get(item.id);
+      if (!row || requiredString(row, "title") === item.title) continue;
+      if (item.title.length > 300) {
+        throw new AppError(400, "CHAPTER_TITLE_TOO_LONG", `章节“${requiredString(row, "title").slice(0, 40)}”编号后的标题超过 300 个字符`);
+      }
+      const chapterId = item.id;
+      const versionNo = numberValue(row, "version_no") + 1;
+      this.db.run(
+        "UPDATE chapters SET title = ?, version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?",
+        item.title,
+        versionNo,
+        timestamp,
+        chapterId
+      );
+      this.syncChapterParagraphSearchVersion(chapterId, versionNo);
+      this.insertChapterVersionRow({
+        workId,
+        chapterId,
+        versionNo,
+        title: item.title,
+        content: requiredString(row, "content"),
+        volumeId: requiredString(row, "volume_id"),
+        sortOrder: numberValue(row, "sort_order"),
+        chapterType: requiredString(row, "chapter_type"),
+        source: "manual",
+        sourceRef: null,
+        changeNote,
+        timestamp
+      });
+      this.invalidateChapter(workId, chapterId, versionNo);
+      this.audit(workId, "chapter.saved", "chapter", chapterId, {
+        previousTitle: requiredString(row, "title"),
+        title: item.title,
+        sequence: item.sequence,
+        versionNo,
+        renumbered: true
+      });
+      updated += 1;
+    }
+    return updated;
   }
 
   getChapter(chapterId: string): Record<string, unknown> {
@@ -4907,6 +5121,9 @@ export class Store {
       offlineAccessEnabled: numberValue(row, "offline_access_enabled") === 1,
       editorAutoIndentEnabled: numberValue(row, "editor_auto_indent_enabled") === 1,
       editorTypewriterModeEnabled: numberValue(row, "editor_typewriter_mode_enabled") === 1,
+      chapterTitleFormat: isChapterTitlePreference(optionalString(row, "chapter_title_format") ?? "")
+        ? optionalString(row, "chapter_title_format")
+        : "off",
       versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("work", workId),
       ownerUserId,
       accessRole,

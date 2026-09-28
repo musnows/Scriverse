@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   chapterTitleWithoutNumber,
+  detectChapterTitleFormat,
   formatChapterNumber,
+  inferVolumeNumberStart,
   isChapterNumberTemplate,
-  renumberChapterTitle
+  parseChapterTitleNumber,
+  planAutoNumberedTitles,
+  planVolumeTitleRenumber,
+  renumberChapterTitle,
+  resolveChapterTitleFormat
 } from "../../src/chapter-title-numbering.js";
 
 describe("章节标题序号重排", () => {
@@ -55,4 +61,67 @@ describe("章节标题序号重排", () => {
     expect(renumberChapterTitle("序章", 3, "Chapter {n}:", "arabic")).toBe("Chapter 3: 序章");
     expect(renumberChapterTitle("第X章 异常编号", 4, "第{n}章", "chinese")).toBe("第四章 第X章 异常编号");
   });
+
+  it("识别常见标题序号，并在票数相同时放弃判断", () => {
+    expect(parseChapterTitleNumber("36. 拜访孤爪 | 摩斯拉")).toEqual({
+      formatId: "dot",
+      number: 36,
+      suffix: "拜访孤爪 | 摩斯拉"
+    });
+    expect(parseChapterTitleNumber("第36章 偷偷去找她 | 哥斯拉")).toMatchObject({ formatId: "chapter-arabic", number: 36, suffix: "偷偷去找她 | 哥斯拉" });
+    expect(parseChapterTitleNumber("第三十六章 噩梦与相伴")).toMatchObject({ formatId: "chapter-chinese", number: 36, suffix: "噩梦与相伴" });
+    expect(parseChapterTitleNumber("003、远航")).toMatchObject({ formatId: "enumeration", number: 3, suffix: "远航" });
+    expect(parseChapterTitleNumber("Chapter 77 - Return")).toMatchObject({ formatId: "english", number: 77, suffix: "Return" });
+    expect(parseChapterTitleNumber("第X章 异常编号")).toBeNull();
+    expect(parseChapterTitleNumber("偷偷去找她 | 哥斯拉")).toBeNull();
+    expect(detectChapterTitleFormat([
+      "36. 拜访孤爪 | 摩斯拉",
+      "偷偷去找她 | 哥斯拉",
+      "37. 下一章"
+    ])).toBe("dot");
+    expect(detectChapterTitleFormat(["第1章 甲", "1. 乙"])).toBeNull();
+    expect(resolveChapterTitleFormat("off", ["1. 甲"])).toBeNull();
+    expect(resolveChapterTitleFormat("auto", ["第2章 甲", "第3章 乙"])).toBe("chapter-arabic");
+    expect(resolveChapterTitleFormat("enumeration", ["1. 甲"])).toBe("enumeration");
+  });
+
+  it("中文数字可以还原常用章节序号", () => {
+    for (const value of [1, 10, 11, 20, 101, 1_001, 10_010, 100_000]) {
+      expect(parseChineseRoundTrip(value)).toBe(value);
+    }
+  });
+
+  it("中间插入时只后移本卷后续序号，并保留序号以外的文字", () => {
+    const chapters = [
+      { id: "a", title: "36. 拜访孤爪 | 摩斯拉" },
+      { id: "new", title: "" },
+      { id: "b", title: "偷偷去找她 | 哥斯拉" },
+      { id: "c", title: "37. 下一章 | 摩斯拉" },
+      { id: "d", title: "序章" }
+    ];
+    expect(planAutoNumberedTitles(chapters, "new", "噩梦与相伴 | 哥斯拉", "dot")).toEqual([
+      { id: "new", sequence: 37, title: "37. 噩梦与相伴 | 哥斯拉" },
+      { id: "c", sequence: 38, title: "38. 下一章 | 摩斯拉" }
+    ]);
+    expect(planAutoNumberedTitles(chapters, "b", "37. 已经手写", "dot")).toEqual([]);
+  });
+
+  it("分卷重排从已有起始序号连续编号，不猜测其他分卷", () => {
+    expect(inferVolumeNumberStart(["序章", "36. 拜访孤爪 | 摩斯拉"])).toBe(35);
+    const plan = planVolumeTitleRenumber([
+      { id: "a", title: "36. 拜访孤爪 | 摩斯拉" },
+      { id: "b", title: "偷偷去找她 | 哥斯拉" },
+      { id: "c", title: "37. 下一章 | 摩斯拉" }
+    ], "chapter-arabic");
+    expect(plan.startAt).toBe(36);
+    expect(plan.updates.map((item) => item.title)).toEqual([
+      "第36章 拜访孤爪 | 摩斯拉",
+      "第37章 偷偷去找她 | 哥斯拉",
+      "第38章 下一章 | 摩斯拉"
+    ]);
+  });
 });
+
+function parseChineseRoundTrip(value: number): number | null {
+  return parseChapterTitleNumber(`第${formatChapterNumber(value, "chinese")}章`)?.number ?? null;
+}
