@@ -16067,6 +16067,7 @@ async function openDialog(title, fields, onSubmit, eyebrow = "新增", options =
     submit.textContent = options.pendingLabel ?? "处理中…";
     try {
       commitRelationshipKeywordInputs(form);
+      syncVditorEditorValues(form);
       const formData = new FormData(form);
       disabledStates = [...form.elements].map((control) => [control, control.disabled]);
       disabledStates.forEach(([control]) => {
@@ -17475,6 +17476,16 @@ function destroyVditorEditor(editor) {
   const host = editor.vditor?.element;
   editor.destroy();
   if (host) delete host.__vditor;
+}
+
+function syncVditorEditorValues(container) {
+  // Vditor 的 input 回调有延迟，提交前直接读取正文。
+  container.querySelectorAll("[data-vditor-editor]").forEach((host) => {
+    const valueField = host.parentElement?.querySelector("[data-vditor-value]");
+    const editor = host.__vditor;
+    if (!valueField || valueField.readOnly || typeof editor?.getValue !== "function") return;
+    valueField.value = String(editor.getValue() ?? "");
+  });
 }
 
 function bindVditorEditors(container) {
