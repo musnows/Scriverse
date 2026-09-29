@@ -4453,6 +4453,44 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
+  it("标题模型独立关闭思考并避免耗尽输出预算", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    const completionBodies: Array<{ stream?: boolean; max_tokens?: number; thinking?: { type?: string } }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number; thinking?: { type?: string } };
+      completionBodies.push(body);
+      if (body.stream) {
+        return new Response('data: {"choices":[{"delta":{"content":"首轮主回答"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        });
+      }
+      const exhausted = body.thinking?.type !== "disabled" && Number(body.max_tokens) <= 64;
+      return new Response(JSON.stringify({ choices: [{
+        message: exhausted
+          ? { content: "", reasoning_content: "The reasoning budget was exhausted before the title." }
+          : { content: "林舟的离别动机" },
+        finish_reason: exhausted ? "length" : "stop"
+      }] }), { status: 200 });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请分析林舟的离别动机",
+      scope: { type: "none" },
+      modelId
+    }).expect(200);
+    const complete = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId: string };
+    const refreshed = await request(runtime.app).get(`/api/ai-conversations/${complete.conversationId}/title`).expect(200);
+    expect(refreshed.body.data.title).toBe("林舟的离别动机");
+    expect(completionBodies).toHaveLength(2);
+    expect(completionBodies[0]).toMatchObject({ stream: true, thinking: { type: "enabled" }, max_tokens: 32_000 });
+    expect(completionBodies[1]).toMatchObject({ thinking: { type: "disabled" }, max_tokens: 256 });
+    expect(runtime.ai.getModel(modelId).thinkingEnabled).toBe(true);
+  });
+
   it("第一轮助手回复后的标题生成失败时不影响主回答", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
