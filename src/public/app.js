@@ -1977,6 +1977,10 @@ let chapterDraftLineIdState = null;
 let chapterBeforeInputState = null;
 let chapterSearchMatchIndex = -1;
 let chapterSelectionRequestId = 0;
+const chapterBodyCacheLimit = 32;
+const chapterBodyCache = new Map();
+let chapterBodyAbort = null;
+let chapterContentReadyId = null;
 let chapterForeshadowReminderRequestId = 0;
 let chapterForeshadowReminders = [];
 let chapterForeshadowReminderIndex = 0;
@@ -2082,9 +2086,12 @@ function applyChapterEditorMode() {
   $("#chapter-content").readOnly = viewOnly;
   $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
+  const waitingForChapter = chapterEditingLocked();
   editButton.classList.toggle("hidden", permissionBlocked || !state.chapter);
   editButton.classList.toggle("primary-button", chapterEditorReadOnly);
   editButton.classList.toggle("ghost-button", !chapterEditorReadOnly);
+  editButton.disabled = waitingForChapter;
+  editButton.setAttribute("aria-disabled", String(waitingForChapter));
   editButton.textContent = chapterEditorReadOnly ? "编辑" : "预览";
   editButton.setAttribute("aria-pressed", String(!chapterEditorReadOnly));
   editButton.setAttribute("aria-label", chapterEditorReadOnly ? "切换到编辑模式" : "切换到预览模式");
@@ -2095,6 +2102,8 @@ function applyChapterEditorMode() {
 }
 
 function enterChapterEditMode() {
+  // 缓存或占位正文还没被本次请求确认前，编辑按钮不进入编辑。
+  if (chapterEditingLocked()) return;
   if (!state.chapter || !canEditProse()) return;
   chapterEditorReadOnly = false;
   applyChapterEditorMode();
@@ -2105,6 +2114,7 @@ function enterChapterEditMode() {
 }
 
 function toggleChapterEditPreviewMode() {
+  if (chapterEditingLocked()) return;
   if (!state.chapter || !canEditProse()) return;
   if (chapterEditorReadOnly) {
     enterChapterEditMode();
@@ -6535,6 +6545,7 @@ async function api(path, options = {}) {
       body: body && typeof body !== "string" ? JSON.stringify(body) : body
     });
   } catch (error) {
+    if (error?.name === "AbortError") throw error;
     if (mobileOfflineRuntime.enabled) {
       const offlineSession = await mobileOfflineRuntime.activateOffline();
       if (offlineSession) return mobileOfflineRuntime.request(path, { method, body });
@@ -7658,8 +7669,10 @@ async function persistChapter({ automatic = false } = {}) {
   chapterSaveInFlight = request;
   try {
     const saved = await request;
+    rememberChapterBody(saved.chapter);
     if (state.work?.id !== workId || state.chapter?.id !== draft.chapterId) return saved.chapter;
     state.chapter = saved.chapter;
+    chapterContentReadyId = saved.chapter.id;
     state.work = saved.work;
     resetChapterDraftLineIds(state.chapter);
     lastSavedChapterSnapshot = draft;
@@ -9374,6 +9387,10 @@ function renderShelf() {
 
 function resetWorkScopedUiCaches() {
   chapterSelectionRequestId += 1;
+  chapterBodyCache.clear();
+  chapterContentReadyId = null;
+  chapterBodyAbort?.abort();
+  chapterBodyAbort = null;
   clearChapterForeshadowReminders({ invalidateRequest: true });
   invalidateAiConversationNavigation("已切换作品");
   stopBackgroundTaskCenter();
@@ -9861,7 +9878,11 @@ async function submitChapterBatch(event) {
     state.work = await api(`/api/works/${encodeURIComponent(workId)}`);
     const currentEditorVisible = state.module === "editor";
     const currentStillExists = state.chapter && state.work.volumes.some((volume) => volume.chapters.some((chapter) => chapter.id === state.chapter.id));
-    if (state.chapter && currentStillExists) state.chapter = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}`);
+    if (state.chapter && currentStillExists) {
+      state.chapter = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}`);
+      rememberChapterBody(state.chapter);
+      chapterContentReadyId = state.chapter.id;
+    }
     if (state.chapter && !currentStillExists) {
       state.chapter = null;
       showWelcome(true);
@@ -9997,6 +10018,7 @@ async function deleteChapter(chapterId) {
     const deletingSelectedChapter = state.chapter?.id === chapterId;
     const expectedVersionNo = deletingSelectedChapter ? state.chapter.versionNo : chapter.versionNo;
     await api(`/api/chapters/${chapterId}`, { method: "DELETE", body: { expectedVersionNo } });
+    forgetChapterBody(chapterId);
     const workId = state.work.id;
     state.work = await api(`/api/works/${workId}`);
     if (deletingSelectedChapter) {
@@ -10215,33 +10237,59 @@ async function resolveCurrentChapterForeshadowReminder() {
   }
 }
 
-async function selectChapter(chapterId, { editMode = false } = {}) {
-  imWorkspace.close();
-  const workId = state.work?.id;
-  if (!workId) return false;
-  const selectionGeneration = ++chapterSelectionRequestGeneration;
-  const selectionRequestId = ++chapterSelectionRequestId;
-  clearChapterForeshadowReminders({ invalidateRequest: true });
-  if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) {
-    if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
-    return false;
+function rememberChapterBody(chapter) {
+  if (!chapter?.id || typeof chapter.content !== "string") return;
+  const id = String(chapter.id);
+  chapterBodyCache.delete(id);
+  chapterBodyCache.set(id, chapter);
+  while (chapterBodyCache.size > chapterBodyCacheLimit) {
+    const oldest = chapterBodyCache.keys().next().value;
+    chapterBodyCache.delete(oldest);
   }
-  resetChapterSearchPanel();
-  dismissDeleteToasts();
-  if (selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
-  cancelChapterAutoSave();
-  let selectedChapter = state.chapter;
-  if (state.chapter?.id !== chapterId) {
-    selectedChapter = await api(`/api/chapters/${encodeURIComponent(chapterId)}`);
-    if (selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
-    if (String(selectedChapter?.id ?? "") !== String(chapterId) || String(selectedChapter?.workId ?? "") !== String(workId)) return false;
+}
+
+function cachedChapterBody(chapterId) {
+  const cached = chapterBodyCache.get(String(chapterId ?? ""));
+  return cached && typeof cached.content === "string" ? cached : null;
+}
+
+function forgetChapterBody(chapterId) {
+  const id = String(chapterId ?? "");
+  chapterBodyCache.delete(id);
+  if (String(chapterContentReadyId ?? "") === id) chapterContentReadyId = null;
+}
+
+function chapterEditingLocked() {
+  return !state.chapter || String(chapterContentReadyId ?? "") !== String(state.chapter.id);
+}
+
+function directoryChapterEntry(chapterId) {
+  for (const volume of state.work?.volumes ?? []) {
+    const chapter = volume.chapters?.find((item) => String(item.id) === String(chapterId));
+    if (chapter) return chapter;
   }
-  if (!selectedChapter || selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
-  state.chapter = selectedChapter;
-  mergeChapterDirectoryEntry(state.chapter);
-  state.collapsedVolumeIds.delete(state.chapter.volumeId);
-  lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
-  chapterEditorReadOnly = !canEditProse() || !editMode;
+  return null;
+}
+
+function chapterRequestStillCurrent(workId, selectionGeneration, selectionRequestId) {
+  return selectionGeneration === chapterSelectionRequestGeneration
+    && selectionRequestId === chapterSelectionRequestId
+    && state.work?.id === workId;
+}
+
+function presentChapter(chapter, { editMode = false, contentReady = false, syncRoute = true } = {}) {
+  state.chapter = chapter;
+  if (chapter?.volumeId && typeof chapter.content === "string" && (contentReady || chapter.content.length > 0)) {
+    mergeChapterDirectoryEntry(state.chapter);
+  }
+  if (chapter?.volumeId) state.collapsedVolumeIds.delete(chapter.volumeId);
+  lastSavedChapterSnapshot = {
+    chapterId: state.chapter.id,
+    title: state.chapter.title ?? "",
+    content: state.chapter.content ?? ""
+  };
+  chapterContentReadyId = contentReady ? state.chapter.id : null;
+  chapterEditorReadOnly = !contentReady || !editMode;
   state.module = "editor";
   applyWorkAccessMode();
   markActiveModule("editor");
@@ -10249,22 +10297,90 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   $("#module-view").classList.add("hidden");
   $("#editor-view").classList.remove("hidden");
   updateChapterPath();
-  $("#chapter-title").value = state.chapter.title;
-  $("#chapter-content").value = state.chapter.content;
+  const titleInput = $("#chapter-title");
+  const contentInput = $("#chapter-content");
+  const nextTitle = state.chapter.title ?? "";
+  const nextContent = state.chapter.content ?? "";
+  if (titleInput.value !== nextTitle) titleInput.value = nextTitle;
+  if (contentInput.value !== nextContent) contentInput.value = nextContent;
   resetChapterDraftLineIds(state.chapter);
   chapterAnnotationCounts = new Map();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
-  void loadChapterAnnotationCounts(state.chapter.id).catch((error) => {
-    if (String(state.chapter?.id ?? "") === String(chapterId)) toast("正文评论数量读取失败，请稍后重试", "error");
-  });
   dismissChapterInsightToast();
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
+  else if (!contentReady) setSaveState("正在同步正文");
   else if (chapterEditorReadOnly) setSaveState("阅读模式");
   else setSaveState("已保存");
   syncChapterTreeSelection();
-  replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
+  if (syncRoute) replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
+}
+
+async function selectChapter(chapterId, { editMode = false } = {}) {
+  imWorkspace.close();
+  const workId = state.work?.id;
+  if (!workId) return false;
+  const sameChapter = String(state.chapter?.id ?? "") === String(chapterId);
+  if (sameChapter && chapterEditingLocked() && chapterBodyAbort && !chapterBodyAbort.signal.aborted) return true;
+  const selectionGeneration = ++chapterSelectionRequestGeneration;
+  const selectionRequestId = ++chapterSelectionRequestId;
+  if (!sameChapter) clearChapterForeshadowReminders({ invalidateRequest: true });
+  if (!sameChapter && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) {
+    if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
+    return false;
+  }
+  resetChapterSearchPanel();
+  dismissDeleteToasts();
+  if (!chapterRequestStillCurrent(workId, selectionGeneration, selectionRequestId)) return false;
+  cancelChapterAutoSave();
+  if (sameChapter && String(chapterContentReadyId ?? "") === String(chapterId) && state.chapter) {
+    presentChapter(state.chapter, { editMode, contentReady: true });
+    syncChapterTreeSelection();
+    return true;
+  }
+  const cached = cachedChapterBody(chapterId);
+  const directoryEntry = directoryChapterEntry(chapterId);
+  const localContent = cached?.content ?? (typeof directoryEntry?.content === "string" ? directoryEntry.content : "");
+  const previewChapter = cached
+    ? {
+      ...directoryEntry,
+      ...cached,
+      title: directoryEntry?.title ?? cached.title,
+      wordCount: directoryEntry?.wordCount ?? cached.wordCount,
+      chapterType: directoryEntry?.chapterType ?? cached.chapterType,
+      sortOrder: directoryEntry?.sortOrder ?? cached.sortOrder,
+      volumeId: directoryEntry?.volumeId ?? cached.volumeId,
+      content: cached.content,
+      lineIds: cached.lineIds
+    }
+    : directoryEntry
+      ? { ...directoryEntry, content: localContent, lineIds: directoryEntry.lineIds ?? [] }
+      : { id: chapterId, workId, volumeId: "", title: "", content: "", wordCount: 0, versionNo: 0, chapterType: "正文", lineIds: [] };
+  presentChapter(previewChapter, { editMode: false, contentReady: false });
+  syncChapterTreeSelection();
+  chapterBodyAbort?.abort();
+  const chapterBodyController = new AbortController();
+  chapterBodyAbort = chapterBodyController;
+  let selectedChapter = null;
+  try {
+    selectedChapter = await api(`/api/chapters/${encodeURIComponent(chapterId)}`, { signal: chapterBodyController.signal });
+  } catch (error) {
+    if (chapterBodyAbort === chapterBodyController) chapterBodyAbort = null;
+    if (error?.name === "AbortError" || !chapterRequestStillCurrent(workId, selectionGeneration, selectionRequestId)) return false;
+    if (String(state.chapter?.id ?? "") === String(chapterId)) setSaveState("正文载入失败", true);
+    toast(error.message || "章节读取失败", "error");
+    return false;
+  }
+  if (chapterBodyAbort === chapterBodyController) chapterBodyAbort = null;
+  if (!chapterRequestStillCurrent(workId, selectionGeneration, selectionRequestId)) return false;
+  if (String(selectedChapter?.id ?? "") !== String(chapterId) || String(selectedChapter?.workId ?? "") !== String(workId)) return false;
+  rememberChapterBody(selectedChapter);
+  presentChapter(selectedChapter, { editMode, contentReady: true, syncRoute: false });
+  syncChapterTreeSelection();
+  void loadChapterAnnotationCounts(state.chapter.id).catch(() => {
+    if (String(state.chapter?.id ?? "") === String(chapterId)) toast("正文评论数量读取失败，请稍后重试", "error");
+  });
   void loadChapterForeshadowReminders();
   return true;
 }
@@ -10836,6 +10952,8 @@ async function showModule(module) {
   state.module = module;
   if (module !== "editor") {
     chapterSelectionRequestId += 1;
+    chapterBodyAbort?.abort();
+    chapterBodyAbort = null;
     clearChapterForeshadowReminders({ invalidateRequest: true });
   }
   if (module !== "tasks") stopTaskProgressRefresh();
@@ -11897,12 +12015,13 @@ async function renderCharacters(page = characterListPage) {
     || characterFilters.genderValues.length > 0
     || characterFilters.deathState !== "all";
   const pageSize = pageSizeFor("characters");
+  const needsCharacterFilterCatalog = hasCharacterFilters || characterFiltersPanelOpen;
   const [characterSource, races, organizations] = await Promise.all([
     hasCharacterFilters
       ? moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)
       : moduleApiPage("characters", `/api/works/${state.work.id}/characters`, page, pageSize),
-    canReadModule("races") ? moduleApi("characters", `/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? moduleApiAllPages("characters", `/api/works/${state.work.id}/organizations`) : Promise.resolve([])
+    needsCharacterFilterCatalog && canReadModule("races") ? moduleApi("characters", `/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    needsCharacterFilterCatalog && canReadModule("organizations") ? moduleApiAllPages("characters", `/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
     ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, pageSize)
@@ -11910,7 +12029,7 @@ async function renderCharacters(page = characterListPage) {
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
   const pageCharacters = characterPage.items;
-  [state.races, state.organizations] = [races, organizations];
+  if (needsCharacterFilterCatalog) [state.races, state.organizations] = [races, organizations];
   mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
   const characterActions = (item) => `${characterPinButton(item)}${characterFavoriteButton(item)}${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}`;
@@ -20373,6 +20492,8 @@ async function showVersions() {
     }
     try {
       state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
+      rememberChapterBody(state.chapter);
+      chapterContentReadyId = state.chapter.id;
       resetChapterDraftLineIds(state.chapter);
       lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
       $("#chapter-title").value = state.chapter.title;

@@ -111,10 +111,26 @@ describe("目录性能与异步边界", () => {
 
   it("缓存版本覆盖目录模块，章节打开不等待辅助提醒接口", () => {
     expect(readFileSync("src/public/index.html", "utf8")).toContain("feature=chapter-directory-performance-v2");
+    expect(readFileSync("src/public/index.html", "utf8")).toContain("feature=chapter-switch-cache-v1");
     expect(application).toContain('/chapter-directory.js?v=20260921-directory-performance-v1');
-    const select = sourceBetween("async function selectChapter(", "\nfunction updateChapterStats");
-    expect(select).toContain("syncChapterTreeSelection();");
+    const select = sourceBetween("async function selectChapter(", "\nfunction updateChapterPath(");
+    const paintAt = select.indexOf("presentChapter(previewChapter, { editMode: false, contentReady: false })");
+    const requestAt = select.indexOf("selectedChapter = await api");
+    expect(paintAt).toBeGreaterThan(-1);
+    expect(requestAt).toBeGreaterThan(paintAt);
+    expect(select.indexOf("syncChapterTreeSelection();")).toBeGreaterThan(-1);
+    expect(select.indexOf("syncChapterTreeSelection();")).toBeLessThan(requestAt);
+    expect(select).toContain("cachedChapterBody(chapterId)");
+    expect(select).toContain("rememberChapterBody(selectedChapter);");
     expect(select).toContain("void loadChapterForeshadowReminders();");
     expect(select).not.toContain("await loadChapterForeshadowReminders();");
+    expect(select).not.toContain("await api(`/api/works/");
+    expect(application).toContain("function chapterEditingLocked()");
+    expect(application).toContain("if (chapterEditingLocked()) return;");
+    expect(application).toContain("editButton.disabled = waitingForChapter;");
+    const characters = sourceBetween("async function renderCharacters(", "\nasync function renderRaces(");
+    expect(characters).toContain("const needsCharacterFilterCatalog = hasCharacterFilters || characterFiltersPanelOpen;");
+    expect(characters).toContain('needsCharacterFilterCatalog && canReadModule("races") ? moduleApi("characters", `/api/works/${state.work.id}/races`)');
+    expect(characters).toContain('needsCharacterFilterCatalog && canReadModule("organizations") ? moduleApiAllPages("characters", `/api/works/${state.work.id}/organizations`)');
   });
 });
