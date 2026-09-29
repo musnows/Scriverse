@@ -6536,8 +6536,7 @@ export class AiManager {
         [
           ...(conversationBefore?.messages ?? []),
           { role: "assistant" as const, content: generated.content }
-        ],
-        defaultTitle
+        ]
       ).catch((error) => {
         logger.warn("ai.conversation_title.failed", { workId: input.workId, conversationId: input.conversationId, error: aiErrorForLog(error) });
         return null;
@@ -6718,8 +6717,7 @@ export class AiManager {
     workId: string,
     conversationId: string,
     modelId: string,
-    messages: AiConversationTitleContext["messages"],
-    fallbackTitle: string
+    messages: AiConversationTitleContext["messages"]
   ): Promise<string | null> {
     try {
       const conversation = messages.map((message) => {
@@ -6731,7 +6729,7 @@ export class AiManager {
         workId,
         taskType: "chat",
         instruction: [
-          "请根据下面前两轮用户与助手的对话，生成一个简洁、准确的会话标题。",
+          "请根据下面首轮用户与助手的对话，生成一个简洁、准确的会话标题。",
           "标题应概括用户真正想解决的主题，不要复述完整句子。",
           "只输出标题本身，不要引号、编号、Markdown、解释或句末标点；标题不超过 15 个汉字或 30 个字符。",
           `<对话记录>\n${conversation}\n</对话记录>`
@@ -6743,14 +6741,14 @@ export class AiManager {
         disableTools: true,
         disableThinking: true
       });
-      const title = (generated.content
-        .split(/\r?\n/u)[0] ?? "")
+      const title = (aiConversationTitleSource(generated.content)
+        .split(/\r?\n/u).map((line) => line.trim()).find(Boolean) ?? "")
         .replace(/^\s*(?:标题|title)\s*[:：]\s*/iu, "")
-        .replace(/^["'“”「」『』]+|["'“”「」『』]+$/gu, "")
-        .replace(/[。！？!?；;]+$/gu, "")
+        .replace(/^["'“”「」『』]+|["'“”「」『』。！？!?；;]+$/gu, "")
         .replace(/\s+/gu, " ")
         .trim();
-      const normalizedTitle = Array.from(title).slice(0, 30).join("") || fallbackTitle;
+      if (!title) throw new AppError(502, "AI_CONVERSATION_TITLE_EMPTY", "标题模型没有返回有效标题");
+      const normalizedTitle = Array.from(title).slice(0, 30).join("");
       this.store.setAiConversationTitle(conversationId, normalizedTitle);
       logger.info("ai.conversation_title.generated", { workId, conversationId });
       return normalizedTitle;

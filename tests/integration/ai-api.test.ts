@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { estimateAiTokens } from "../../src/ai.js";
 import { AI_RESPONSE_MAX_BYTES_ENV } from "../../src/ai-response-limit.js";
+import { logger } from "../../src/logger.js";
 import { resolveServerTimeZone } from "../../src/writing-progress-time.js";
 import { createTestRuntime, createWork } from "../helpers.js";
 
@@ -4209,7 +4210,7 @@ describe("AI 供应商、模型与建议 API", () => {
       titleRequestCount += 1;
       titleRequestStarted = true;
       return new Promise<Response>((resolve) => {
-        releaseTitleRequest = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 }));
+        releaseTitleRequest = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: '\n\n  标题：“北港跃迁路线”。\n这行说明不属于标题' } }] }), { status: 200 }));
       });
     });
 
@@ -4489,6 +4490,37 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionBodies[0]).toMatchObject({ stream: true, thinking: { type: "enabled" }, max_tokens: 32_000 });
     expect(completionBodies[1]).toMatchObject({ thinking: { type: "disabled" }, max_tokens: 256 });
     expect(runtime.ai.getModel(modelId).thinkingEnabled).toBe(true);
+  });
+
+  it("空标题作为生成失败处理，保留默认标题且不记录成功", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean };
+      return body.stream
+        ? new Response('data: {"choices":[{"delta":{"content":"主回答"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { "Content-Type": "text/event-stream" } })
+        : new Response(JSON.stringify({ choices: [{ message: { content: "标题：   " } }] }), { status: 200 });
+    });
+    const warning = vi.spyOn(logger, "warn");
+    const info = vi.spyOn(logger, "info");
+    try {
+      const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+        instruction: "空标题仍保留用户问题",
+        scope: { type: "none" },
+        modelId
+      }).expect(200);
+      const complete = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId: string };
+      const refreshed = await request(runtime.app).get(`/api/ai-conversations/${complete.conversationId}/title`).expect(200);
+      expect(refreshed.body.data.title).toBe("空标题仍保留用户问题");
+      expect(streamed.text).toContain('event: delta\ndata: {"delta":"主回答"}');
+      expect(warning).toHaveBeenCalledWith("ai.conversation_title.failed", expect.objectContaining({ conversationId: complete.conversationId }));
+      expect(info).not.toHaveBeenCalledWith("ai.conversation_title.generated", expect.anything());
+    } finally {
+      warning.mockRestore();
+      info.mockRestore();
+    }
   });
 
   it("第一轮助手回复后的标题生成失败时不影响主回答", async () => {
