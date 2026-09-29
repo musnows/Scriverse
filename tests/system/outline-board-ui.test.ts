@@ -38,7 +38,7 @@ describe("章节大纲看板界面", () => {
     expect(application.text).toContain('role="link" tabindex="0" aria-label="打开章节 ${esc(chapter.title)}"');
     expect(application.text).toContain('data-outline-board-detail="${esc(chapter.id)}"');
     expect(application.text).toContain('看板仅展示摘要，本详情已读取完整大纲');
-    expect(application.text).toContain('selectionGeneration !== chapterSelectionRequestGeneration');
+    expect(application.text).toContain("function chapterRequestStillCurrent(workId, selectionGeneration, selectionRequestId)");
     expect(application.text).toContain('String(selectedChapter?.workId ?? "") !== String(workId)');
     expect(application.text).toContain('state.module !== "outlines"');
     expect(application.text).toContain('Object.assign(outlineBoardFilters, normalizeOutlineBoardState());');
