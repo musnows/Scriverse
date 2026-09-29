@@ -21,6 +21,7 @@ describe("想法模块界面", () => {
     expect(page.text).toContain(">想法</button>");
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('feature=ai-write-tools-v3');
+    expect(page.text).toContain('feature=draft-editor-transition-v2');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
     expect(application.text).toContain('field("volumeId", "绑定分卷"');

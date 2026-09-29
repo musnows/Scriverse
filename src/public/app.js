@@ -11739,8 +11739,9 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       void renderDrafts(moduleListPages.drafts).catch((error) => toast(`想法列表刷新失败：${error instanceof Error ? error.message : "未知错误"}`, "error"));
     });
     $("#draft-dialog-edit")?.addEventListener("click", () => {
-      $("#form-dialog").close();
+      // 复用当前模态弹窗，避免旧 close 事件销毁新编辑器。
       openDraftDialog(draftDialogItem);
+      $("#dialog-title-input").focus();
     });
   }
 }
