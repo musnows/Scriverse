@@ -1598,6 +1598,18 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-content { position: relative; z-index: 1; grid-column: 2; grid-row: 1; resize: none; width: 100%; height: auto; min-height: 100%; margin: 0; padding: 32px 36px 72px; border: 0; background: transparent; border-radius: 0; font-size: var(--editor-font-size); line-height: var(--editor-line-height); letter-spacing: .01em; overflow-wrap: break-word; overflow: hidden; }
 .app-shell.editor-typewriter-mode .chapter-content { padding-bottom: max(72px, 45dvh); }
 .chapter-content:focus { box-shadow: none; }
+.chapter-content-skeleton { position: absolute; z-index: 3; grid-column: 2; grid-row: 1; display: grid; align-content: start; gap: 16px; width: 100%; min-height: 100%; margin: 0; padding: 36px 36px 72px; background: var(--paper); pointer-events: none; }
+.chapter-content-skeleton.hidden { display: none; }
+.chapter-content-skeleton-line { position: relative; display: block; height: 14px; overflow: hidden; border-radius: 4px; background: color-mix(in srgb, var(--line) 78%, var(--paper)); }
+.chapter-content-skeleton-line::after { position: absolute; inset: 0; background: linear-gradient(110deg, transparent 18%, color-mix(in srgb, var(--surface) 72%, transparent) 48%, transparent 78%); content: ""; transform: translateX(-110%); animation: image-upload-placeholder-shimmer 1.45s ease-in-out infinite; }
+.chapter-content-skeleton-line:nth-child(2) { width: 92%; }
+.chapter-content-skeleton-line:nth-child(3) { width: 84%; }
+.chapter-content-skeleton-line:nth-child(4) { width: 46%; }
+.chapter-content-skeleton-line:nth-child(5) { width: 96%; margin-top: 8px; }
+.chapter-content-skeleton-line:nth-child(6) { width: 88%; }
+.chapter-content-skeleton-line:nth-child(7) { width: 73%; }
+.chapter-content-skeleton-line:nth-child(8) { width: 38%; }
+@media (prefers-reduced-motion: reduce) { .chapter-content-skeleton-line::after { animation: none; } }
 .chapter-whitespace-overlay { position: relative; z-index: 2; grid-column: 2; grid-row: 1; width: 100%; height: 100%; overflow: hidden; opacity: 0; pointer-events: none; }
 .chapter-whitespace-overlay.is-visible { opacity: 1; }
 #chapter-whitespace-inner { box-sizing: border-box; min-height: 100%; color: transparent; white-space: pre-wrap; }
@@ -4575,6 +4587,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .editor-view .editor-actions > button { min-width: 0; min-height: 34px; padding-inline: 6px; font-size: 11px; }
   .chapter-title { font-size: 18px; }
   .chapter-content { padding: 22px 16px 64px 12px; font-size: max(16px, var(--editor-font-size)); }
+  .chapter-content-skeleton { gap: 14px; padding: 26px 16px 64px 12px; }
   .app-shell.editor-typewriter-mode .chapter-content { padding-bottom: max(64px, 45dvh); }
   .chapter-line-numbers { width: 32px; font-size: 11px; }
   .chapter-editor-scroll { grid-template-columns: 32px minmax(0, 1fr); }
