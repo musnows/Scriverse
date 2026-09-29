@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { AppError } from "../../src/errors.js";
-import { ImageCaptchaService, renderCaptchaSvg } from "../../src/image-captcha.js";
+import {
+  CAPTCHA_LIFETIME_DEFAULT_MS,
+  CAPTCHA_LIFETIME_MINIMUM_MS,
+  ImageCaptchaService,
+  normalizeCaptchaAnswer,
+  renderCaptchaSvg,
+  resolveCaptchaLifetimeMs
+} from "../../src/image-captcha.js";
 
 describe("ImageCaptchaService", () => {
   it("生成 SVG 图片并校验正确答案", () => {
@@ -19,11 +26,98 @@ describe("ImageCaptchaService", () => {
     expect(() => captcha.consume(challenge.captchaId, challenge.answer ?? "")).toThrow(AppError);
   });
 
-  it("错误答案会失效并拒绝", () => {
+  it("同一挑战连续输错仍可再试，成功后不能再用", () => {
     const captcha = new ImageCaptchaService({ revealAnswer: true });
     const challenge = captcha.create();
-    expect(() => captcha.consume(challenge.captchaId, "XXXX")).toThrow(/验证码不正确/u);
-    expect(() => captcha.consume(challenge.captchaId, challenge.answer ?? "")).toThrow(/已失效/u);
+    const answer = challenge.answer ?? "";
+    for (const wrong of ["XXXX", "YYYY"]) {
+      try {
+        captcha.consume(challenge.captchaId, wrong);
+        expect.fail("错误答案应该被拒绝");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AppError);
+        expect((error as AppError).code).toBe("CAPTCHA_INCORRECT");
+        expect((error as AppError).message).toMatch(/验证码不正确/u);
+        expect((error as AppError).message).not.toMatch(/已失效/u);
+      }
+    }
+    expect(() => captcha.consume(challenge.captchaId, answer)).not.toThrow();
+    try {
+      captcha.consume(challenge.captchaId, answer);
+      expect.fail("成功后的验证码应该失效");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AppError);
+      expect((error as AppError).code).toBe("CAPTCHA_INVALID");
+      expect((error as AppError).message).toMatch(/已失效/u);
+    }
+  });
+
+  it("未知挑战会被拒绝，过期后即使答案正确也失效", () => {
+    const captcha = new ImageCaptchaService({ revealAnswer: true });
+    try {
+      captcha.consume("forged-captcha-id", "ABCD");
+      expect.fail("伪造挑战应该被拒绝");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AppError);
+      expect((error as AppError).code).toBe("CAPTCHA_INVALID");
+      expect((error as AppError).message).toMatch(/已失效/u);
+    }
+
+    let now = 10_000;
+    const timed = new ImageCaptchaService({ revealAnswer: true, now: () => now });
+    const challenge = timed.create();
+    now += CAPTCHA_LIFETIME_DEFAULT_MS - 1;
+    expect(() => timed.consume(challenge.captchaId, "XXXX")).toThrow(/验证码不正确/u);
+    now += 1;
+    try {
+      timed.consume(challenge.captchaId, challenge.answer ?? "");
+      expect.fail("过期验证码应该失效");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AppError);
+      expect((error as AppError).code).toBe("CAPTCHA_INVALID");
+      expect((error as AppError).message).toMatch(/已失效/u);
+    }
+  });
+
+  it("接受全角、大小写、空白和零宽字符，且与半角答案相同", () => {
+    const captcha = new ImageCaptchaService({ revealAnswer: true });
+    const challenge = captcha.create();
+    const answer = challenge.answer ?? "";
+    const fullwidth = answer.replace(/[A-Z2-9]/gu, (char) => String.fromCodePoint(char.codePointAt(0)! + 0xFEE0));
+    expect(normalizeCaptchaAnswer(` \u3000${fullwidth.toLocaleLowerCase("en-US")}\u200b `)).toBe(answer);
+    expect(() => captcha.consume(challenge.captchaId, ` ${fullwidth.slice(0, 2)}\u200b ${fullwidth.slice(2)}\u3000`)).not.toThrow();
+  });
+
+  it("默认 300 秒内有效，满 300 秒后失效", () => {
+    let now = 1_700_000_000_000;
+    const captcha = new ImageCaptchaService({ revealAnswer: true, now: () => now });
+    const challenge = captcha.create();
+    now += CAPTCHA_LIFETIME_DEFAULT_MS - 1;
+    expect(() => captcha.consume(challenge.captchaId, challenge.answer ?? "")).not.toThrow();
+
+    const expired = captcha.create();
+    now += CAPTCHA_LIFETIME_DEFAULT_MS;
+    expect(() => captcha.consume(expired.captchaId, expired.answer ?? "")).toThrow(/已失效/u);
+    expect(() => captcha.consume(expired.captchaId, expired.answer ?? "")).toThrow(/已失效/u);
+  });
+
+  it("短于 180 秒的有效期会被抬到 180 秒", () => {
+    expect(resolveCaptchaLifetimeMs()).toBe(CAPTCHA_LIFETIME_DEFAULT_MS);
+    expect(resolveCaptchaLifetimeMs(Number.NaN)).toBe(CAPTCHA_LIFETIME_DEFAULT_MS);
+    expect(resolveCaptchaLifetimeMs(1_000)).toBe(CAPTCHA_LIFETIME_MINIMUM_MS);
+    expect(resolveCaptchaLifetimeMs(-1)).toBe(CAPTCHA_LIFETIME_MINIMUM_MS);
+    expect(resolveCaptchaLifetimeMs(CAPTCHA_LIFETIME_MINIMUM_MS)).toBe(CAPTCHA_LIFETIME_MINIMUM_MS);
+    expect(resolveCaptchaLifetimeMs(CAPTCHA_LIFETIME_DEFAULT_MS + 1_000)).toBe(CAPTCHA_LIFETIME_DEFAULT_MS + 1_000);
+
+    let now = 0;
+    const captcha = new ImageCaptchaService({ revealAnswer: true, lifetimeMs: 1_000, now: () => now });
+    const challenge = captcha.create();
+    now += CAPTCHA_LIFETIME_MINIMUM_MS - 1;
+    expect(() => captcha.consume(challenge.captchaId, challenge.answer ?? "")).not.toThrow();
+
+    const expired = captcha.create();
+    now += CAPTCHA_LIFETIME_MINIMUM_MS;
+    expect(() => captcha.consume(expired.captchaId, expired.answer ?? "")).toThrow(/已失效/u);
   });
 
   it("渲染为无答案文本节点的扭曲点阵字形", () => {

@@ -20,6 +20,10 @@ describe("全局后台任务中心界面", () => {
     expect(script).toContain("collectBackgroundTaskTransitions");
     expect(script).toContain('data-background-index-action="sync"');
     expect(script).toContain('data-background-index-action="rebuild"');
+    expect(script).toContain('const readIndex = dialogOpen && canReadModule("ai-settings")');
+    expect(script).not.toContain('const readIndex = canReadModule("ai-settings")');
+    expect(script).toContain("打开本窗口时显示当前索引状态");
+    expect(script).not.toContain("可在任何模块查看增量同步状态");
     expect(script).toContain("function backgroundProductUpdateMarkup()");
     expect(script).toContain("版本更新探测");
     expect(script).toContain("已通过服务端配置关闭版本更新探测");

@@ -15,8 +15,16 @@ export type CaptchaChallengeResult = {
 
 const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const captchaLength = 4;
-const captchaLifetimeMs = 5 * 60_000;
+/** 默认有效期 300 秒。任何配置或调用若短于下限，都会被抬到 180 秒。 */
+export const CAPTCHA_LIFETIME_DEFAULT_MS = 300_000;
+export const CAPTCHA_LIFETIME_MINIMUM_MS = 180_000;
 const maximumChallenges = 5_000;
+
+/** 把请求的有效期抬到下限；未提供或非法时使用默认 300 秒。 */
+export function resolveCaptchaLifetimeMs(requestedMs?: number): number {
+  if (typeof requestedMs !== "number" || !Number.isFinite(requestedMs)) return CAPTCHA_LIFETIME_DEFAULT_MS;
+  return Math.max(CAPTCHA_LIFETIME_MINIMUM_MS, Math.trunc(requestedMs));
+}
 
 /**
  * 5×7 点阵字形会被渲染为 path，而不是 SVG text：这样不会把答案以可直接读取的
@@ -59,8 +67,16 @@ const glyphPatterns: Record<string, readonly string[]> = {
 };
 const fallbackGlyph = ["11111", "00001", "00010", "00100", "00100", "00000", "00100"];
 
+/**
+ * 全角字母和数字与半角外观相同，但直接比较会失败。
+ * 先做 NFKC，再去掉空白和格式字符（含零宽空格），最后按 en-US 大写。
+ */
+export function normalizeCaptchaAnswer(answer: string): string {
+  return answer.normalize("NFKC").replace(/[\p{Cf}\p{Z}\s]+/gu, "").toLocaleUpperCase("en-US");
+}
+
 function digestAnswer(answer: string): Buffer {
-  return createHash("sha256").update(answer.toLocaleUpperCase("en-US")).digest();
+  return createHash("sha256").update(normalizeCaptchaAnswer(answer)).digest();
 }
 
 function randomCode(): string {
@@ -149,8 +165,20 @@ export function renderCaptchaSvg(code: string, seed = randomBytes(8)): string {
 
 export class ImageCaptchaService {
   private readonly challenges = new Map<string, CaptchaChallenge>();
+  private readonly lifetimeMs: number;
 
-  constructor(private readonly options: { revealAnswer?: boolean } = {}) {}
+  constructor(private readonly options: {
+    revealAnswer?: boolean;
+    /** 请求的有效期（毫秒）。短于 180 秒时抬到 180 秒；缺省 300 秒。 */
+    lifetimeMs?: number;
+    now?: () => number;
+  } = {}) {
+    this.lifetimeMs = resolveCaptchaLifetimeMs(options.lifetimeMs);
+  }
+
+  private currentTime(): number {
+    return this.options.now?.() ?? Date.now();
+  }
 
   create(): CaptchaChallengeResult {
     this.pruneExpired();
@@ -163,7 +191,7 @@ export class ImageCaptchaService {
     const svg = renderCaptchaSvg(answer, seed);
     this.challenges.set(captchaId, {
       answerDigest: digestAnswer(answer),
-      expiresAt: Date.now() + captchaLifetimeMs
+      expiresAt: this.currentTime() + this.lifetimeMs
     });
     return {
       captchaId,
@@ -172,21 +200,26 @@ export class ImageCaptchaService {
     };
   }
 
-  /** 校验并消费验证码；成功或失败都会使该挑战失效。 */
+  /**
+   * 校验验证码。答案错误时保留挑战，允许用同一张图继续重试。
+   * 只有答案正确后才核销。过期，以及已核销或未知的挑战，返回已失效。
+   */
   consume(captchaId: string, answer: string): void {
+    const currentTime = this.currentTime();
     const challenge = this.challenges.get(captchaId);
-    this.challenges.delete(captchaId);
-    if (!challenge || challenge.expiresAt <= Date.now()) {
+    if (!challenge || challenge.expiresAt <= currentTime) {
+      if (challenge) this.challenges.delete(captchaId);
       throw new AppError(400, "CAPTCHA_INVALID", "验证码已失效，请刷新后重试");
     }
-    const provided = digestAnswer(answer.trim());
+    const provided = digestAnswer(answer);
     if (provided.length !== challenge.answerDigest.length || !timingSafeEqual(provided, challenge.answerDigest)) {
-      throw new AppError(400, "CAPTCHA_INVALID", "验证码不正确");
+      throw new AppError(400, "CAPTCHA_INCORRECT", "验证码不正确");
     }
+    this.challenges.delete(captchaId);
   }
 
   private pruneExpired(): void {
-    const currentTime = Date.now();
+    const currentTime = this.currentTime();
     for (const [captchaId, challenge] of this.challenges) {
       if (challenge.expiresAt <= currentTime) this.challenges.delete(captchaId);
     }
