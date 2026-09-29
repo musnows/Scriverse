@@ -14253,10 +14253,7 @@ function updateBackgroundTaskCenterVisibility() {
     $("#background-task-count")?.classList.add("hidden");
     return;
   }
-  const activityCount = backgroundTaskActivityCount(
-    backgroundTaskCenterSnapshot.taskPage,
-    backgroundTaskCenterSnapshot.relationshipIndex
-  ) + (productUpdateChecking ? 1 : 0);
+  const activityCount = backgroundTaskActivityCount(backgroundTaskCenterSnapshot.taskPage) + (productUpdateChecking ? 1 : 0);
   const badge = $("#background-task-count");
   badge.textContent = activityCount > 99 ? "99+" : String(activityCount);
   badge.classList.toggle("hidden", activityCount === 0);
@@ -14340,7 +14337,7 @@ function backgroundIndexMarkup(relationshipIndex, error) {
   const editable = canEditModule("ai-settings");
   return `<section class="background-task-section">
     <div class="background-task-section-heading">
-      <div><strong>人物关系拼音索引</strong><small>可在任何模块查看增量同步状态</small></div>
+      <div><strong>人物关系拼音索引</strong><small>打开本窗口时显示当前索引状态</small></div>
       <div class="background-index-actions ${editable ? "" : "hidden"}">
         <button class="primary-button" type="button" data-background-index-action="sync">同步增量队列</button>
         <button class="ghost-button" type="button" data-background-index-action="rebuild">完整重建</button>
@@ -14411,10 +14408,7 @@ function scheduleBackgroundTaskCenterRefresh() {
   if (backgroundTaskCenterTimer !== null) window.clearTimeout(backgroundTaskCenterTimer);
   backgroundTaskCenterTimer = null;
   if (!backgroundTaskCenterWorkId) return;
-  const activityCount = backgroundTaskActivityCount(
-    backgroundTaskCenterSnapshot.taskPage,
-    backgroundTaskCenterSnapshot.relationshipIndex
-  );
+  const activityCount = backgroundTaskActivityCount(backgroundTaskCenterSnapshot.taskPage);
   const delay = backgroundTaskPollDelay(activityCount, Boolean($("#background-task-dialog")?.open));
   backgroundTaskCenterTimer = window.setTimeout(() => {
     backgroundTaskCenterTimer = null;
@@ -14428,8 +14422,9 @@ async function refreshBackgroundTaskCenter({ announce = true } = {}) {
   if (backgroundTaskCenterTimer !== null) window.clearTimeout(backgroundTaskCenterTimer);
   backgroundTaskCenterTimer = null;
   const requestId = ++backgroundTaskCenterRequest;
+  const dialogOpen = Boolean($("#background-task-dialog")?.open);
   const readTasks = canReadModule("tasks");
-  const readIndex = canReadModule("ai-settings");
+  const readIndex = dialogOpen && canReadModule("ai-settings");
   const [taskResult, indexResult] = await Promise.all([
     readTasks
       ? api(`/api/works/${encodeURIComponent(workId)}/tasks?page=1&limit=30`)
