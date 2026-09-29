@@ -4492,6 +4492,35 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(runtime.ai.getModel(modelId).thinkingEnabled).toBe(true);
   });
 
+  it.each(["作者自己起的标题", "新对话"])("后台标题生成完成时保留期间人工修改的标题：%s", async (manualTitle) => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    let releaseTitleRequest: () => void = () => undefined;
+    let markTitleStarted: () => void = () => undefined;
+    const titleStarted = new Promise<void>((resolve) => { markTitleStarted = resolve; });
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean };
+      if (body.stream) return new Response('data: {"choices":[{"delta":{"content":"主回答"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      markTitleStarted();
+      return new Promise<Response>((resolve) => {
+        releaseTitleRequest = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: "模型晚到的标题" } }] }), { status: 200 }));
+      });
+    });
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "人工命名优先",
+      scope: { type: "none" },
+      modelId
+    }).expect(200);
+    const complete = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId: string };
+    await titleStarted;
+    await request(runtime.app).patch(`/api/ai-conversations/${complete.conversationId}/title`).send({ title: manualTitle }).expect(200);
+    releaseTitleRequest();
+    const refreshed = await request(runtime.app).get(`/api/ai-conversations/${complete.conversationId}/title`).expect(200);
+    expect(refreshed.body.data.title).toBe(manualTitle);
+  });
+
   it("空标题作为生成失败处理，保留默认标题且不记录成功", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

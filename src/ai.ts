@@ -6536,7 +6536,8 @@ export class AiManager {
         [
           ...(conversationBefore?.messages ?? []),
           { role: "assistant" as const, content: generated.content }
-        ]
+        ],
+        conversationBefore?.title ?? defaultTitle
       ).catch((error) => {
         logger.warn("ai.conversation_title.failed", { workId: input.workId, conversationId: input.conversationId, error: aiErrorForLog(error) });
         return null;
@@ -6717,7 +6718,8 @@ export class AiManager {
     workId: string,
     conversationId: string,
     modelId: string,
-    messages: AiConversationTitleContext["messages"]
+    messages: AiConversationTitleContext["messages"],
+    initialTitle: string
   ): Promise<string | null> {
     try {
       const conversation = messages.map((message) => {
@@ -6749,7 +6751,11 @@ export class AiManager {
         .trim();
       if (!title) throw new AppError(502, "AI_CONVERSATION_TITLE_EMPTY", "标题模型没有返回有效标题");
       const normalizedTitle = Array.from(title).slice(0, 30).join("");
-      this.store.setAiConversationTitle(conversationId, normalizedTitle);
+      const updated = this.store.setAiConversationTitle(conversationId, normalizedTitle, initialTitle);
+      if (updated.title !== normalizedTitle) {
+        logger.info("ai.conversation_title.skipped", { workId, conversationId, reason: "title_changed" });
+        return null;
+      }
       logger.info("ai.conversation_title.generated", { workId, conversationId });
       return normalizedTitle;
     } catch (error) {

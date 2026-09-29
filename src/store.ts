@@ -10314,11 +10314,15 @@ export class Store {
     return this.getAiConversation(conversationId);
   }
 
-  setAiConversationTitle(conversationId: string, title: string): Record<string, unknown> {
+  setAiConversationTitle(conversationId: string, title: string, expectedTitle?: string): Record<string, unknown> {
     const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     const normalizedTitle = title.replace(/\s+/gu, " ").trim().slice(0, 200) || "新对话";
     this.db.transaction(() => {
+      if (expectedTitle !== undefined) {
+        const current = this.db.get("SELECT title FROM ai_conversations WHERE id = ?", conversationId);
+        if (!current || this.aiConversationDisplayTitle(conversationId, requiredString(current, "title")) !== expectedTitle) return;
+      }
       this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
       this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
     });
