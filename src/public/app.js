@@ -1977,8 +1977,6 @@ let chapterDraftLineIdState = null;
 let chapterBeforeInputState = null;
 let chapterSearchMatchIndex = -1;
 let chapterSelectionRequestId = 0;
-const chapterBodyCacheLimit = 32;
-const chapterBodyCache = new Map();
 let chapterBodyAbort = null;
 let chapterContentReadyId = null;
 let chapterForeshadowReminderRequestId = 0;
@@ -7669,7 +7667,6 @@ async function persistChapter({ automatic = false } = {}) {
   chapterSaveInFlight = request;
   try {
     const saved = await request;
-    rememberChapterBody(saved.chapter);
     if (state.work?.id !== workId || state.chapter?.id !== draft.chapterId) return saved.chapter;
     state.chapter = saved.chapter;
     chapterContentReadyId = saved.chapter.id;
@@ -9387,7 +9384,6 @@ function renderShelf() {
 
 function resetWorkScopedUiCaches() {
   chapterSelectionRequestId += 1;
-  chapterBodyCache.clear();
   chapterContentReadyId = null;
   chapterBodyAbort?.abort();
   chapterBodyAbort = null;
@@ -9880,7 +9876,6 @@ async function submitChapterBatch(event) {
     const currentStillExists = state.chapter && state.work.volumes.some((volume) => volume.chapters.some((chapter) => chapter.id === state.chapter.id));
     if (state.chapter && currentStillExists) {
       state.chapter = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}`);
-      rememberChapterBody(state.chapter);
       chapterContentReadyId = state.chapter.id;
     }
     if (state.chapter && !currentStillExists) {
@@ -10018,7 +10013,7 @@ async function deleteChapter(chapterId) {
     const deletingSelectedChapter = state.chapter?.id === chapterId;
     const expectedVersionNo = deletingSelectedChapter ? state.chapter.versionNo : chapter.versionNo;
     await api(`/api/chapters/${chapterId}`, { method: "DELETE", body: { expectedVersionNo } });
-    forgetChapterBody(chapterId);
+    if (String(chapterContentReadyId ?? "") === String(chapterId)) chapterContentReadyId = null;
     const workId = state.work.id;
     state.work = await api(`/api/works/${workId}`);
     if (deletingSelectedChapter) {
@@ -10237,26 +10232,14 @@ async function resolveCurrentChapterForeshadowReminder() {
   }
 }
 
-function rememberChapterBody(chapter) {
-  if (!chapter?.id || typeof chapter.content !== "string") return;
-  const id = String(chapter.id);
-  chapterBodyCache.delete(id);
-  chapterBodyCache.set(id, chapter);
-  while (chapterBodyCache.size > chapterBodyCacheLimit) {
-    const oldest = chapterBodyCache.keys().next().value;
-    chapterBodyCache.delete(oldest);
-  }
-}
-
-function cachedChapterBody(chapterId) {
-  const cached = chapterBodyCache.get(String(chapterId ?? ""));
-  return cached && typeof cached.content === "string" ? cached : null;
-}
-
-function forgetChapterBody(chapterId) {
-  const id = String(chapterId ?? "");
-  chapterBodyCache.delete(id);
-  if (String(chapterContentReadyId ?? "") === id) chapterContentReadyId = null;
+function setChapterContentSkeleton(visible) {
+  const skeleton = $("#chapter-content-skeleton");
+  skeleton.classList.toggle("hidden", !visible);
+  skeleton.setAttribute("aria-busy", String(visible));
+  $("#editor-view").setAttribute("aria-busy", String(visible));
+  if (!visible) return;
+  $("#chapter-line-numbers-inner").replaceChildren();
+  $("#chapter-whitespace-inner").replaceChildren();
 }
 
 function chapterEditingLocked() {
@@ -10309,10 +10292,12 @@ function presentChapter(chapter, { editMode = false, contentReady = false, syncR
   scheduleChapterLineNumbers();
   dismissChapterInsightToast();
   updateChapterStats();
+  if (!contentReady) $("#chapter-stats").textContent = "正在载入";
   if (!canEditProse()) setSaveState("正文只读");
   else if (!contentReady) setSaveState("正在同步正文");
   else if (chapterEditorReadOnly) setSaveState("阅读模式");
   else setSaveState("已保存");
+  setChapterContentSkeleton(!contentReady);
   syncChapterTreeSelection();
   if (syncRoute) replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
 }
@@ -10339,24 +10324,10 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
     syncChapterTreeSelection();
     return true;
   }
-  const cached = cachedChapterBody(chapterId);
   const directoryEntry = directoryChapterEntry(chapterId);
-  const localContent = cached?.content ?? (typeof directoryEntry?.content === "string" ? directoryEntry.content : "");
-  const previewChapter = cached
-    ? {
-      ...directoryEntry,
-      ...cached,
-      title: directoryEntry?.title ?? cached.title,
-      wordCount: directoryEntry?.wordCount ?? cached.wordCount,
-      chapterType: directoryEntry?.chapterType ?? cached.chapterType,
-      sortOrder: directoryEntry?.sortOrder ?? cached.sortOrder,
-      volumeId: directoryEntry?.volumeId ?? cached.volumeId,
-      content: cached.content,
-      lineIds: cached.lineIds
-    }
-    : directoryEntry
-      ? { ...directoryEntry, content: localContent, lineIds: directoryEntry.lineIds ?? [] }
-      : { id: chapterId, workId, volumeId: "", title: "", content: "", wordCount: 0, versionNo: 0, chapterType: "正文", lineIds: [] };
+  const previewChapter = directoryEntry
+    ? { ...directoryEntry, content: "", lineIds: [] }
+    : { id: chapterId, workId, volumeId: "", title: "", content: "", wordCount: 0, versionNo: 0, chapterType: "正文", lineIds: [] };
   presentChapter(previewChapter, { editMode: false, contentReady: false });
   syncChapterTreeSelection();
   chapterBodyAbort?.abort();
@@ -10375,7 +10346,6 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   if (chapterBodyAbort === chapterBodyController) chapterBodyAbort = null;
   if (!chapterRequestStillCurrent(workId, selectionGeneration, selectionRequestId)) return false;
   if (String(selectedChapter?.id ?? "") !== String(chapterId) || String(selectedChapter?.workId ?? "") !== String(workId)) return false;
-  rememberChapterBody(selectedChapter);
   presentChapter(selectedChapter, { editMode, contentReady: true, syncRoute: false });
   syncChapterTreeSelection();
   void loadChapterAnnotationCounts(state.chapter.id).catch(() => {
@@ -20492,7 +20462,6 @@ async function showVersions() {
     }
     try {
       state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
-      rememberChapterBody(state.chapter);
       chapterContentReadyId = state.chapter.id;
       resetChapterDraftLineIds(state.chapter);
       lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };

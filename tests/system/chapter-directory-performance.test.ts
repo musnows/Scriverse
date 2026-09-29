@@ -111,7 +111,7 @@ describe("目录性能与异步边界", () => {
 
   it("缓存版本覆盖目录模块，章节打开不等待辅助提醒接口", () => {
     expect(readFileSync("src/public/index.html", "utf8")).toContain("feature=chapter-directory-performance-v2");
-    expect(readFileSync("src/public/index.html", "utf8")).toContain("feature=chapter-switch-cache-v1");
+    expect(readFileSync("src/public/index.html", "utf8")).toContain("feature=chapter-switch-skeleton-v1");
     expect(application).toContain('/chapter-directory.js?v=20260921-directory-performance-v1');
     const select = sourceBetween("async function selectChapter(", "\nfunction updateChapterPath(");
     const paintAt = select.indexOf("presentChapter(previewChapter, { editMode: false, contentReady: false })");
@@ -120,8 +120,13 @@ describe("目录性能与异步边界", () => {
     expect(requestAt).toBeGreaterThan(paintAt);
     expect(select.indexOf("syncChapterTreeSelection();")).toBeGreaterThan(-1);
     expect(select.indexOf("syncChapterTreeSelection();")).toBeLessThan(requestAt);
-    expect(select).toContain("cachedChapterBody(chapterId)");
-    expect(select).toContain("rememberChapterBody(selectedChapter);");
+    expect(select).toContain('presentChapter(previewChapter, { editMode: false, contentReady: false })');
+    expect(select).toContain("content: \"\"");
+    expect(select).not.toContain("cachedChapterBody(");
+    expect(select).not.toContain("rememberChapterBody(");
+    expect(readFileSync("src/public/index.html", "utf8")).toContain('id="chapter-content-skeleton"');
+    expect(application).toContain("function setChapterContentSkeleton(visible)");
+    expect(application).toContain("setChapterContentSkeleton(!contentReady);");
     expect(select).toContain("void loadChapterForeshadowReminders();");
     expect(select).not.toContain("await loadChapterForeshadowReminders();");
     expect(select).not.toContain("await api(`/api/works/");
