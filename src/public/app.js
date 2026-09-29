@@ -9,14 +9,14 @@ import { createImWorkspace } from "/im.js?v=20260904-im-judge-outcomes-v106";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSlashOptions } from "/ai-skill-menu.js?v=20260921-ai-compact-slash-command-v2";
 import {
+  aiConversationTitleSource,
   composeRoleplayStoredUserContent,
   emptyRoleplayScenePin,
   normalizeRoleplayScenePin,
   parseRoleplayUserTurn,
   roleplayScenePinHasContent,
-  roleplayUserTurnDisplayText,
-  roleplayUserTurnTitleSource
-} from "/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v2";
+  roleplayUserTurnDisplayText
+} from "/roleplay-turn.js?v=20260930-ai-title-xml-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.js?v=20260816-ai-chat-switcher-v2";
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260905-question-stream-v2";
@@ -4970,7 +4970,7 @@ async function updateRoleplayMemoryAction(memory, action) {
 }
 
 function defaultAiConversationTitle(prompt) {
-  const normalized = roleplayUserTurnTitleSource(String(prompt ?? "")).replace(/\s+/gu, " ").trim();
+  const normalized = aiConversationTitleSource(String(prompt ?? "")).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
 }
 

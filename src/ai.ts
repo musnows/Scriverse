@@ -122,9 +122,9 @@ import { RemoteMcpManager, type RemoteMcpInvocation } from "./remote-mcp.js";
 import { aiEndpointUsesPrivateNetwork, fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, normalizeCharacterName, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import {
+  aiConversationTitleSource,
   composeRoleplayCurrentUserTurn,
   formatRoleplayScenePinText,
-  roleplayUserTurnTitleSource,
   type RoleplayScenePin
 } from "./roleplay-turn.js";
 import {
@@ -6724,7 +6724,7 @@ export class AiManager {
     try {
       const conversation = messages.map((message) => {
         const speaker = message.role === "user" ? "用户" : "助手";
-        const content = message.role === "user" ? roleplayUserTurnTitleSource(message.content) : message.content;
+        const content = message.role === "user" ? aiConversationTitleSource(message.content) : message.content;
         return `<${speaker}>\n${Array.from(content).slice(0, 3_000).join("")}\n</${speaker}>`;
       }).join("\n\n");
       const generated = await this.generate({

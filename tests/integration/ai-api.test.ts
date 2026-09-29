@@ -906,6 +906,30 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "合法标题", unexpected: true }).expect(400);
   });
 
+  it("默认会话标题忽略引用 XML，旧截断标题可读且保留人工标题与消息", async () => {
+    const instruction = '<ai_reference kind="character" id="character_reference">林舟</ai_reference> 的感情描写';
+    const created = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(created.body.data.id);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role: "user", content: instruction }).expect(201);
+    let loaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(loaded.body.data.title).toBe("林舟 的感情描写");
+    expect(loaded.body.data.messages[0].content).toBe(instruction);
+
+    runtime.database.run("UPDATE ai_conversations SET title = ? WHERE id = ?", "<ai_reference k", conversationId);
+    for (const path of [`/api/ai-conversations/${conversationId}`, `/api/ai-conversations/${conversationId}/title`]) {
+      loaded = await request(runtime.app).get(path).expect(200);
+      expect(loaded.body.data.title).toBe("林舟 的感情描写");
+    }
+    const listed = await request(runtime.app).get(`/api/works/${workId}/ai-conversations`).expect(200);
+    expect(listed.body.data.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: conversationId, title: "林舟 的感情描写" })]));
+    expect(runtime.database.get("SELECT title FROM ai_conversations WHERE id = ?", conversationId)?.title).toBe("<ai_reference k");
+    expect(runtime.store.getAiConversationTitleContext(conversationId, workId).title).toBe("林舟 的感情描写");
+
+    await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "<ai_reference 自定义标题" }).expect(200);
+    loaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(loaded.body.data.title).toBe("<ai_reference 自定义标题");
+  });
+
   it("收藏对话后置顶历史并禁止清理", async () => {
     const first = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "待收藏对话" }).expect(201);
     const second = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "普通对话" }).expect(201);
@@ -4158,6 +4182,8 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsBefore.body.data.titleGenerationModelId).toBeNull();
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const instruction = `<ai_reference kind="character" id="${character.body.data.id}">林舟</ai_reference>：你好`;
     const completionBodies: Array<{ stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> }> = [];
     let chatRequestCount = 0;
     let titleRequestCount = 0;
@@ -4178,6 +4204,8 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(body.tools).toBeUndefined();
       expect(body.messages?.some((message) => message.content?.includes("你好"))).toBe(true);
       expect(body.messages?.some((message) => message.content?.includes("首轮助手回答"))).toBe(true);
+      expect(body.messages?.at(-1)?.content).toContain("林舟：你好");
+      expect(body.messages?.at(-1)?.content).not.toContain("ai_reference");
       titleRequestCount += 1;
       titleRequestStarted = true;
       return new Promise<Response>((resolve) => {
@@ -4186,7 +4214,7 @@ describe("AI 供应商、模型与建议 API", () => {
     });
 
     const firstStream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
-      instruction: "你好",
+      instruction,
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
@@ -4198,7 +4226,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const conversationId = String(firstComplete.conversationId ?? "");
     expect(conversationId).not.toBe("");
     expect(firstComplete).toMatchObject({
-      conversationTitle: "你好",
+      conversationTitle: "林舟：你好",
       conversationTitleGenerationStarted: true
     });
     expect(firstStream.text).not.toContain('"conversationTitle":"北港跃迁路线"');
@@ -4206,7 +4234,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(titleRequestStarted).toBe(true);
     expect(completionBodies).toHaveLength(2);
     let reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
-    expect(reloaded.body.data.title).toBe("你好");
+    expect(reloaded.body.data.title).toBe("林舟：你好");
     expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
     expect(titleRequestCount).toBe(1);
 
