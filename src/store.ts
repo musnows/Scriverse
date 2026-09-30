@@ -40,6 +40,7 @@ import { DEFAULT_AGENT_TOOL_CALL_LIMIT, MIN_AGENT_TOOL_CALL_LIMIT, resolveMaxAge
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_SECONDS, normalizeAiStreamIdleTimeoutSeconds } from "./ai-stream-timeout.js";
 import { normalizeCharacterAttributes, normalizeCharacterState } from "./public/character-profile.js";
 import {
+  aiConversationTitleSource,
   normalizeRoleplayScenePin,
   roleplayUserTurnDisplayText,
   roleplayUserTurnTitleSource,
@@ -745,7 +746,7 @@ function normalizeAiConversationTaskType(value: unknown, roleplayCharacterId?: s
 }
 
 export function defaultAiConversationTitle(prompt: string): string {
-  const normalized = roleplayUserTurnTitleSource(prompt).replace(/\s+/gu, " ").trim();
+  const normalized = aiConversationTitleSource(prompt).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
 }
 
@@ -10288,7 +10289,7 @@ export class Store {
       role: requiredString(message, "role") === "assistant" ? "assistant" as const : "user" as const,
       content: requiredString(message, "content")
     }));
-    return { title: requiredString(conversation, "title"), messages };
+    return { title: this.aiConversationDisplayTitle(conversationId, requiredString(conversation, "title")), messages };
   }
 
   setAiConversationContextWarning(conversationId: string, pending: boolean): void {
@@ -10313,11 +10314,15 @@ export class Store {
     return this.getAiConversation(conversationId);
   }
 
-  setAiConversationTitle(conversationId: string, title: string): Record<string, unknown> {
+  setAiConversationTitle(conversationId: string, title: string, expectedTitle?: string): Record<string, unknown> {
     const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     const normalizedTitle = title.replace(/\s+/gu, " ").trim().slice(0, 200) || "新对话";
     this.db.transaction(() => {
+      if (expectedTitle !== undefined) {
+        const current = this.db.get("SELECT title FROM ai_conversations WHERE id = ?", conversationId);
+        if (!current || this.aiConversationDisplayTitle(conversationId, requiredString(current, "title")) !== expectedTitle) return;
+      }
       this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
       this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
     });
@@ -10949,6 +10954,18 @@ export class Store {
     }
   }
 
+  private aiConversationDisplayTitle(conversationId: string, title: string): string {
+    if (!title.startsWith("<")) return title;
+    const firstUserMessage = this.db.get(
+      "SELECT content FROM ai_conversation_messages WHERE conversation_id = ? AND role = 'user' ORDER BY created_at, rowid LIMIT 1",
+      conversationId
+    );
+    if (!firstUserMessage) return title;
+    const content = requiredString(firstUserMessage, "content");
+    const legacyTitle = Array.from(roleplayUserTurnTitleSource(content).replace(/\s+/gu, " ").trim()).slice(0, 15).join("") || "新对话";
+    return title === legacyTitle ? defaultAiConversationTitle(content) : title;
+  }
+
   private mapAiConversation(row: Row): Record<string, unknown> {
     const roleplayCharacterId = optionalString(row, "roleplay_character_id");
     const roleplayUserCharacterId = optionalString(row, "roleplay_user_character_id");
@@ -10964,7 +10981,7 @@ export class Store {
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
-      title: requiredString(row, "title"),
+      title: this.aiConversationDisplayTitle(conversationId, requiredString(row, "title")),
       isFavorite: booleanValue(row, "is_favorite"),
       messageCount: numberValue(row, "message_count"),
       preview: roleplayUserTurnDisplayText(requiredString(row, "preview")),
