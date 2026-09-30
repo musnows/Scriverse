@@ -12,6 +12,7 @@ describe("Vditor 延迟加载", () => {
     expect(page).not.toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page).not.toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page).not.toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
+    expect(page).toContain('feature=vditor-submit-sync-v1');
     expect(application).toContain('async function loadVditorResources()');
     expect(application).toContain('loadVditorScript("vditorMainScript", "/vendor/vditor/dist/index.min.js?v=3.11.2")');
     expect(application).toContain('if ($("#dialog-fields").querySelector("[data-vditor-editor]") && !(await loadVditorResources())) return;');
