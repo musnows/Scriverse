@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aiConversationTitleSource,
   composeRoleplayCurrentUserTurn,
   composeRoleplayStoredUserContent,
   formatRoleplayScenePinText,
@@ -8,6 +9,7 @@ import {
   roleplayScenePinHasContent,
   roleplayUserTurnTitleSource
 } from "../../src/roleplay-turn.js";
+import { defaultAiConversationTitle } from "../../src/store.js";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
 import * as frontend from "../../src/public/roleplay-turn.js";
 
@@ -57,6 +59,27 @@ describe("角色扮演回合 XML", () => {
     })).toBe("地点：北港码头\n在场：林舟、顾潮\n故事时间：远航第 12 日黄昏");
     expect(roleplayScenePinHasContent(normalizeRoleplayScenePin({ location: "  " }))).toBe(false);
     expect(roleplayScenePinHasContent(normalizeRoleplayScenePin({ location: "北港" }))).toBe(true);
+  });
+
+  it.each([
+    ['<ai_reference kind="character" id="character_1">林舟</ai_reference> 的感情描写', "林舟 的感情描写"],
+    ['检查 <ai_reference kind="setting" id="setting_1">A &amp; B &lt;规则></ai_reference> 的漏洞', "检查 A & B <规则> 的漏洞"],
+    ['<ai_reference kind="chapter" id="chapter_1">第一卷 / 第一章</ai_reference>续写', "第一卷 / 第一章续写"],
+    ['<ai_reference kind="context-settings" id="include-setting-info">注入上下文设定</ai_reference>\n请检查逻辑', "注入上下文设定\n请检查逻辑"],
+    ['<scene_direction>\n夜雨刚停。\n</scene_direction>\n\n<user_message>\n<ai_reference kind="character" id="character_1">林舟</ai_reference>为何离开？\n</user_message>', "林舟为何离开？"],
+    ["<user_message>\n请继续写作\n</user_message>", "请继续写作"],
+    ["<author_instruction>\n分析人物动机\n</author_instruction>", "分析人物动机"],
+    ["解释 <custom>用户 XML</custom> 和 a < b", "解释 <custom>用户 XML</custom> 和 a < b"],
+    ["普通提示词", "普通提示词"]
+  ])("标题只去除项目 XML 并保留 prompt 语义：%s", (content, expected) => {
+    expect(aiConversationTitleSource(content)).toBe(expected);
+    expect(frontend.aiConversationTitleSource(content)).toBe(expected);
+    expect(defaultAiConversationTitle(content)).toBe(Array.from(expected.replace(/\s+/gu, " ").trim()).slice(0, 15).join("") || "新对话");
+  });
+
+  it("默认标题按字符截取且空 prompt 保留新对话", () => {
+    expect(defaultAiConversationTitle("<user_message>\n \n</user_message>")).toBe("新对话");
+    expect(defaultAiConversationTitle("𠮷".repeat(16))).toBe("𠮷".repeat(15));
   });
 
   it("前后端纯函数保持同一契约", () => {
