@@ -9,14 +9,14 @@ import { createImWorkspace } from "/im.js?v=20260904-im-judge-outcomes-v106";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { applyAiSkillCommand, findAiSkillCommand, listAiSlashOptions } from "/ai-skill-menu.js?v=20260921-ai-compact-slash-command-v2";
 import {
+  aiConversationTitleSource,
   composeRoleplayStoredUserContent,
   emptyRoleplayScenePin,
   normalizeRoleplayScenePin,
   parseRoleplayUserTurn,
   roleplayScenePinHasContent,
-  roleplayUserTurnDisplayText,
-  roleplayUserTurnTitleSource
-} from "/roleplay-turn.js?v=20260823-ai-roleplay-scene-turn-v2";
+  roleplayUserTurnDisplayText
+} from "/roleplay-turn.js?v=20260930-ai-title-xml-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.js?v=20260816-ai-chat-switcher-v2";
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260905-question-stream-v2";
@@ -4970,7 +4970,7 @@ async function updateRoleplayMemoryAction(memory, action) {
 }
 
 function defaultAiConversationTitle(prompt) {
-  const normalized = roleplayUserTurnTitleSource(String(prompt ?? "")).replace(/\s+/gu, " ").trim();
+  const normalized = aiConversationTitleSource(String(prompt ?? "")).replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
 }
 
@@ -11739,8 +11739,9 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       void renderDrafts(moduleListPages.drafts).catch((error) => toast(`想法列表刷新失败：${error instanceof Error ? error.message : "未知错误"}`, "error"));
     });
     $("#draft-dialog-edit")?.addEventListener("click", () => {
-      $("#form-dialog").close();
+      // 复用当前模态弹窗，避免旧 close 事件销毁新编辑器。
       openDraftDialog(draftDialogItem);
+      $("#dialog-title-input").focus();
     });
   }
 }
@@ -16066,6 +16067,7 @@ async function openDialog(title, fields, onSubmit, eyebrow = "新增", options =
     submit.textContent = options.pendingLabel ?? "处理中…";
     try {
       commitRelationshipKeywordInputs(form);
+      syncVditorEditorValues(form);
       const formData = new FormData(form);
       disabledStates = [...form.elements].map((control) => [control, control.disabled]);
       disabledStates.forEach(([control]) => {
@@ -17474,6 +17476,16 @@ function destroyVditorEditor(editor) {
   const host = editor.vditor?.element;
   editor.destroy();
   if (host) delete host.__vditor;
+}
+
+function syncVditorEditorValues(container) {
+  // Vditor 的 input 回调有延迟，提交前直接读取正文。
+  container.querySelectorAll("[data-vditor-editor]").forEach((host) => {
+    const valueField = host.parentElement?.querySelector("[data-vditor-value]");
+    const editor = host.__vditor;
+    if (!valueField || valueField.readOnly || typeof editor?.getValue !== "function") return;
+    valueField.value = String(editor.getValue() ?? "");
+  });
 }
 
 function bindVditorEditors(container) {

@@ -113,3 +113,13 @@ export function roleplayUserTurnTitleSource(content: string): string {
   if (!parsed.hasMarkup) return content;
   return parsed.userMessage || parsed.sceneDirection;
 }
+
+export function aiConversationTitleSource(content: string): string {
+  const source = roleplayUserTurnTitleSource(content);
+  const wrapped = unwrapRegion(source.trim(), USER_MESSAGE_TAG) ?? unwrapRegion(source.trim(), "author_instruction");
+  const prompt = wrapped && !wrapped.rest ? wrapped.inner : source;
+  return prompt.replace(
+    /<ai_reference kind="(character|setting|chapter|context-settings)" id="[^"]+">([\s\S]*?)<\/ai_reference>/gu,
+    (_reference, _kind: string, name: string) => unescapeXmlText(name)
+  );
+}

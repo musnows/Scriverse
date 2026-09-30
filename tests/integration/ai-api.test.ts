@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { estimateAiTokens } from "../../src/ai.js";
 import { AI_RESPONSE_MAX_BYTES_ENV } from "../../src/ai-response-limit.js";
+import { logger } from "../../src/logger.js";
 import { resolveServerTimeZone } from "../../src/writing-progress-time.js";
 import { createTestRuntime, createWork } from "../helpers.js";
 
@@ -904,6 +905,30 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(listed.body.data.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: conversationId, title: "新 对话 名称" })]));
     await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "   " }).expect(400);
     await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "合法标题", unexpected: true }).expect(400);
+  });
+
+  it("默认会话标题忽略引用 XML，旧截断标题可读且保留人工标题与消息", async () => {
+    const instruction = '<ai_reference kind="character" id="character_reference">林舟</ai_reference> 的感情描写';
+    const created = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(created.body.data.id);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role: "user", content: instruction }).expect(201);
+    let loaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(loaded.body.data.title).toBe("林舟 的感情描写");
+    expect(loaded.body.data.messages[0].content).toBe(instruction);
+
+    runtime.database.run("UPDATE ai_conversations SET title = ? WHERE id = ?", "<ai_reference k", conversationId);
+    for (const path of [`/api/ai-conversations/${conversationId}`, `/api/ai-conversations/${conversationId}/title`]) {
+      loaded = await request(runtime.app).get(path).expect(200);
+      expect(loaded.body.data.title).toBe("林舟 的感情描写");
+    }
+    const listed = await request(runtime.app).get(`/api/works/${workId}/ai-conversations`).expect(200);
+    expect(listed.body.data.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: conversationId, title: "林舟 的感情描写" })]));
+    expect(runtime.database.get("SELECT title FROM ai_conversations WHERE id = ?", conversationId)?.title).toBe("<ai_reference k");
+    expect(runtime.store.getAiConversationTitleContext(conversationId, workId).title).toBe("林舟 的感情描写");
+
+    await request(runtime.app).patch(`/api/ai-conversations/${conversationId}/title`).send({ title: "<ai_reference 自定义标题" }).expect(200);
+    loaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(loaded.body.data.title).toBe("<ai_reference 自定义标题");
   });
 
   it("收藏对话后置顶历史并禁止清理", async () => {
@@ -4158,6 +4183,8 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsBefore.body.data.titleGenerationModelId).toBeNull();
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const instruction = `<ai_reference kind="character" id="${character.body.data.id}">林舟</ai_reference>：你好`;
     const completionBodies: Array<{ stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> }> = [];
     let chatRequestCount = 0;
     let titleRequestCount = 0;
@@ -4178,15 +4205,17 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(body.tools).toBeUndefined();
       expect(body.messages?.some((message) => message.content?.includes("你好"))).toBe(true);
       expect(body.messages?.some((message) => message.content?.includes("首轮助手回答"))).toBe(true);
+      expect(body.messages?.at(-1)?.content).toContain("林舟：你好");
+      expect(body.messages?.at(-1)?.content).not.toContain("ai_reference");
       titleRequestCount += 1;
       titleRequestStarted = true;
       return new Promise<Response>((resolve) => {
-        releaseTitleRequest = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 }));
+        releaseTitleRequest = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: '\n\n  标题：“北港跃迁路线”。\n这行说明不属于标题' } }] }), { status: 200 }));
       });
     });
 
     const firstStream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
-      instruction: "你好",
+      instruction,
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
@@ -4198,7 +4227,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const conversationId = String(firstComplete.conversationId ?? "");
     expect(conversationId).not.toBe("");
     expect(firstComplete).toMatchObject({
-      conversationTitle: "你好",
+      conversationTitle: "林舟：你好",
       conversationTitleGenerationStarted: true
     });
     expect(firstStream.text).not.toContain('"conversationTitle":"北港跃迁路线"');
@@ -4206,7 +4235,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(titleRequestStarted).toBe(true);
     expect(completionBodies).toHaveLength(2);
     let reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
-    expect(reloaded.body.data.title).toBe("你好");
+    expect(reloaded.body.data.title).toBe("林舟：你好");
     expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
     expect(titleRequestCount).toBe(1);
 
@@ -4423,6 +4452,104 @@ describe("AI 供应商、模型与建议 API", () => {
       interrupted: true,
       interruptionCode: "AI_STREAM_UPSTREAM_CLOSED"
     });
+  });
+
+  it("标题模型独立关闭思考并避免耗尽输出预算", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    const completionBodies: Array<{ stream?: boolean; max_tokens?: number; thinking?: { type?: string } }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number; thinking?: { type?: string } };
+      completionBodies.push(body);
+      if (body.stream) {
+        return new Response('data: {"choices":[{"delta":{"content":"首轮主回答"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        });
+      }
+      const exhausted = body.thinking?.type !== "disabled" && Number(body.max_tokens) <= 64;
+      return new Response(JSON.stringify({ choices: [{
+        message: exhausted
+          ? { content: "", reasoning_content: "The reasoning budget was exhausted before the title." }
+          : { content: "林舟的离别动机" },
+        finish_reason: exhausted ? "length" : "stop"
+      }] }), { status: 200 });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请分析林舟的离别动机",
+      scope: { type: "none" },
+      modelId
+    }).expect(200);
+    const complete = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId: string };
+    const refreshed = await request(runtime.app).get(`/api/ai-conversations/${complete.conversationId}/title`).expect(200);
+    expect(refreshed.body.data.title).toBe("林舟的离别动机");
+    expect(completionBodies).toHaveLength(2);
+    expect(completionBodies[0]).toMatchObject({ stream: true, thinking: { type: "enabled" }, max_tokens: 32_000 });
+    expect(completionBodies[1]).toMatchObject({ thinking: { type: "disabled" }, max_tokens: 256 });
+    expect(runtime.ai.getModel(modelId).thinkingEnabled).toBe(true);
+  });
+
+  it.each(["作者自己起的标题", "新对话"])("后台标题生成完成时保留期间人工修改的标题：%s", async (manualTitle) => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    let releaseTitleRequest: () => void = () => undefined;
+    let markTitleStarted: () => void = () => undefined;
+    const titleStarted = new Promise<void>((resolve) => { markTitleStarted = resolve; });
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean };
+      if (body.stream) return new Response('data: {"choices":[{"delta":{"content":"主回答"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      markTitleStarted();
+      return new Promise<Response>((resolve) => {
+        releaseTitleRequest = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: "模型晚到的标题" } }] }), { status: 200 }));
+      });
+    });
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "人工命名优先",
+      scope: { type: "none" },
+      modelId
+    }).expect(200);
+    const complete = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId: string };
+    await titleStarted;
+    await request(runtime.app).patch(`/api/ai-conversations/${complete.conversationId}/title`).send({ title: manualTitle }).expect(200);
+    releaseTitleRequest();
+    const refreshed = await request(runtime.app).get(`/api/ai-conversations/${complete.conversationId}/title`).expect(200);
+    expect(refreshed.body.data.title).toBe(manualTitle);
+  });
+
+  it("空标题作为生成失败处理，保留默认标题且不记录成功", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean };
+      return body.stream
+        ? new Response('data: {"choices":[{"delta":{"content":"主回答"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { "Content-Type": "text/event-stream" } })
+        : new Response(JSON.stringify({ choices: [{ message: { content: "标题：   " } }] }), { status: 200 });
+    });
+    const warning = vi.spyOn(logger, "warn");
+    const info = vi.spyOn(logger, "info");
+    try {
+      const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+        instruction: "空标题仍保留用户问题",
+        scope: { type: "none" },
+        modelId
+      }).expect(200);
+      const complete = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId: string };
+      const refreshed = await request(runtime.app).get(`/api/ai-conversations/${complete.conversationId}/title`).expect(200);
+      expect(refreshed.body.data.title).toBe("空标题仍保留用户问题");
+      expect(streamed.text).toContain('event: delta\ndata: {"delta":"主回答"}');
+      expect(warning).toHaveBeenCalledWith("ai.conversation_title.failed", expect.objectContaining({ conversationId: complete.conversationId }));
+      expect(info).not.toHaveBeenCalledWith("ai.conversation_title.generated", expect.anything());
+    } finally {
+      warning.mockRestore();
+      info.mockRestore();
+    }
   });
 
   it("第一轮助手回复后的标题生成失败时不影响主回答", async () => {
