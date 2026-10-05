@@ -11,3 +11,6 @@ export type PageRoute =
 export const RESTORABLE_MODULES: readonly RestorableModule[];
 export function serializePageRoute(route?: Record<string, unknown>): string;
 export function parsePageRoute(hash?: string): PageRoute;
+export function pageLocationKey(route?: Record<string, unknown>): string;
+export function historyActionForRouteChange(currentHash?: string, nextRoute?: Record<string, unknown>): "push" | "replace";
+export function shouldCommitModuleRoute(navigationToken: number, currentToken: number, moduleName: string, activeModule: string): boolean;
