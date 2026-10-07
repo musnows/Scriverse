@@ -1658,7 +1658,6 @@ export function createImWorkspace({ api, esc, renderMarkdown, toast, confirmToas
     document.querySelector("#work-meta").textContent = "";
     document.querySelector("#top-search-button").disabled = true;
     document.title = "IM · 叙界";
-    window.history.replaceState(null, "", "#view=im");
     onRouteChange?.();
     if (!eventSource) connectEvents();
     if (current?.active && current.latestSequence > 0 && shouldMarkImConversationRead(opened, document.visibilityState)) {
