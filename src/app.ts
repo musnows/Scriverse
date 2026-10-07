@@ -81,7 +81,7 @@ import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { S3BackupManager, type S3BackupManagerOptions } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
-import { DESKTOP_SYNC_PROTOCOL, desktopCompatibilityMetadata } from "./desktop-protocol.js";
+import { DESKTOP_MINIMUM_VERSION, DESKTOP_SYNC_PROTOCOL, classifyDesktopServerCompatibility, desktopCompatibilityMetadata } from "./desktop-protocol.js";
 import { ReleaseUpdateChecker } from "./release-update.js";
 import { CHARACTER_AVATAR_IMAGE_MAX_BYTES, DEFAULT_IMAGE_UPLOAD_LIMITS, formatUploadLimit, type ImageUploadLimits } from "./upload-limits.js";
 import { canReadWorkModule, canWriteWorkModule, chapterAnnotationPermissionModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
@@ -225,6 +225,13 @@ const desktopLoginSchema = z.object({
   clientVersion: z.string().trim().min(1).max(80),
   ...captchaFields
 }).strict();
+
+function assertDesktopClientVersion(clientVersion: string): void {
+  const check = classifyDesktopServerCompatibility(clientVersion, DESKTOP_MINIMUM_VERSION);
+  if (check?.compatibility !== "upgrade-required") return;
+  throw new AppError(409, "DESKTOP_UPGRADE_REQUIRED", `当前 Desktop 版本过低，Server 要求至少 ${DESKTOP_MINIMUM_VERSION}`);
+}
+
 const desktopRegistrationSchema = z.object({
   username: usernameSchema,
   password: passwordSchema,
@@ -1853,6 +1860,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/desktop/auth/login", (request, response) => {
     const input = parse(desktopLoginSchema, request.body);
+    assertDesktopClientVersion(input.clientVersion);
     captcha.consume(input.captchaId, input.captchaAnswer);
     const result = auth.loginDesktop(input.username, input.password, {
       desktopId: input.desktopId,
@@ -1870,6 +1878,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(403, "REGISTRATION_DISABLED", "当前部署已关闭新用户注册");
     }
     const input = parse(desktopRegistrationSchema, request.body);
+    assertDesktopClientVersion(input.clientVersion);
     captcha.consume(input.captchaId, input.captchaAnswer);
     const setupRequired = !auth.hasUsers();
     if (setupRequired && !verifySetupToken(options.security?.setupToken, input.setupToken)) {

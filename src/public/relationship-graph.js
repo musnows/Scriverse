@@ -375,6 +375,24 @@ export function formatRelationshipDetailLabel(edge) {
   return `${formatRelationshipLabel(edge)}${formatRelationshipStatusNote(edge)}`;
 }
 
+/** 指针落在银河图左上角说明卡片内时，滚轮应滚动卡片而不是缩放地图。 */
+export function galaxyDetailWheelPanel(target) {
+  let element = target ?? null;
+  if (element && element.nodeType === 3) element = element.parentElement ?? null;
+  if (!element || typeof element.closest !== "function") return null;
+  return element.closest("#galaxy-detail");
+}
+
+/** 把滚轮的行、页位移换成像素，供说明卡片按原生方向滚动。 */
+export function galaxyWheelPixelDeltaY(deltaY, deltaMode = 0, pageSize = 0) {
+  const delta = Number(deltaY);
+  if (!Number.isFinite(delta) || delta === 0) return 0;
+  const mode = Number(deltaMode) || 0;
+  if (mode === 1) return delta * 16;
+  if (mode === 2) return delta * Math.max(0, Number(pageSize) || 0);
+  return delta;
+}
+
 export function groupRelationshipDetailsByCharacterName(graph, nodeId) {
   const groups = new Map();
   for (const edge of graph.edges) {
@@ -2997,6 +3015,13 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     else stopAnimation();
   });
   listen(shell, "wheel", (event) => {
+    const detailPanel = galaxyDetailWheelPanel(event.target);
+    if (detailPanel) {
+      event.preventDefault();
+      event.stopPropagation();
+      detailPanel.scrollTop += galaxyWheelPixelDeltaY(event.deltaY, event.deltaMode, detailPanel.clientHeight);
+      return;
+    }
     if (event.target.closest('[role="search"]')) return;
     event.preventDefault();
     zoom(event.deltaY > 0 ? 0.9 : 1.1);

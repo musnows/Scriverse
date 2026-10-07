@@ -27,7 +27,7 @@ describe("人物关系图搜索界面", () => {
     expect(page.text).toContain('feature=galaxy-compact-controls-v2');
     expect(page.text).toContain('feature=galaxy-motion-mode-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
-    expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1');
+    expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1&feature=galaxy-detail-wheel-scroll-v1');
     expect(application.text).toContain('class="relationship-table-wrapper"');
     expect(application.text).toContain('GALAXY_MOTION_MODE_STORAGE_KEY');
     expect(application.text).toContain('motionMode: storedGalaxyMotionMode()');
@@ -46,6 +46,11 @@ describe("人物关系图搜索界面", () => {
     expect(graph.text).toContain('searchInput.setAttribute("role", "combobox")');
     expect(graph.text).toContain('focusViewOnNode(node.id)');
     expect(graph.text).toContain('focusCameraOnNode(node)');
+    expect(graph.text).toContain("const detailPanel = galaxyDetailWheelPanel(event.target);");
+    expect(graph.text).toContain("detailPanel.scrollTop += galaxyWheelPixelDeltaY(event.deltaY, event.deltaMode, detailPanel.clientHeight);");
+    expect(graph.text).toContain('if (event.target.closest(\'[role="search"]\')) return;');
+    expect(page.text).toContain("feature=galaxy-detail-wheel-scroll-v1");
+    expect(styles.text).toContain("overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;");
     expect(styles.text).toContain('.relationship-node-search-results');
     expect(styles.text).toContain('.relationship-node-search.is-galaxy');
     expect(styles.text).toContain('.relationship-node-search.is-galaxy input { min-height: 36px; padding-block: 5px;');

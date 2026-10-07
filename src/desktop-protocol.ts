@@ -1,4 +1,28 @@
 import { APP_VERSION } from "./version.js";
+import { compareServerAlignment, type ServerVersionRelation } from "./version-compat.js";
+
+export type DesktopServerCompatibility = "compatible" | "upgrade-required";
+
+export type DesktopServerVersionCheck = {
+  relation: ServerVersionRelation;
+  compatibility: DesktopServerCompatibility;
+};
+
+/**
+ * 用 Desktop 上报版本的前三段对齐 Server 要求。四段版本可以解析；
+ * 只有前三段更低时才需要升级。无法解析时返回 null，不得当成 upgrade-required。
+ */
+export function classifyDesktopServerCompatibility(
+  desktopVersion: string,
+  serverMinimum: string
+): DesktopServerVersionCheck | null {
+  const relation = compareServerAlignment(desktopVersion, serverMinimum);
+  if (!relation) return null;
+  return {
+    relation,
+    compatibility: relation === "older" ? "upgrade-required" : "compatible"
+  };
+}
 
 export const DESKTOP_PRODUCT_ID = "scriverse";
 export const DESKTOP_MINIMUM_VERSION = "0.0.1";

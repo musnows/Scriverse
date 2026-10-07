@@ -1,3 +1,5 @@
+import { compareServerAlignment, parseReportedVersion } from "./version-compat.js";
+
 const githubLatestReleaseUrl = "https://api.github.com/repos/musnows/Scriverse/releases/latest";
 const githubReleasePathPrefix = "/musnows/Scriverse/releases/";
 const minutesToMilliseconds = 60 * 1000;
@@ -48,22 +50,8 @@ type CachedReleaseUpdateResult = {
   result: ReleaseUpdateResult;
 };
 
-function parseVersion(value: string): [number, number, number] | null {
-  const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/u);
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
 export function isNewerRelease(currentVersion: string, candidateVersion: string): boolean {
-  const current = parseVersion(currentVersion);
-  const candidate = parseVersion(candidateVersion);
-  if (!current || !candidate) return false;
-  for (let index = 0; index < current.length; index += 1) {
-    const currentPart = current[index]!;
-    const candidatePart = candidate[index]!;
-    if (candidatePart !== currentPart) return candidatePart > currentPart;
-  }
-  return false;
+  return compareServerAlignment(candidateVersion, currentVersion) === "newer";
 }
 
 function validatedReleaseUrl(value: unknown): string | null {
@@ -166,7 +154,7 @@ export class ReleaseUpdateChecker {
         const releaseUrl = validatedReleaseUrl(release.html_url);
         if (!releaseUrl) continue;
         const latestVersion = release.tag_name.trim().replace(/^v/u, "");
-        if (!parseVersion(latestVersion)) continue;
+        if (!parseReportedVersion(latestVersion)) continue;
         const updateAvailable = isNewerRelease(this.currentVersion, latestVersion);
         return {
           enabled: true,
