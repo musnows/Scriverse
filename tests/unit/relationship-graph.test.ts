@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_MOTION_MODES, GALAXY_NODE_SIZE_FULL_SCALE_DEGREE, GALAXY_NODE_SIZE_GROWTH_THRESHOLD, GALAXY_REDUCED_MOTION_EDGE_THRESHOLD, GALAXY_REDUCED_MOTION_NODE_THRESHOLD, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyMotionProfile, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeLabelOffset, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipCanvasPixelRatio, getRelationshipEdgeGeometry, getRelationshipGraphRenderProfile, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, isGalaxyPerformanceThresholdExceeded, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldRenderGalaxyEdgeLabel, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_MOTION_MODES, GALAXY_NODE_SIZE_FULL_SCALE_DEGREE, GALAXY_NODE_SIZE_GROWTH_THRESHOLD, GALAXY_REDUCED_MOTION_EDGE_THRESHOLD, GALAXY_REDUCED_MOTION_NODE_THRESHOLD, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyMotionProfile, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeLabelOffset, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipCanvasPixelRatio, getRelationshipEdgeGeometry, getRelationshipGraphRenderProfile, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, isGalaxyPerformanceThresholdExceeded, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldRenderGalaxyEdgeLabel, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast, galaxyDetailWheelPanel, galaxyWheelPixelDeltaY } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("关系网达到当前规模后切换为 Canvas 连线并限制像素密度", () => {
@@ -124,6 +125,33 @@ describe("人物关系图数据与布局", () => {
 
     expect(groups.map((group: { name: string }) => group.name)).toEqual(["基多拉", "哈尔"]);
     expect(groups[0].edges.map((edge: { id: string }) => edge.id)).toEqual(["family", "conflict"]);
+  });
+
+  it("银河图说明卡片上的滚轮换算为卡片纵向位移", () => {
+    const panel = { id: "galaxy-detail" };
+    const item = {
+      nodeType: 1,
+      closest(selector: string) {
+        return selector === "#galaxy-detail" ? panel : null;
+      }
+    };
+    const text = { nodeType: 3, parentElement: item };
+    const map = { nodeType: 1, closest: () => null };
+
+    expect(galaxyDetailWheelPanel(item)).toBe(panel);
+    expect(galaxyDetailWheelPanel(text)).toBe(panel);
+    expect(galaxyDetailWheelPanel(map)).toBeNull();
+    expect(galaxyDetailWheelPanel(null)).toBeNull();
+    expect(galaxyWheelPixelDeltaY(120, 0, 200)).toBe(120);
+    expect(galaxyWheelPixelDeltaY(-2, 1, 200)).toBe(-32);
+    expect(galaxyWheelPixelDeltaY(1, 2, 180)).toBe(180);
+    expect(galaxyWheelPixelDeltaY(Number.NaN, 0, 180)).toBe(0);
+    const source = readFileSync(new URL("../../src/public/relationship-graph.js", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../../src/public/styles.css", import.meta.url), "utf8");
+    expect(source).toContain("const detailPanel = galaxyDetailWheelPanel(event.target);");
+    expect(source).toContain("detailPanel.scrollTop += galaxyWheelPixelDeltaY(event.deltaY, event.deltaMode, detailPanel.clientHeight);");
+    expect(source).toContain('if (event.target.closest(\'[role="search"]\')) return;');
+    expect(styles).toContain(".galaxy-detail { position: fixed; z-index: 7; left: 22px; top: 22px; width: min(300px, 30vw); max-height: 55vh; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;");
   });
 
   it("按组织、种族、身份解析 Obsidian 节点分组并映射低饱和配色", () => {
