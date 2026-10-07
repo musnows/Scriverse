@@ -21,7 +21,7 @@ describe("工作台模块图预加载", () => {
     const preloadHrefs = [...page.text.matchAll(/<link rel="modulepreload" href="([^"]+)" fetchpriority="low">/gu)]
       .map((match) => match[1]);
 
-    expect(preloadHrefs).toHaveLength(73);
+    expect(preloadHrefs).toHaveLength(74);
     expect(preloadHrefs[0]).toContain("/app.js?v=");
     expect(preloadHrefs).toContain("/chapter-directory.js?v=20260921-directory-performance-v1");
     expect(preloadHrefs).toContain("/reading-preview.js?v=20260813-reader-theme-v2");
@@ -38,6 +38,7 @@ describe("工作台模块图预加载", () => {
     expect(preloadHrefs).toContain("/stream-markdown.js?v=20260912-stream-render-v2");
     expect(preloadHrefs).toContain("/ai-render-scheduler.js?v=20260912-stream-render-v2");
     expect(preloadHrefs).toContain("/im.js?v=20260904-im-judge-outcomes-v106");
+    expect(preloadHrefs).toContain("/chapter-dialog-keyboard.js?v=20261007-chapter-create-enter-noop-v1");
     expect(page.text.indexOf('rel="modulepreload"')).toBeLessThan(page.text.indexOf("</head>"));
   });
 });
