@@ -21,6 +21,35 @@ describe("GitHub Release 更新探测", () => {
     expect(isNewerRelease("0.6.7", "0.6.7")).toBe(false);
     expect(isNewerRelease("0.6.7", "0.6.6")).toBe(false);
     expect(isNewerRelease("0.6.7", "latest")).toBe(false);
+    expect(isNewerRelease("1.1.7", "1.1.7.1")).toBe(false);
+    expect(isNewerRelease("1.1.7.1", "1.1.7")).toBe(false);
+    expect(isNewerRelease("1.1.7", "1.1.8.0")).toBe(true);
+    expect(isNewerRelease("1.1.8.0", "1.1.7")).toBe(false);
+  });
+
+  it("四段版本可以完成发布比较，相同前三段不视为需要升级", async () => {
+    const aligned = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      tag_name: "v1.1.7.1",
+      html_url: "https://github.com/musnows/Scriverse/releases/tag/v1.1.7.1"
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const newer = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      tag_name: "v1.1.8.0",
+      html_url: "https://github.com/musnows/Scriverse/releases/tag/v1.1.8.0"
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    await expect(new ReleaseUpdateChecker("1.1.7", aligned, { retries: 0 }).check()).resolves.toMatchObject({
+      checked: true,
+      updateAvailable: false,
+      currentVersion: "1.1.7",
+      latestVersion: "1.1.7.1"
+    });
+    await expect(new ReleaseUpdateChecker("1.1.7", newer, { retries: 0 }).check()).resolves.toMatchObject({
+      checked: true,
+      updateAvailable: true,
+      currentVersion: "1.1.7",
+      latestVersion: "1.1.8.0",
+      releaseUrl: "https://github.com/musnows/Scriverse/releases/tag/v1.1.8.0"
+    });
   });
 
   it("默认每小时探测并将过短配置限制为 10 分钟", () => {
