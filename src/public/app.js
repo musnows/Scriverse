@@ -42,6 +42,7 @@ import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1&feature=semantic-search-v6";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
 import { shouldActivateAiSendControl, shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260919-ai-send-mode-v2";
+import { bindChapterCreateEnterGuard } from "/chapter-dialog-keyboard.js?v=20261007-chapter-create-enter-noop-v1";
 import { aiSendModeAction, normalizeAiSendMode, readStoredAiSendMode, writeStoredAiSendMode } from "/ai-send-mode.js?v=20260919-ai-send-mode-v2";
 import {
   aiPromptQueueDragPayload,
@@ -16235,11 +16236,14 @@ async function openDialog(title, fields, onSubmit, eyebrow = "新增", options =
   if ($("#dialog-fields").querySelector("[data-vditor-editor]") && !(await loadVditorResources())) return;
   formDialogVditors = bindVditorEditors($("#dialog-fields"));
   form.onclick = null;
-  form.onkeydown = null;
+  // 仅新建章节传入 suppressEnter。该表单第一个提交按钮是关闭，回车会关掉对话框但不会创建章节。
+  const chapterEnterGuard = options.suppressEnter ? bindChapterCreateEnterGuard(form) : null;
+  if (!chapterEnterGuard) form.onkeydown = null;
   dialog.oncancel = (event) => {
     if (submitting) event.preventDefault();
   };
   form.onsubmit = async (event) => {
+    if (chapterEnterGuard?.consumeSuppressedEnter(event)) return;
     if (submitting) {
       event.preventDefault();
       return;
@@ -16720,7 +16724,7 @@ async function openChapterDialog(volumeId = null) {
     await selectChapter(chapter.id, { editMode: true });
     if (state.chapter?.id === chapter.id) $("#chapter-title").value = state.chapter.title;
     void refreshChapterTitleFormat();
-  });
+  }, "新增", { suppressEnter: true });
 }
 
 function openVolumeDialog(item) {

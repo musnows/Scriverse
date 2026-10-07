@@ -47,6 +47,8 @@ function fixture(options: FieldOptions[]) {
   const toast = vi.fn();
   const context = {
     form,
+    // 新建章节的回车守卫在 openDialog 闭包里，片段执行时默认不启用。
+    chapterEnterGuard: null,
     submitting: false,
     disabledStates: [],
     submit: { textContent: "Save" },
