@@ -1,5 +1,5 @@
 import { applyChapterDirectoryMove, chapterDirectoryEntry } from "/chapter-directory.js?v=20260921-directory-performance-v1";
-import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1";
+import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3&feature=galaxy-edge-label-threshold-v1&feature=galaxy-detail-wheel-scroll-v1";
 import { formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { countProseWords } from "/text-count.js?v=20260906-chapter-word-count-consistency-v1";
 import { renderMarkdown } from "/markdown.js?v=20260912-stream-render-v2";
