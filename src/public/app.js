@@ -42,6 +42,7 @@ import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, modelThinkingEffortLabel, supportsMultimodalModelProtocol } from "/model-config.js?v=20260822-ai-model-thinking-label-v3&feature=ai-provider-responses-v1&feature=semantic-search-v6";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260822-private-ai-endpoint-hint-v1";
 import { shouldActivateAiSendControl, shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260919-ai-send-mode-v2";
+import { bindChapterCreateEnterGuard } from "/chapter-dialog-keyboard.js?v=20261007-chapter-create-enter-noop-v1";
 import { aiSendModeAction, normalizeAiSendMode, readStoredAiSendMode, writeStoredAiSendMode } from "/ai-send-mode.js?v=20260919-ai-send-mode-v2";
 import {
   aiPromptQueueDragPayload,
@@ -106,7 +107,7 @@ import {
   characterGenderLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1&feature=ai-provider-responses-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1&feature=global-im-return-v1";
+import { historyActionForRouteChange, parsePageRoute, serializePageRoute, shouldCommitModuleRoute } from "/page-route.js?v=20260812-reader-preview-v1&feature=global-im-return-v1&feature=page-location-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
   READING_PREFERENCES_VERSION,
@@ -1255,6 +1256,10 @@ const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 let restoringPageRoute = true;
+let applyingHistoryRoute = false;
+let pageNavigationToken = 0;
+let historySyncPromise = null;
+let historySyncAgain = false;
 let memberDialogWork = null;
 let memberDialogMembers = [];
 let memberDialogDirectory = [];
@@ -1488,12 +1493,181 @@ function settingsRouteContext() {
   };
 }
 
-function replacePageRoute(route) {
+function beginPageNavigation() {
+  pageNavigationToken += 1;
+  return pageNavigationToken;
+}
+
+function replacePageRoute(route, options = {}) {
   if (restoringPageRoute) return;
+  if (options.token !== undefined && options.token !== pageNavigationToken) return;
+  if (applyingHistoryRoute) {
+    schedulePresenceHeartbeat();
+    syncTopSearchButton();
+    return;
+  }
   const hash = serializePageRoute(route);
-  if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
+  const currentHash = window.location.hash;
+  const canonicalCurrent = serializePageRoute(parsePageRoute(currentHash));
+  if (canonicalCurrent === hash && currentHash === hash) {
+    schedulePresenceHeartbeat();
+    syncTopSearchButton();
+    return;
+  }
+  const action = options.history === "push"
+    ? "push"
+    : options.history === "replace" || canonicalCurrent === hash
+      ? "replace"
+      : historyActionForRouteChange(currentHash, route);
+  if (action === "push") window.history.pushState(null, "", hash);
+  else window.history.replaceState(null, "", hash);
   schedulePresenceHeartbeat();
   syncTopSearchButton();
+}
+
+function scheduleHistorySync() {
+  if (restoringPageRoute) return;
+  if (historySyncPromise) {
+    historySyncAgain = true;
+    return;
+  }
+  historySyncPromise = Promise.resolve().then(() => syncUiToLocation()).finally(() => {
+    historySyncPromise = null;
+    if (!historySyncAgain) return;
+    historySyncAgain = false;
+    scheduleHistorySync();
+  });
+}
+
+async function syncUiToLocation() {
+  if (restoringPageRoute || applyingHistoryRoute) return;
+  const route = parsePageRoute(window.location.hash);
+  const previous = currentPageRoute();
+  if (serializePageRoute(route) === serializePageRoute(previous)) return;
+  applyingHistoryRoute = true;
+  try {
+    await applyHistoryRoute(route);
+  } finally {
+    applyingHistoryRoute = false;
+  }
+  if (serializePageRoute(currentPageRoute()) === serializePageRoute(previous)) {
+    const fallback = serializePageRoute(previous);
+    if (serializePageRoute(parsePageRoute(window.location.hash)) !== fallback) window.history.pushState(null, "", fallback);
+  }
+}
+
+function historyEntityModule(entity) {
+  return { setting: "settings", character: "characters", race: "races", organization: "organizations" }[entity] ?? "characters";
+}
+
+function currentEntityEditorId() {
+  if (entityEditorType === "setting") return settingEditorItem?.id ?? null;
+  if (entityEditorType === "character") return characterEditorItem?.id ?? null;
+  return knowledgeEditorItem?.id ?? null;
+}
+
+async function dismissEntityEditorForRoute(route) {
+  if ($("#entity-editor-view").classList.contains("hidden")) return true;
+  const sameEntity = route.view === "entity-editor"
+    && route.entity === entityEditorType
+    && String(route.entityId ?? "") === String(currentEntityEditorId() ?? "");
+  if (sameEntity) return true;
+  if (!$("#character-section-editor-view").classList.contains("hidden") && !(await closeCharacterSectionEditor())) return false;
+  if (!$("#knowledge-section-editor-view").classList.contains("hidden") && !(await closeKnowledgeSectionEditor())) return false;
+  return closeEntityEditor({ skipReturn: true });
+}
+
+async function openHistoryEntityEditor(route) {
+  const collection = route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations";
+  const item = route.entityId ? await api(`/api/${collection}/${encodeURIComponent(route.entityId)}`) : null;
+  if (route.entityId && !item) {
+    toast(({ setting: "未找到要编辑的设定", character: "未找到要编辑的角色", race: "未找到要编辑的种族", organization: "未找到要编辑的组织" }[route.entity] ?? "未找到要编辑的档案"), "error");
+    return false;
+  }
+  const options = { readOnly: route.entityMode === "read" };
+  if (route.entity === "setting") await openSettingEditor(item, options);
+  else if (route.entity === "character") await openCharacterEditor(item, options);
+  else if (route.entity === "race") await openRaceDialog(item, options);
+  else await openOrganizationDialog(item, options);
+  return true;
+}
+
+async function applyHistoryRoute(route) {
+  if (route.view === "login") return;
+  if (!(await dismissEntityEditorForRoute(route))) return;
+  if (route.view === "im") {
+    await imWorkspace.open();
+    return;
+  }
+  if (imWorkspace.opened) imWorkspace.close();
+  if (!$("#reader-view").classList.contains("hidden") && route.view !== "reader") closeReadingPreview({ restoreRoute: false });
+
+  if (route.view === "shelf" || (!route.workId && !["settings", "platform-ai", "platform-usage"].includes(route.view))) {
+    showShelf();
+    return;
+  }
+
+  if (route.workId && state.work?.id !== route.workId) {
+    if (!state.works.some((work) => work.id === route.workId)) {
+      showShelf();
+      return;
+    }
+    state.module = route.view === "module"
+      ? route.module
+      : route.view === "entity-editor"
+        ? historyEntityModule(route.entity)
+        : "editor";
+    const selected = await selectWork(route.workId, route.view === "editor" ? route.chapterId : null);
+    if (!selected) return;
+    if (route.view === "editor" || route.view === "module" || route.view === "welcome") return;
+  }
+
+  if (route.view === "reader") {
+    await openReadingPreview({ chapterId: route.chapterId, restorePosition: true });
+    return;
+  }
+  if (route.view === "editor") {
+    if (!route.chapterId) {
+      showWelcome(true);
+      return;
+    }
+    const chapterAlreadyOpen = String(state.chapter?.id ?? "") === String(route.chapterId) && !$("#editor-view").classList.contains("hidden");
+    if (!chapterAlreadyOpen) await selectChapter(route.chapterId);
+    return;
+  }
+  if (route.view === "module") {
+    if (state.module === route.module && !$("#module-view").classList.contains("hidden") && $("#editor-view").classList.contains("hidden")) return;
+    await showModule(route.module);
+    return;
+  }
+  if (route.view === "entity-editor") {
+    await openHistoryEntityEditor(route);
+    return;
+  }
+  if (route.view === "welcome") {
+    showWelcome(true);
+    return;
+  }
+  if (route.view === "settings") {
+    await showSettingsHub();
+    settingsReturnContext = restoredSettingsReturnContext(route);
+    renderSettingsHub();
+    return;
+  }
+  if (route.view === "platform-ai") {
+    await showPlatformAi();
+    settingsReturnContext = restoredSettingsReturnContext(route);
+    return;
+  }
+  if (route.view === "platform-usage") {
+    await showPlatformUsage();
+    settingsReturnContext = restoredSettingsReturnContext(route);
+    return;
+  }
+  if (route.view === "work-audit") {
+    await showWorkAudit();
+    settingsReturnContext = restoredSettingsReturnContext(route);
+  }
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
@@ -2142,6 +2316,7 @@ function showEntityEditorPage(type, { readOnly = false } = {}) {
   ["setting", "character", "knowledge"].forEach((editor) => $(`#${editor}-editor-readonly-badge`).classList.toggle("hidden", !(viewOnly && (editor === "knowledge" ? ["race", "organization"].includes(type) : editor === type))));
   $("#app").inert = true;
   document.body.classList.add("entity-editor-open");
+  beginPageNavigation();
   replacePageRoute(currentPageRoute());
 }
 
@@ -2163,7 +2338,7 @@ function isEntityEditorSaving() {
   return Boolean($("#entity-editor-view").querySelector('[aria-busy="true"]'));
 }
 
-async function closeEntityEditor({ force = false } = {}) {
+async function closeEntityEditor({ force = false, skipReturn = false } = {}) {
   if (isEntityEditorSaving()) {
     toast("正在保存，请稍候");
     return false;
@@ -2193,7 +2368,7 @@ async function closeEntityEditor({ force = false } = {}) {
   $("#knowledge-section-editor-view").classList.add("hidden");
   $("#app").inert = false;
   document.body.classList.remove("entity-editor-open");
-  await showModule(module);
+  if (!skipReturn) await showModule(module);
   return true;
 }
 
@@ -7868,12 +8043,13 @@ async function initializePage() {
     document.documentElement.removeAttribute("data-pending-view");
     document.documentElement.classList.remove("pending-shelf-mode");
     restoringPageRoute = false;
-    replacePageRoute(currentPageRoute());
+    replacePageRoute(currentPageRoute(), { history: "replace" });
     scheduleFirstUseOnboarding();
   }
 }
 
 function showShelf() {
+  beginPageNavigation();
   imWorkspace.close();
   stopBackgroundTaskCenter();
   dismissChapterInsightToast();
@@ -8200,6 +8376,7 @@ async function showWorkAudit() {
   setTopbarViewState("操作记录");
   $("#work-audit-summary").textContent = "正在读取操作记录……";
   $("#work-audit-list").innerHTML = '<p class="entity-history-empty">正在加载操作记录…</p>';
+  beginPageNavigation();
   replacePageRoute({ view: "work-audit", workId: state.work.id, ...settingsRouteContext() });
   try {
     await loadWorkAuditPage();
@@ -9281,6 +9458,7 @@ async function showSettingsHub() {
   $("#settings-button").setAttribute("aria-current", "page");
   setTopbarViewState("设置");
   renderSettingsHub();
+  beginPageNavigation();
   replacePageRoute({ view: "settings", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
 }
@@ -9330,8 +9508,9 @@ async function showPlatformAi() {
   $("#work-meta").textContent = "平台 AI 管理";
   $("#settings-button").setAttribute("aria-current", "page");
   setTopbarViewState("平台 AI");
-  await renderPlatformAiConfig();
+  beginPageNavigation();
   replacePageRoute({ view: "platform-ai", workId: state.work?.id ?? null, ...settingsRouteContext() });
+  await renderPlatformAiConfig();
   return true;
 }
 
@@ -9355,8 +9534,9 @@ async function showPlatformUsage() {
   $("#settings-button").setAttribute("aria-current", "page");
   $("#platform-usage-pricing-refresh").classList.toggle("hidden", state.user?.role !== "admin");
   setTopbarViewState("Token 用量");
-  await renderPlatformTokenUsage();
+  beginPageNavigation();
   replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
+  await renderPlatformTokenUsage();
   return true;
 }
 
@@ -10299,7 +10479,10 @@ function presentChapter(chapter, { editMode = false, contentReady = false, syncR
   else setSaveState("已保存");
   setChapterContentSkeleton(!contentReady);
   syncChapterTreeSelection();
-  if (syncRoute) replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
+  if (syncRoute) {
+    beginPageNavigation();
+    replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
+  }
 }
 
 async function selectChapter(chapterId, { editMode = false } = {}) {
@@ -10639,6 +10822,7 @@ async function loadReadingChapter(chapterId, { scrollRatio = null, pageIndex = n
   $("#reader-title").textContent = `${state.work.title} · ${target.title}`;
   $("#reader-document").setAttribute("aria-busy", "true");
   renderReadingStatus("正在载入章节……");
+  beginPageNavigation();
   replacePageRoute({ view: "reader", workId: state.work.id, chapterId: target.id });
   try {
     const initialRequest = initialReaderChapterRequest?.chapterId === target.id
@@ -10780,7 +10964,7 @@ async function openReadingPreview({ chapterId = null, volumeId = null, restorePo
   return true;
 }
 
-function closeReadingPreview() {
+function closeReadingPreview({ restoreRoute = true } = {}) {
   const view = $("#reader-view");
   if (view.classList.contains("hidden")) return;
   persistReadingPosition();
@@ -10798,7 +10982,7 @@ function closeReadingPreview() {
   updateDocumentTitle(state.work);
   const returnRoute = readingReturnRoute ?? (state.work ? { view: "welcome", workId: state.work.id } : { view: "shelf" });
   readingReturnRoute = null;
-  replacePageRoute(returnRoute);
+  if (restoreRoute) replacePageRoute(returnRoute);
   const focus = readingPreviousFocus;
   readingPreviousFocus = null;
   const focusCandidates = [focus, $("#reader-open-button"), $("#home-button")];
@@ -10868,6 +11052,7 @@ function tidyChapterBlankLines() {
 }
 
 function showWelcome(hasWork = false) {
+  beginPageNavigation();
   imWorkspace.close();
   chapterSelectionRequestId += 1;
   clearChapterForeshadowReminders({ invalidateRequest: true });
@@ -10916,8 +11101,9 @@ async function showModule(module) {
     taskAutoRunEditing = false;
     taskAutoRunEditingWorkId = null;
   }
-  if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
+  if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return false;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
+  const navigationToken = beginPageNavigation();
   dismissDeleteToasts();
   state.module = module;
   if (module !== "editor") {
@@ -10952,6 +11138,7 @@ async function showModule(module) {
   $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || module === "comments" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   bindModuleContentInteractions();
+  replacePageRoute({ view: "module", workId: state.work.id, module }, { token: navigationToken });
   try {
     if (module === "drafts") await renderDrafts();
     if (module === "settings") await renderSettings();
@@ -10966,9 +11153,12 @@ async function showModule(module) {
     if (module === "tasks") await renderTasks(taskListPage);
     if (module === "ai-settings") await renderBookAiSettings();
   } catch (error) {
-    $("#module-content").innerHTML = `<div class="empty-state"><b>载入失败</b>${esc(error.message)}</div>`;
+    if (shouldCommitModuleRoute(navigationToken, pageNavigationToken, module, state.module)) {
+      $("#module-content").innerHTML = `<div class="empty-state"><b>载入失败</b>${esc(error.message)}</div>`;
+    }
   }
-  replacePageRoute({ view: "module", workId: state.work.id, module });
+  if (!shouldCommitModuleRoute(navigationToken, pageNavigationToken, module, state.module)) return;
+  replacePageRoute({ view: "module", workId: state.work.id, module }, { token: navigationToken });
 }
 
 function emptyModule(title, description) {
@@ -16046,11 +16236,14 @@ async function openDialog(title, fields, onSubmit, eyebrow = "新增", options =
   if ($("#dialog-fields").querySelector("[data-vditor-editor]") && !(await loadVditorResources())) return;
   formDialogVditors = bindVditorEditors($("#dialog-fields"));
   form.onclick = null;
-  form.onkeydown = null;
+  // 仅新建章节传入 suppressEnter。该表单第一个提交按钮是关闭，回车会关掉对话框但不会创建章节。
+  const chapterEnterGuard = options.suppressEnter ? bindChapterCreateEnterGuard(form) : null;
+  if (!chapterEnterGuard) form.onkeydown = null;
   dialog.oncancel = (event) => {
     if (submitting) event.preventDefault();
   };
   form.onsubmit = async (event) => {
+    if (chapterEnterGuard?.consumeSuppressedEnter(event)) return;
     if (submitting) {
       event.preventDefault();
       return;
@@ -16531,7 +16724,7 @@ async function openChapterDialog(volumeId = null) {
     await selectChapter(chapter.id, { editMode: true });
     if (state.chapter?.id === chapter.id) $("#chapter-title").value = state.chapter.title;
     void refreshChapterTitleFormat();
-  });
+  }, "新增", { suppressEnter: true });
 }
 
 function openVolumeDialog(item) {
@@ -23113,7 +23306,7 @@ const imWorkspace = createImWorkspace({
   confirmToast,
   state,
   showShelf,
-  onRouteChange: schedulePresenceHeartbeat,
+  onRouteChange: () => replacePageRoute({ view: "im" }),
   beforeOpen: async () => {
     if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 IM 将放弃本地修改。是否继续？"))) return false;
     cancelChapterAutoSave();
@@ -23123,6 +23316,8 @@ const imWorkspace = createImWorkspace({
 });
 
 initializeAiChatTabs();
+window.addEventListener("popstate", scheduleHistorySync);
+window.addEventListener("hashchange", scheduleHistorySync);
 imWorkspace.start();
 initializePage().catch((error) => {
   restoringPageRoute = false;

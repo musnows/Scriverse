@@ -110,3 +110,37 @@ export function parsePageRoute(hash = "") {
   }
   return { view: "shelf" };
 }
+
+// 地址里要能区分作品、模块、章节和实体。阅读/编辑模式、设置返回来源不算另一次页面跳转。
+export function pageLocationKey(route = {}) {
+  const parsed = route.view ? route : { view: "shelf" };
+  const view = String(parsed.view ?? "shelf");
+  const workId = String(parsed.workId ?? "");
+  if (view === "login" || view === "shelf" || view === "im") return view;
+  if (view === "editor" || view === "reader") return `${view}\u001f${workId}\u001f${String(parsed.chapterId ?? "")}`;
+  if (view === "module") return `module\u001f${workId}\u001f${String(parsed.module ?? "")}`;
+  if (view === "entity-editor") return `entity\u001f${workId}\u001f${String(parsed.entity ?? "")}\u001f${String(parsed.entityId ?? "")}`;
+  if (view === "welcome") return `welcome\u001f${workId}`;
+  if (view === "settings" || view === "platform-ai" || view === "platform-usage" || view === "work-audit") return `${view}\u001f${workId}`;
+  return "shelf";
+}
+
+export function historyActionForRouteChange(currentHash = "", nextRoute = {}) {
+  const next = parsePageRoute(serializePageRoute(nextRoute));
+  const current = parsePageRoute(currentHash);
+  if (pageLocationKey(current) === pageLocationKey(next)) return "replace";
+  if (
+    current.view === "entity-editor"
+    && next.view === "entity-editor"
+    && current.workId === next.workId
+    && current.entity === next.entity
+    && !current.entityId
+    && next.entityId
+  ) return "replace";
+  return "push";
+}
+
+// 模块列表是异步加载的。加载结束时如果用户已经打开章节或其他模块，就不能再提交旧地址。
+export function shouldCommitModuleRoute(navigationToken, currentToken, moduleName, activeModule) {
+  return navigationToken === currentToken && String(moduleName) === String(activeModule);
+}
