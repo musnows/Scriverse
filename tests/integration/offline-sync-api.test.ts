@@ -536,9 +536,19 @@ describe("Desktop 离线同步快照 API", () => {
     };
     const viewerDenied = await request(runtime.app).post(`/api/sync/works/${fixture.workId}/push`)
       .set("Authorization", viewerAuthorization)
-      .send({ clientId: "30000000-0000-4000-8000-000000000004", mutations: [mutation] })
-      .expect(403);
-    expect(viewerDenied.body.error.code).toBe("WORK_EDIT_DENIED");
+      .send({
+        clientId: "30000000-0000-4000-8000-000000000004",
+        mutations: [{ ...mutation, mutationId: "30000000-0000-4000-8000-000000000013" }]
+      })
+      .expect(200);
+    expect(viewerDenied.body.data.results[0]).toMatchObject({
+      status: "rejected",
+      errorCode: "WORK_MODULE_WRITE_DENIED",
+      entityType: "chapter"
+    });
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", fixture.chapterId)).toMatchObject({
+      content: "快照旧正文"
+    });
     const csrfDenied = await owner.agent.post(`/api/sync/works/${fixture.workId}/push`)
       .send({ clientId: "30000000-0000-4000-8000-000000000004", mutations: [mutation] })
       .expect(403);
@@ -553,6 +563,96 @@ describe("Desktop 离线同步快照 API", () => {
       .set("Authorization", viewerAuthorization)
       .expect(404);
     expect(privateResult.body.error.code).toBe("SYNC_MUTATION_NOT_FOUND");
+  });
+
+  it("上传时按模块写权限接受或拒绝，离线包本身不按读权限裁剪", async () => {
+    const owner = await register(runtime, "module_write_owner");
+    const editor = await register(runtime, "module_write_editor");
+    const fixture = await createOfflineFixture(runtime, owner);
+    const character = await owner.agent.post(`/api/works/${fixture.workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "林舟" })
+      .expect(201);
+    const permissions = {
+      prose: "read",
+      comments: "read",
+      todos: "read",
+      drafts: "read",
+      settings: "write",
+      characters: "none",
+      races: "read",
+      organizations: "read",
+      timeline: "read",
+      relationships: "read",
+      outlines: "read",
+      reviews: "read",
+      "ai-chat": "read",
+      "ai-analysis": "read",
+      "ai-settings": "read"
+    };
+    await owner.agent.post(`/api/works/${fixture.workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: editor.userId, permissions })
+      .expect(201);
+    const authorization = await desktopAuthorization(
+      runtime,
+      editor.username,
+      "31000000-0000-4000-8000-000000000001"
+    );
+    const snapshot = await request(runtime.app).post(`/api/sync/works/${fixture.workId}/snapshots`)
+      .set("Authorization", authorization)
+      .send({})
+      .expect(201);
+    const items: Array<Record<string, unknown>> = [];
+    let after = 0;
+    while (true) {
+      const page = await request(runtime.app)
+        .get(`/api/sync/snapshots/${snapshot.body.data.snapshotId}/items?after=${after}&limit=100`)
+        .set("Authorization", authorization)
+        .expect(200);
+      items.push(...page.body.data.items);
+      if (!page.body.data.hasMore) break;
+      after = Number(page.body.data.nextAfter);
+    }
+    expect(items.some((item) => item.entityType === "character")).toBe(true);
+    expect(items.some((item) => item.entityType === "setting")).toBe(true);
+
+    const pushed = await request(runtime.app).post(`/api/sync/works/${fixture.workId}/push`)
+      .set("Authorization", authorization)
+      .send({
+        clientId: "31000000-0000-4000-8000-000000000002",
+        mutations: [
+          {
+            mutationId: "31000000-0000-4000-8000-000000000003",
+            entityType: "setting",
+            entityId: fixture.settingId,
+            operation: "update",
+            baseVersionNo: 1,
+            changeNote: "离线修改设定",
+            localSnapshot: { title: "星球", category: "地理", content: "编辑后的设定" }
+          },
+          {
+            mutationId: "31000000-0000-4000-8000-000000000004",
+            entityType: "character",
+            entityId: String(character.body.data.id),
+            operation: "update",
+            baseVersionNo: 1,
+            changeNote: "离线修改角色",
+            localSnapshot: { name: "不应写入" }
+          }
+        ]
+      })
+      .expect(200);
+    expect(pushed.body.data.results).toEqual([
+      expect.objectContaining({ entityType: "setting", status: "applied" }),
+      expect.objectContaining({ entityType: "character", status: "rejected", errorCode: "WORK_MODULE_WRITE_DENIED" })
+    ]);
+    expect(runtime.database.get("SELECT content FROM settings WHERE id = ?", fixture.settingId)).toMatchObject({
+      content: "编辑后的设定"
+    });
+    expect(runtime.database.get("SELECT name FROM characters WHERE id = ?", character.body.data.id)).toMatchObject({
+      name: "林舟"
+    });
   });
 
   it("在离线授权或作品权限撤销后立即停止快照访问", async () => {

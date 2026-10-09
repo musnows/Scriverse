@@ -53,7 +53,7 @@ describe("离线同步快照", () => {
     expectAppError(() => sync.describeOwnedSnapshot(snapshot.snapshotId, "user-a"), "SYNC_SNAPSHOT_NOT_FOUND", 404);
   });
 
-  it("同步包包含角色、想法和同级设定库，并按模块权限省略无权内容", () => {
+  it("同步包包含角色、想法和同级设定库，且不按模块读权限裁剪", () => {
     database = new Database(":memory:");
     const store = new Store(database);
     const workId = String(store.createWork({ title: "离线包" }).id);
@@ -76,18 +76,20 @@ describe("离线同步快照", () => {
       foreshadow: "ready"
     });
 
-    const denied = runWithRequestActor({
+    const unrestricted = runWithRequestActor({
       userId: "user-b",
       username: "reader",
       displayName: "reader",
       role: "user"
     }, () => sync.createSnapshot(workId, "user-b"));
-    const deniedItems = readSnapshotItems(sync, denied.snapshotId, "user-b");
-    expect(deniedItems.some((item) => item.entityType === "character" || item.entityType === "draft" || item.entityType === "race")).toBe(false);
-    expect((deniedItems.find((item) => item.entityType === "offline-package")?.data as { modules: Record<string, string> }).modules).toMatchObject({
-      character: "denied",
-      draft: "denied",
-      race: "denied"
+    const unrestrictedItems = readSnapshotItems(sync, unrestricted.snapshotId, "user-b");
+    expect(unrestrictedItems.find((item) => item.entityType === "character")?.data).toMatchObject({ id: character.id, name: "林舟" });
+    expect(unrestrictedItems.find((item) => item.entityType === "draft")?.data).toMatchObject({ id: draft.id, title: "潮门" });
+    expect(unrestrictedItems.find((item) => item.entityType === "race")?.data).toMatchObject({ id: race.id, name: "海族" });
+    expect((unrestrictedItems.find((item) => item.entityType === "offline-package")?.data as { modules: Record<string, string> }).modules).toMatchObject({
+      character: "ready",
+      draft: "ready",
+      race: "ready"
     });
   });
 

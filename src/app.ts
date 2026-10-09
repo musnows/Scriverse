@@ -353,19 +353,6 @@ const syncMutationBaseFields = {
   baseVersionNo: z.number().int().positive(),
   changeNote: z.string().trim().min(1).max(500).default("Desktop 离线修改")
 };
-const syncPushSchema = z.object({
-  clientId: z.string().uuid(),
-  mutations: z.array(z.discriminatedUnion("entityType", [
-    z.object({ ...syncMutationBaseFields, entityType: z.literal("chapter"), localSnapshot: chapterSyncSnapshotSchema }).strict(),
-    z.object({ ...syncMutationBaseFields, entityType: z.literal("setting"), localSnapshot: settingSyncSnapshotSchema }).strict()
-  ])).min(1).max(20)
-}).strict().superRefine((input, context) => {
-  const mutationIds = input.mutations.map((mutation) => mutation.mutationId);
-  if (new Set(mutationIds).size !== mutationIds.length) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["mutations"], message: "同一批次不能重复 mutationId" });
-  }
-});
-
 const globalReplaceSchema = z.object({
   find: z.string().min(1).max(500),
   replacement: z.string().max(200_000),
@@ -531,6 +518,29 @@ const foreshadowSchema = z.object({
   plannedPayoffChapterId: identifier.nullable().optional(),
   resolutionNote: z.string().max(100_000).optional(),
   occurrences: z.array(foreshadowOccurrenceSchema).max(500).optional()
+});
+
+const syncEntitySnapshot = (schema: z.ZodObject<z.ZodRawShape>) => schema.partial().strict();
+const syncPushSchema = z.object({
+  clientId: z.string().uuid(),
+  mutations: z.array(z.discriminatedUnion("entityType", [
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("chapter"), localSnapshot: chapterSyncSnapshotSchema }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("setting"), localSnapshot: settingSyncSnapshotSchema }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("draft"), localSnapshot: syncEntitySnapshot(draftSchema) }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("character"), localSnapshot: syncEntitySnapshot(characterSchema) }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("race"), localSnapshot: syncEntitySnapshot(raceSchema) }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("organization"), localSnapshot: syncEntitySnapshot(organizationSchema) }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("timeline-track"), localSnapshot: syncEntitySnapshot(timelineTrackSchema) }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("timeline-event"), localSnapshot: syncEntitySnapshot(timelineSchema) }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("relationship"), localSnapshot: syncEntitySnapshot(relationshipSchema) }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("chapter-outline"), localSnapshot: syncEntitySnapshot(chapterOutlineSchema) }).strict(),
+    z.object({ ...syncMutationBaseFields, entityType: z.literal("foreshadow"), localSnapshot: syncEntitySnapshot(foreshadowSchema) }).strict()
+  ])).min(1).max(20)
+}).strict().superRefine((input, context) => {
+  const mutationIds = input.mutations.map((mutation) => mutation.mutationId);
+  if (new Set(mutationIds).size !== mutationIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["mutations"], message: "同一批次不能重复 mutationId" });
+  }
 });
 
 const reviewSchema = z.object({
@@ -2546,11 +2556,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     const input = parse(syncPushSchema, request.body);
     response.setHeader("Cache-Control", "no-store");
+    const permissions = auth.workModulePermissions(request.authUser, request.params.workId, true);
+    if (!permissions) throw new AppError(403, "WORK_ACCESS_DENIED", "你没有访问这部作品的权限");
     data(response, offlineSync.pushMutations(
       request.params.workId,
       request.authUser.userId,
       input.clientId,
-      input.mutations
+      input.mutations,
+      permissions
     ));
   });
   app.get("/api/sync/works/:workId/mutations/:mutationId", (request, response) => {
@@ -2568,7 +2581,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const snapshotId = parse(z.string().uuid(), request.params.snapshotId);
     const snapshot = offlineSync.describeOwnedSnapshot(snapshotId, request.authUser.userId);
     auth.assertActiveWork(snapshot.workId);
-    auth.assertWorkAccess(request.authUser, snapshot.workId, { read: ["prose", "settings"] }, false, true);
+    auth.assertWorkAccess(request.authUser, snapshot.workId, {}, false, true);
     const query = parse(z.object({
       after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
       limit: z.coerce.number().int().min(1).max(100).default(100)
@@ -2583,7 +2596,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const snapshotId = parse(z.string().uuid(), request.params.snapshotId);
     const snapshot = offlineSync.describeOwnedSnapshot(snapshotId, request.authUser.userId);
     auth.assertActiveWork(snapshot.workId);
-    auth.assertWorkAccess(request.authUser, snapshot.workId, { read: ["prose", "settings"] }, false, true);
+    auth.assertWorkAccess(request.authUser, snapshot.workId, {}, false, true);
     offlineSync.deleteSnapshot(snapshotId, request.authUser.userId);
     noContent(response);
   });
