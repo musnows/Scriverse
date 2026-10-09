@@ -1704,6 +1704,37 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     startAnalysisTask: (workId, input) => store.createTask(workId, input)
   }, { chapterAnnotationNoteMaxLength });
   ai.attachWritePlanManager(aiWritePlanManager);
+  offlineSync.setPackageExtras((workId) => {
+    const capture = (entityType: string, load: () => Record<string, unknown>[]): { entityType: string; records: Record<string, unknown>[] } => {
+      try {
+        return { entityType, records: load() };
+      } catch (error) {
+        logger.warn("offline.package.extra_failed", { workId, entityType, error: sanitizeError(error) });
+        return { entityType, records: [] };
+      }
+    };
+    const one = (entityType: string, id: string, load: () => Record<string, unknown>) => capture(entityType, () => [{ ...load(), id }]);
+    return [
+      capture("ai-provider", () => ai.listProviders().map((provider) => ({ ...provider, id: String(provider.id ?? "") }))),
+      capture("work-model", () => ai.listWorkModels(workId).map((model) => ({ ...model, id: String(model.id ?? "") }))),
+      capture("semantic-model", () => ai.listWorkSemanticModels(workId).map((model) => ({ ...model, id: String(model.id ?? "") }))),
+      capture("task-default", () => ai.listTaskDefaults(workId).flatMap((item) => {
+        const id = String(item.taskType ?? "");
+        return id ? [{ ...item, id }] : [];
+      })),
+      one("relationship-search-index", "status", () => ai.getRelationshipSearchIndexStatus(workId)),
+      one("semantic-search-index", "status", () => ai.getSemanticSearchIndexStatus(workId)),
+      one("work-token-usage", "usage", () => ai.getWorkTokenUsage(workId)),
+      one("work-mcp-settings", "settings", () => ai.getRemoteMcpSettings(workId)),
+      capture("ai-protocol", () => AI_PROVIDER_PROTOCOL_OPTIONS.map((option) => ({ ...option, id: option.value }))),
+      one("ai-write-tools", "tools", () => ({
+        tools: aiWritePlanManager.getEnabledTools(workId),
+        labels: aiWriteToolLabels,
+        descriptions: aiWriteToolDescriptions,
+        maxOperations: resolveAiWritePlanMaxOperations(process.env.AI_WRITE_PLAN_MAX_OPERATIONS)
+      }))
+    ];
+  });
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Database, SYSTEM_USER_ID } from "../../src/database.js";
 import { AppError } from "../../src/errors.js";
 import { OfflineSyncService } from "../../src/offline-sync.js";
+import { runWithRequestActor } from "../../src/request-context.js";
 import { Store } from "../../src/store.js";
 
 function expectAppError(operation: () => unknown, code: string, status: number): void {
@@ -13,6 +14,17 @@ function expectAppError(operation: () => unknown, code: string, status: number):
   }
   expect(caught).toBeInstanceOf(AppError);
   expect(caught).toMatchObject({ code, status });
+}
+
+function readSnapshotItems(sync: OfflineSyncService, snapshotId: string, userId: string): Array<Record<string, unknown>> {
+  const items: Array<Record<string, unknown>> = [];
+  let after = 0;
+  while (true) {
+    const page = sync.readSnapshotPage(snapshotId, userId, after, 50);
+    items.push(...page.items);
+    if (!page.hasMore || page.nextAfter === null) return items;
+    after = page.nextAfter;
+  }
 }
 
 describe("离线同步快照", () => {
@@ -39,6 +51,44 @@ describe("离线同步快照", () => {
     timestamp += 1_000;
     expectAppError(() => sync.readSnapshotPage(snapshot.snapshotId, "user-a", 0, 100), "SYNC_SNAPSHOT_EXPIRED", 410);
     expectAppError(() => sync.describeOwnedSnapshot(snapshot.snapshotId, "user-a"), "SYNC_SNAPSHOT_NOT_FOUND", 404);
+  });
+
+  it("同步包包含角色、想法和同级设定库，并按模块权限省略无权内容", () => {
+    database = new Database(":memory:");
+    const store = new Store(database);
+    const workId = String(store.createWork({ title: "离线包" }).id);
+    store.setWorkOfflineAccess(workId, true);
+    const character = store.createCharacter(workId, { name: "林舟" });
+    const draft = store.createDraft(workId, { draftType: "prose", title: "潮门", content: "也许从北港开始" });
+    const race = store.createRace(workId, { name: "海族" });
+    const sync = new OfflineSyncService(database, store);
+    const snapshot = sync.createSnapshot(workId, "user-a");
+    const items = readSnapshotItems(sync, snapshot.snapshotId, "user-a");
+    expect(items.find((item) => item.entityType === "character")?.data).toMatchObject({ id: character.id, name: "林舟" });
+    expect(items.find((item) => item.entityType === "draft")?.data).toMatchObject({ id: draft.id, title: "潮门", content: "也许从北港开始" });
+    expect(items.find((item) => item.entityType === "race")?.data).toMatchObject({ id: race.id, name: "海族" });
+    expect((items.find((item) => item.entityType === "offline-package")?.data as { modules: Record<string, string> }).modules).toMatchObject({
+      character: "ready",
+      draft: "ready",
+      race: "ready",
+      organization: "ready",
+      "timeline-event": "ready",
+      foreshadow: "ready"
+    });
+
+    const denied = runWithRequestActor({
+      userId: "user-b",
+      username: "reader",
+      displayName: "reader",
+      role: "user"
+    }, () => sync.createSnapshot(workId, "user-b"));
+    const deniedItems = readSnapshotItems(sync, denied.snapshotId, "user-b");
+    expect(deniedItems.some((item) => item.entityType === "character" || item.entityType === "draft" || item.entityType === "race")).toBe(false);
+    expect((deniedItems.find((item) => item.entityType === "offline-package")?.data as { modules: Record<string, string> }).modules).toMatchObject({
+      character: "denied",
+      draft: "denied",
+      race: "denied"
+    });
   });
 
   it("拒绝附件校验失败的更新时回滚正文、版本、审计和增量同步记录", () => {

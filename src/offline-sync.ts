@@ -3,6 +3,7 @@ import { Database } from "./database.js";
 import { AppError } from "./errors.js";
 import { Store } from "./store.js";
 import { countWords } from "./utils.js";
+import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
 
 export const SYNC_SNAPSHOT_TTL_MS = 15 * 60 * 1_000;
 export const SYNC_SNAPSHOT_PAGE_BYTE_LIMIT = 4 * 1024 * 1024;
@@ -17,9 +18,18 @@ export type SyncSnapshotDescriptor = {
   syncProtocol: 1;
 };
 
+export type SyncPackageModuleState = "ready" | "denied";
+
+export type SyncPackageExtra = {
+  entityType: string;
+  records: Record<string, unknown>[];
+};
+
+export type SyncPackageExtraLoader = (workId: string, permissions: WorkModulePermissions) => SyncPackageExtra[];
+
 type SyncSnapshotItem = {
   sequence: number;
-  entityType: "work" | "volume" | "chapter" | "setting";
+  entityType: string;
   entityId: string;
   versionNo: number;
   data: Record<string, unknown>;
@@ -157,10 +167,13 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+type PackageItem = { entityType: string; data: Record<string, unknown> };
+
 export class OfflineSyncService {
   private readonly snapshots = new Map<string, StoredSyncSnapshot>();
   private readonly now: () => number;
   private readonly snapshotTtlMs: number;
+  private packageExtras: SyncPackageExtraLoader | null = null;
 
   constructor(
     private readonly database: Database,
@@ -171,24 +184,90 @@ export class OfflineSyncService {
     this.snapshotTtlMs = options.snapshotTtlMs ?? SYNC_SNAPSHOT_TTL_MS;
   }
 
+  setPackageExtras(loader: SyncPackageExtraLoader | null): void {
+    this.packageExtras = loader;
+  }
+
   createSnapshot(workId: string, userId: string): SyncSnapshotDescriptor {
     const captured = this.database.transaction(() => {
       this.assertOfflineAccessEnabled(workId);
       const tree = this.store.getWorkTree(workId);
+      const permissions = (tree.modulePermissions && typeof tree.modulePermissions === "object" && !Array.isArray(tree.modulePermissions)
+        ? tree.modulePermissions
+        : {}) as WorkModulePermissions;
       const volumes = recordArray(tree.volumes);
       const { volumes: _volumes, modulePermissions: _modulePermissions, accessRole: _accessRole, ...work } = tree;
-      const rawItems: Array<{ entityType: SyncSnapshotItem["entityType"]; data: Record<string, unknown> }> = [
+      const rawItems: PackageItem[] = [
         { entityType: "work", data: work }
       ];
-      for (const volumeWithChapters of volumes) {
-        const chapters = recordArray(volumeWithChapters.chapters);
-        const { chapters: _chapters, ...volume } = volumeWithChapters;
-        rawItems.push({ entityType: "volume", data: volume });
-        for (const chapter of chapters) rawItems.push({ entityType: "chapter", data: chapter });
+      const modules: Record<string, SyncPackageModuleState> = {};
+      const readable = (module: WorkPermissionModule): boolean => canReadWorkModule(permissions, module);
+      const take = (module: WorkPermissionModule, entityType: string, records: Record<string, unknown>[], idFor?: (record: Record<string, unknown>) => string): void => {
+        if (!readable(module)) {
+          modules[entityType] = "denied";
+          return;
+        }
+        modules[entityType] = "ready";
+        for (const record of records) {
+          const id = idFor ? idFor(record) : String(record.id ?? "");
+          if (!id) continue;
+          rawItems.push({ entityType, data: String(record.id ?? "") === id ? record : { ...record, id } });
+        }
+      };
+      if (readable("prose")) {
+        modules.volume = "ready";
+        modules.chapter = "ready";
+        for (const volumeWithChapters of volumes) {
+          const chapters = recordArray(volumeWithChapters.chapters);
+          const { chapters: _chapters, ...volume } = volumeWithChapters;
+          rawItems.push({ entityType: "volume", data: volume });
+          for (const chapter of chapters) rawItems.push({ entityType: "chapter", data: chapter });
+        }
+      } else {
+        modules.volume = "denied";
+        modules.chapter = "denied";
       }
-      for (const setting of this.store.listSettings(workId, true)) {
-        rawItems.push({ entityType: "setting", data: setting });
+      take("settings", "setting", readable("settings") ? this.store.listSettings(workId, true) : []);
+      take("drafts", "draft", readable("drafts") ? this.store.listDrafts(workId, undefined, true) : []);
+      take("characters", "character", readable("characters") ? this.store.listCharacters(workId, true, true) : []);
+      take("races", "race", readable("races") ? this.store.listRaces(workId, true) : []);
+      take("organizations", "organization", readable("organizations") ? this.store.listOrganizations(workId, true) : []);
+      take("timeline", "timeline-track", readable("timeline") ? this.store.listTimelineTracks(workId) : []);
+      take("timeline", "timeline-event", readable("timeline") ? this.store.listTimelineEvents(workId) : []);
+      take("relationships", "relationship", readable("relationships") ? this.store.listRelationships(workId) : []);
+      take("outlines", "chapter-outline", readable("outlines")
+        ? this.store.listChapterOutlines(workId).filter((outline) => outline.createdAt)
+        : [], (outline) => String(outline.chapterId ?? ""));
+      take("outlines", "foreshadow", readable("outlines") ? this.store.listForeshadows(workId) : []);
+      take("reviews", "review", readable("reviews") ? this.store.listReviewItems(workId) : []);
+      const annotationKinds: Array<"note" | "todo"> = [];
+      if (readable("comments")) annotationKinds.push("note");
+      if (readable("todos")) annotationKinds.push("todo");
+      if (annotationKinds.length === 0) {
+        modules["chapter-annotation"] = "denied";
+      } else {
+        take(readable("comments") ? "comments" : "todos", "chapter-annotation", this.store.listWorkChapterAnnotations(workId, annotationKinds));
       }
+      take("ai-analysis", "analysis-task", readable("ai-analysis") ? this.listAllTaskSummaries(workId) : []);
+      take("ai-settings", "work-ai-settings", readable("ai-settings")
+        ? [{ id: "settings", ...this.store.getWorkAiSettings(workId) }]
+        : []);
+      if (this.packageExtras && readable("ai-settings")) {
+        for (const extra of this.packageExtras(workId, permissions)) {
+          if (!extra?.entityType || !Array.isArray(extra.records)) continue;
+          modules[extra.entityType] = "ready";
+          for (const data of extra.records) {
+            if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+            const id = String(data.id ?? "");
+            if (!id) continue;
+            rawItems.push({ entityType: extra.entityType, data });
+          }
+        }
+      }
+      rawItems.push({
+        entityType: "offline-package",
+        data: { id: "manifest", modules }
+      });
       const cutoffCursor = Number(this.database.get(
         "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM sync_changes WHERE work_id = ?",
         workId
@@ -222,6 +301,18 @@ export class OfflineSyncService {
     };
     this.snapshots.set(snapshot.snapshotId, snapshot);
     return this.descriptor(snapshot);
+  }
+
+  private listAllTaskSummaries(workId: string): Record<string, unknown>[] {
+    const summaries: Record<string, unknown>[] = [];
+    let page = 1;
+    while (page <= 1_000) {
+      const result = this.store.listTaskSummariesPage(workId, { page, limit: 100, offset: (page - 1) * 100 });
+      summaries.push(...result.items);
+      if (!result.hasMore || !result.nextPage || result.nextPage <= page) return summaries;
+      page = result.nextPage;
+    }
+    return summaries;
   }
 
   describeOwnedSnapshot(snapshotId: string, userId: string): SyncSnapshotDescriptor {

@@ -136,10 +136,10 @@ describe("Desktop 离线同步快照 API", () => {
     expect(created.headers["cache-control"]).toBe("no-store");
     expect(created.body.data).toMatchObject({
       workId: fixture.workId,
-      itemCount: 4,
       syncProtocol: 1,
       cutoffCursor: expect.any(Number)
     });
+    expect(created.body.data.itemCount).toBeGreaterThan(4);
     expect(created.body.data.cutoffCursor).toBeGreaterThan(0);
     const snapshotId = String(created.body.data.snapshotId);
 
@@ -164,7 +164,15 @@ describe("Desktop 离线同步快照 API", () => {
       if (!page.body.data.hasMore) break;
       after = Number(page.body.data.nextAfter);
     }
-    expect(items.map((item) => item.entityType)).toEqual(["work", "volume", "chapter", "setting"]);
+    expect(items.map((item) => item.entityType).slice(0, 4)).toEqual(["work", "volume", "chapter", "setting"]);
+    const manifest = items.find((item) => item.entityType === "offline-package")?.data as { modules?: Record<string, string> };
+    expect(manifest?.modules).toMatchObject({
+      character: "ready",
+      draft: "ready",
+      setting: "ready",
+      race: "ready",
+      "timeline-event": "ready"
+    });
     const chapter = items.find((item) => item.entityType === "chapter")?.data as Record<string, unknown>;
     const setting = items.find((item) => item.entityType === "setting")?.data as Record<string, unknown>;
     expect(chapter).toMatchObject({ id: fixture.chapterId, title: "第一章", content: "快照旧正文", versionNo: 1 });
