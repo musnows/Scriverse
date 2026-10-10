@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
+import { fullWorkModulePermissions } from "../../src/work-permissions.js";
 
 type WebSession = {
   agent: ReturnType<typeof request.agent>;
@@ -505,6 +506,54 @@ describe("Desktop 离线同步快照 API", () => {
       .set("Authorization", authorization)
       .send({ clientId: "01234567-89ab-4def-8123-456789abcdef", mutations: [tooMany[0], tooMany[0]] })
       .expect(400);
+  });
+
+  it.each([
+    { entityType: "race", field: "memberIds", deniedModule: "characters" },
+    { entityType: "race", field: "name", deniedModule: "characters" },
+    { entityType: "organization", field: "memberIds", deniedModule: "characters" },
+    { entityType: "character", field: "raceId", deniedModule: "races" },
+    { entityType: "character", field: "organizationIds", deniedModule: "organizations" }
+  ] as const)("拒绝 $entityType 的 $field 更新绕过 $deniedModule 写权限", async ({ entityType, field, deniedModule }) => {
+    const owner = await register(runtime, "linked_write_owner");
+    const editor = await register(runtime, "linked_write_editor");
+    const fixture = await createOfflineFixture(runtime, owner);
+    const race = runtime.store.createRace(fixture.workId, { name: "海族" });
+    const organization = runtime.store.createOrganization(fixture.workId, { name: "港务司" });
+    const character = runtime.store.createCharacter(fixture.workId, { name: "林舟" });
+    const entity = entityType === "race" ? race : entityType === "organization" ? organization : character;
+    const value = field === "memberIds" ? [String(character.id)]
+      : field === "raceId" ? String(race.id)
+      : field === "organizationIds" ? [String(organization.id)]
+      : "潮族";
+    const permissions = fullWorkModulePermissions();
+    permissions[deniedModule] = "none";
+    runtime.auth.addMember(fixture.workId, editor.userId, { permissions }, owner.userId);
+    const authorization = await desktopAuthorization(runtime, editor.username, crypto.randomUUID());
+    const mutation = {
+      mutationId: crypto.randomUUID(),
+      entityType,
+      entityId: String(entity.id),
+      operation: "update",
+      baseVersionNo: 1,
+      localSnapshot: { [field]: value }
+    };
+    const push = (item: typeof mutation) => request(runtime.app)
+      .post(`/api/sync/works/${fixture.workId}/push`)
+      .set("Authorization", authorization)
+      .send({ clientId: "32000000-0000-4000-8000-000000000001", mutations: [item] });
+    const denied = await push(mutation).expect(200);
+    expect(denied.body.data.results[0]).toMatchObject({
+      status: "rejected",
+      errorCode: "WORK_MODULE_WRITE_DENIED"
+    });
+    expect(runtime.store.getRace(String(race.id))).toEqual(race);
+    expect(runtime.store.getOrganization(String(organization.id))).toEqual(organization);
+    expect(runtime.store.getCharacter(String(character.id))).toEqual(character);
+
+    runtime.auth.updateMemberPermissions(fixture.workId, editor.userId, { permissions: fullWorkModulePermissions() });
+    const permitted = await push({ ...mutation, mutationId: crypto.randomUUID() }).expect(200);
+    expect(permitted.body.data.results[0]).toMatchObject({ status: "applied", appliedVersionNo: 2 });
   });
 
   it("要求模块写权限并隔离不同用户的 mutation 结果", async () => {

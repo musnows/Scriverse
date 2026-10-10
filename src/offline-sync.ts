@@ -528,6 +528,17 @@ export class OfflineSyncService {
     if (!module || !canWriteWorkModule(permissions, module)) {
       return this.rejectedMutation(mutation, "WORK_MODULE_WRITE_DENIED");
     }
+    const relatedModules: WorkPermissionModule[] = [];
+    const hasField = (field: string): boolean => Object.hasOwn(mutation.localSnapshot, field);
+    if (mutation.entityType === "character") {
+      if (hasField("raceId") || hasField("species")) relatedModules.push("races");
+      if (hasField("organizationIds")) relatedModules.push("organizations");
+    }
+    if (mutation.entityType === "race" && (hasField("name") || hasField("memberIds"))) relatedModules.push("characters");
+    if (mutation.entityType === "organization" && hasField("memberIds")) relatedModules.push("characters");
+    if (relatedModules.some((relatedModule) => !canWriteWorkModule(permissions, relatedModule))) {
+      return this.rejectedMutation(mutation, "WORK_MODULE_WRITE_DENIED");
+    }
     const state = this.currentMutationEntityState(mutation.entityType, mutation.entityId);
     if (!state) return this.rejectedMutation(mutation, "SYNC_ENTITY_NOT_FOUND");
     if (state.workId !== workId) return this.rejectedMutation(mutation, "SYNC_ENTITY_NOT_FOUND");
