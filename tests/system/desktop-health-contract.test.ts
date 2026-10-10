@@ -30,7 +30,10 @@ describe("Desktop Server 兼容元数据", () => {
       minimumDesktopVersion: DESKTOP_MINIMUM_VERSION,
       syncProtocol: DESKTOP_SYNC_PROTOCOL
     });
-    expect(health.body.data.syncProtocol.entityTypes).toEqual(["chapter", "setting"]);
+    expect(health.body.data.syncProtocol.entityTypes).toEqual([
+      "chapter", "setting", "draft", "character", "race", "organization",
+      "timeline-track", "timeline-event", "relationship", "chapter-outline", "foreshadow"
+    ]);
     expect(health.body.data.syncProtocol.maxMutationBytes).toBe(2_500_000);
     expect(health.body.data.minimumDesktopVersion).toBe("0.0.1");
   });

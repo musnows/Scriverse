@@ -1,4 +1,5 @@
 import { APP_VERSION } from "./version.js";
+import { SYNC_CONTENT_ENTITY_TYPES } from "./offline-sync.js";
 import { compareServerAlignment, type ServerVersionRelation } from "./version-compat.js";
 
 export type DesktopServerCompatibility = "compatible" | "upgrade-required";
@@ -30,7 +31,7 @@ export const DESKTOP_SHELL_PROTOCOL = Object.freeze({ min: 1, max: 1 });
 export const DESKTOP_SYNC_PROTOCOL = Object.freeze({
   min: 1,
   max: 1,
-  entityTypes: Object.freeze(["chapter", "setting"] as const),
+  entityTypes: Object.freeze([...SYNC_CONTENT_ENTITY_TYPES]),
   maxMutationBytes: 2_500_000
 });
 
