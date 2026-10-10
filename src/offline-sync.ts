@@ -528,20 +528,41 @@ export class OfflineSyncService {
     if (!module || !canWriteWorkModule(permissions, module)) {
       return this.rejectedMutation(mutation, "WORK_MODULE_WRITE_DENIED");
     }
-    const relatedModules: WorkPermissionModule[] = [];
-    const hasField = (field: string): boolean => Object.hasOwn(mutation.localSnapshot, field);
-    if (mutation.entityType === "character") {
-      if (hasField("raceId") || hasField("species")) relatedModules.push("races");
-      if (hasField("organizationIds")) relatedModules.push("organizations");
-    }
-    if (mutation.entityType === "race" && (hasField("name") || hasField("memberIds"))) relatedModules.push("characters");
-    if (mutation.entityType === "organization" && hasField("memberIds")) relatedModules.push("characters");
-    if (relatedModules.some((relatedModule) => !canWriteWorkModule(permissions, relatedModule))) {
-      return this.rejectedMutation(mutation, "WORK_MODULE_WRITE_DENIED");
-    }
     const state = this.currentMutationEntityState(mutation.entityType, mutation.entityId);
     if (!state) return this.rejectedMutation(mutation, "SYNC_ENTITY_NOT_FOUND");
     if (state.workId !== workId) return this.rejectedMutation(mutation, "SYNC_ENTITY_NOT_FOUND");
+    let effectiveMutation = mutation;
+    if (state.active && (mutation.entityType === "character" || mutation.entityType === "race" || mutation.entityType === "organization")) {
+      const current = mutation.entityType === "character" ? this.store.getCharacter(mutation.entityId)
+        : mutation.entityType === "race" ? this.store.getRace(mutation.entityId)
+        : this.store.getOrganization(mutation.entityId);
+      const snapshot = { ...mutation.localSnapshot };
+      const relatedModules: WorkPermissionModule[] = [];
+      const changesField = (field: string, unordered = false): boolean => {
+        if (!Object.hasOwn(snapshot, field)) return false;
+        const normalize = (value: unknown): unknown => unordered && Array.isArray(value)
+          ? [...new Set(value)].sort()
+          : field === "name" && typeof value === "string" ? value.normalize("NFKC").trim().replace(/\s+/gu, " ") : value;
+        if (JSON.stringify(normalize(snapshot[field])) !== JSON.stringify(normalize(current[field]))) return true;
+        // 完整离线快照中的既有关联不应重写成员关系或要求其他模块写权限。
+        delete snapshot[field];
+        return false;
+      };
+      if (mutation.entityType === "character") {
+        if (changesField("raceId") || Object.hasOwn(snapshot, "species")) relatedModules.push("races");
+        if (changesField("organizationIds", true)) relatedModules.push("organizations");
+      }
+      if (mutation.entityType === "race") {
+        const nameChanged = changesField("name");
+        const membersChanged = changesField("memberIds", true);
+        if (nameChanged || membersChanged) relatedModules.push("characters");
+      }
+      if (mutation.entityType === "organization" && changesField("memberIds", true)) relatedModules.push("characters");
+      if (relatedModules.some((relatedModule) => !canWriteWorkModule(permissions, relatedModule))) {
+        return this.rejectedMutation(mutation, "WORK_MODULE_WRITE_DENIED");
+      }
+      effectiveMutation = { ...mutation, localSnapshot: snapshot };
+    }
     const baseSnapshot = this.mutationVersionData(mutation.entityType, mutation.entityId, mutation.baseVersionNo);
     const serverSnapshot = state.active
       ? this.mutationVersionData(mutation.entityType, mutation.entityId, state.versionNo)
@@ -569,7 +590,7 @@ export class OfflineSyncService {
     // Store 的嵌套事务复用当前事务；独立保存点保证拒绝结果不会提交部分写入。
     this.database.raw.exec("SAVEPOINT offline_sync_mutation");
     try {
-      const updated = this.applyEntityUpdate(mutation);
+      const updated = this.applyEntityUpdate(effectiveMutation);
       this.database.raw.exec("RELEASE SAVEPOINT offline_sync_mutation");
       return {
         mutationId: mutation.mutationId,
