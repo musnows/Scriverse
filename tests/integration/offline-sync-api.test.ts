@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
+import { fullWorkModulePermissions } from "../../src/work-permissions.js";
 
 type WebSession = {
   agent: ReturnType<typeof request.agent>;
@@ -136,10 +137,10 @@ describe("Desktop 离线同步快照 API", () => {
     expect(created.headers["cache-control"]).toBe("no-store");
     expect(created.body.data).toMatchObject({
       workId: fixture.workId,
-      itemCount: 4,
       syncProtocol: 1,
       cutoffCursor: expect.any(Number)
     });
+    expect(created.body.data.itemCount).toBeGreaterThan(4);
     expect(created.body.data.cutoffCursor).toBeGreaterThan(0);
     const snapshotId = String(created.body.data.snapshotId);
 
@@ -164,7 +165,15 @@ describe("Desktop 离线同步快照 API", () => {
       if (!page.body.data.hasMore) break;
       after = Number(page.body.data.nextAfter);
     }
-    expect(items.map((item) => item.entityType)).toEqual(["work", "volume", "chapter", "setting"]);
+    expect(items.map((item) => item.entityType).slice(0, 4)).toEqual(["work", "volume", "chapter", "setting"]);
+    const manifest = items.find((item) => item.entityType === "offline-package")?.data as { modules?: Record<string, string> };
+    expect(manifest?.modules).toMatchObject({
+      character: "ready",
+      draft: "ready",
+      setting: "ready",
+      race: "ready",
+      "timeline-event": "ready"
+    });
     const chapter = items.find((item) => item.entityType === "chapter")?.data as Record<string, unknown>;
     const setting = items.find((item) => item.entityType === "setting")?.data as Record<string, unknown>;
     expect(chapter).toMatchObject({ id: fixture.chapterId, title: "第一章", content: "快照旧正文", versionNo: 1 });
@@ -499,6 +508,54 @@ describe("Desktop 离线同步快照 API", () => {
       .expect(400);
   });
 
+  it.each([
+    { entityType: "race", field: "memberIds", deniedModule: "characters" },
+    { entityType: "race", field: "name", deniedModule: "characters" },
+    { entityType: "organization", field: "memberIds", deniedModule: "characters" },
+    { entityType: "character", field: "raceId", deniedModule: "races" },
+    { entityType: "character", field: "organizationIds", deniedModule: "organizations" }
+  ] as const)("拒绝 $entityType 的 $field 更新绕过 $deniedModule 写权限", async ({ entityType, field, deniedModule }) => {
+    const owner = await register(runtime, "linked_write_owner");
+    const editor = await register(runtime, "linked_write_editor");
+    const fixture = await createOfflineFixture(runtime, owner);
+    const race = runtime.store.createRace(fixture.workId, { name: "海族" });
+    const organization = runtime.store.createOrganization(fixture.workId, { name: "港务司" });
+    const character = runtime.store.createCharacter(fixture.workId, { name: "林舟" });
+    const entity = entityType === "race" ? race : entityType === "organization" ? organization : character;
+    const value = field === "memberIds" ? [String(character.id)]
+      : field === "raceId" ? String(race.id)
+      : field === "organizationIds" ? [String(organization.id)]
+      : "潮族";
+    const permissions = fullWorkModulePermissions();
+    permissions[deniedModule] = "none";
+    runtime.auth.addMember(fixture.workId, editor.userId, { permissions }, owner.userId);
+    const authorization = await desktopAuthorization(runtime, editor.username, crypto.randomUUID());
+    const mutation = {
+      mutationId: crypto.randomUUID(),
+      entityType,
+      entityId: String(entity.id),
+      operation: "update",
+      baseVersionNo: 1,
+      localSnapshot: { [field]: value }
+    };
+    const push = (item: typeof mutation) => request(runtime.app)
+      .post(`/api/sync/works/${fixture.workId}/push`)
+      .set("Authorization", authorization)
+      .send({ clientId: "32000000-0000-4000-8000-000000000001", mutations: [item] });
+    const denied = await push(mutation).expect(200);
+    expect(denied.body.data.results[0]).toMatchObject({
+      status: "rejected",
+      errorCode: "WORK_MODULE_WRITE_DENIED"
+    });
+    expect(runtime.store.getRace(String(race.id))).toEqual(race);
+    expect(runtime.store.getOrganization(String(organization.id))).toEqual(organization);
+    expect(runtime.store.getCharacter(String(character.id))).toEqual(character);
+
+    runtime.auth.updateMemberPermissions(fixture.workId, editor.userId, { permissions: fullWorkModulePermissions() });
+    const permitted = await push({ ...mutation, mutationId: crypto.randomUUID() }).expect(200);
+    expect(permitted.body.data.results[0]).toMatchObject({ status: "applied", appliedVersionNo: 2 });
+  });
+
   it("要求模块写权限并隔离不同用户的 mutation 结果", async () => {
     const owner = await register(runtime, "result_owner");
     const viewer = await register(runtime, "result_viewer");
@@ -528,9 +585,19 @@ describe("Desktop 离线同步快照 API", () => {
     };
     const viewerDenied = await request(runtime.app).post(`/api/sync/works/${fixture.workId}/push`)
       .set("Authorization", viewerAuthorization)
-      .send({ clientId: "30000000-0000-4000-8000-000000000004", mutations: [mutation] })
-      .expect(403);
-    expect(viewerDenied.body.error.code).toBe("WORK_EDIT_DENIED");
+      .send({
+        clientId: "30000000-0000-4000-8000-000000000004",
+        mutations: [{ ...mutation, mutationId: "30000000-0000-4000-8000-000000000013" }]
+      })
+      .expect(200);
+    expect(viewerDenied.body.data.results[0]).toMatchObject({
+      status: "rejected",
+      errorCode: "WORK_MODULE_WRITE_DENIED",
+      entityType: "chapter"
+    });
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", fixture.chapterId)).toMatchObject({
+      content: "快照旧正文"
+    });
     const csrfDenied = await owner.agent.post(`/api/sync/works/${fixture.workId}/push`)
       .send({ clientId: "30000000-0000-4000-8000-000000000004", mutations: [mutation] })
       .expect(403);
@@ -545,6 +612,96 @@ describe("Desktop 离线同步快照 API", () => {
       .set("Authorization", viewerAuthorization)
       .expect(404);
     expect(privateResult.body.error.code).toBe("SYNC_MUTATION_NOT_FOUND");
+  });
+
+  it("上传时按模块写权限接受或拒绝，离线包本身不按读权限裁剪", async () => {
+    const owner = await register(runtime, "module_write_owner");
+    const editor = await register(runtime, "module_write_editor");
+    const fixture = await createOfflineFixture(runtime, owner);
+    const character = await owner.agent.post(`/api/works/${fixture.workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "林舟" })
+      .expect(201);
+    const permissions = {
+      prose: "read",
+      comments: "read",
+      todos: "read",
+      drafts: "read",
+      settings: "write",
+      characters: "none",
+      races: "read",
+      organizations: "read",
+      timeline: "read",
+      relationships: "read",
+      outlines: "read",
+      reviews: "read",
+      "ai-chat": "read",
+      "ai-analysis": "read",
+      "ai-settings": "read"
+    };
+    await owner.agent.post(`/api/works/${fixture.workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: editor.userId, permissions })
+      .expect(201);
+    const authorization = await desktopAuthorization(
+      runtime,
+      editor.username,
+      "31000000-0000-4000-8000-000000000001"
+    );
+    const snapshot = await request(runtime.app).post(`/api/sync/works/${fixture.workId}/snapshots`)
+      .set("Authorization", authorization)
+      .send({})
+      .expect(201);
+    const items: Array<Record<string, unknown>> = [];
+    let after = 0;
+    while (true) {
+      const page = await request(runtime.app)
+        .get(`/api/sync/snapshots/${snapshot.body.data.snapshotId}/items?after=${after}&limit=100`)
+        .set("Authorization", authorization)
+        .expect(200);
+      items.push(...page.body.data.items);
+      if (!page.body.data.hasMore) break;
+      after = Number(page.body.data.nextAfter);
+    }
+    expect(items.some((item) => item.entityType === "character")).toBe(true);
+    expect(items.some((item) => item.entityType === "setting")).toBe(true);
+
+    const pushed = await request(runtime.app).post(`/api/sync/works/${fixture.workId}/push`)
+      .set("Authorization", authorization)
+      .send({
+        clientId: "31000000-0000-4000-8000-000000000002",
+        mutations: [
+          {
+            mutationId: "31000000-0000-4000-8000-000000000003",
+            entityType: "setting",
+            entityId: fixture.settingId,
+            operation: "update",
+            baseVersionNo: 1,
+            changeNote: "离线修改设定",
+            localSnapshot: { title: "星球", category: "地理", content: "编辑后的设定" }
+          },
+          {
+            mutationId: "31000000-0000-4000-8000-000000000004",
+            entityType: "character",
+            entityId: String(character.body.data.id),
+            operation: "update",
+            baseVersionNo: 1,
+            changeNote: "离线修改角色",
+            localSnapshot: { name: "不应写入" }
+          }
+        ]
+      })
+      .expect(200);
+    expect(pushed.body.data.results).toEqual([
+      expect.objectContaining({ entityType: "setting", status: "applied" }),
+      expect.objectContaining({ entityType: "character", status: "rejected", errorCode: "WORK_MODULE_WRITE_DENIED" })
+    ]);
+    expect(runtime.database.get("SELECT content FROM settings WHERE id = ?", fixture.settingId)).toMatchObject({
+      content: "编辑后的设定"
+    });
+    expect(runtime.database.get("SELECT name FROM characters WHERE id = ?", character.body.data.id)).toMatchObject({
+      name: "林舟"
+    });
   });
 
   it("在离线授权或作品权限撤销后立即停止快照访问", async () => {

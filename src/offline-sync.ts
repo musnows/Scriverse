@@ -3,6 +3,7 @@ import { Database } from "./database.js";
 import { AppError } from "./errors.js";
 import { Store } from "./store.js";
 import { countWords } from "./utils.js";
+import { canWriteWorkModule, fullWorkModulePermissions, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
 
 export const SYNC_SNAPSHOT_TTL_MS = 15 * 60 * 1_000;
 export const SYNC_SNAPSHOT_PAGE_BYTE_LIMIT = 4 * 1024 * 1024;
@@ -17,9 +18,18 @@ export type SyncSnapshotDescriptor = {
   syncProtocol: 1;
 };
 
+export type SyncPackageModuleState = "ready" | "denied";
+
+export type SyncPackageExtra = {
+  entityType: string;
+  records: Record<string, unknown>[];
+};
+
+export type SyncPackageExtraLoader = (workId: string, permissions: WorkModulePermissions) => SyncPackageExtra[];
+
 type SyncSnapshotItem = {
   sequence: number;
-  entityType: "work" | "volume" | "chapter" | "setting";
+  entityType: string;
   entityId: string;
   versionNo: number;
   data: Record<string, unknown>;
@@ -82,20 +92,49 @@ export type SettingSyncSnapshot = {
   authorNote?: string;
 };
 
+export const SYNC_CONTENT_ENTITY_TYPES = [
+  "chapter",
+  "setting",
+  "draft",
+  "character",
+  "race",
+  "organization",
+  "timeline-track",
+  "timeline-event",
+  "relationship",
+  "chapter-outline",
+  "foreshadow"
+] as const;
+
+export type SyncContentEntityType = typeof SYNC_CONTENT_ENTITY_TYPES[number];
+
+const SYNC_ENTITY_MODULE: Record<SyncContentEntityType, WorkPermissionModule> = {
+  chapter: "prose",
+  setting: "settings",
+  draft: "drafts",
+  character: "characters",
+  race: "races",
+  organization: "organizations",
+  "timeline-track": "timeline",
+  "timeline-event": "timeline",
+  relationship: "relationships",
+  "chapter-outline": "outlines",
+  foreshadow: "outlines"
+};
+
 export type SyncMutation = {
   mutationId: string;
+  entityType: SyncContentEntityType;
   entityId: string;
   operation: "update";
   baseVersionNo: number;
   changeNote: string;
-} & (
-  | { entityType: "chapter"; localSnapshot: ChapterSyncSnapshot }
-  | { entityType: "setting"; localSnapshot: SettingSyncSnapshot }
-);
+  localSnapshot: Record<string, unknown>;
+};
 
 export type SyncMutationResult = {
   mutationId: string;
-  entityType: "chapter" | "setting";
+  entityType: SyncContentEntityType;
   entityId: string;
   status: "applied" | "conflict" | "rejected";
   baseVersionNo: number;
@@ -123,6 +162,21 @@ type OfflineSyncOptions = {
   now?: () => number;
   snapshotTtlMs?: number;
 };
+
+function entityVersionTable(entityType: SyncContentEntityType): { name: string; idColumn: string } {
+  if (entityType === "chapter-outline") return { name: "chapter_outlines", idColumn: "chapter_id" };
+  const names: Partial<Record<SyncContentEntityType, string>> = {
+    setting: "settings",
+    draft: "drafts",
+    race: "races",
+    organization: "organizations",
+    "timeline-track": "timeline_tracks",
+    "timeline-event": "timeline_events",
+    relationship: "relationships",
+    foreshadow: "foreshadows"
+  };
+  return { name: names[entityType] ?? "settings", idColumn: "id" };
+}
 
 function recordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
@@ -157,10 +211,13 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+type PackageItem = { entityType: string; data: Record<string, unknown> };
+
 export class OfflineSyncService {
   private readonly snapshots = new Map<string, StoredSyncSnapshot>();
   private readonly now: () => number;
   private readonly snapshotTtlMs: number;
+  private packageExtras: SyncPackageExtraLoader | null = null;
 
   constructor(
     private readonly database: Database,
@@ -171,24 +228,69 @@ export class OfflineSyncService {
     this.snapshotTtlMs = options.snapshotTtlMs ?? SYNC_SNAPSHOT_TTL_MS;
   }
 
+  setPackageExtras(loader: SyncPackageExtraLoader | null): void {
+    this.packageExtras = loader;
+  }
+
   createSnapshot(workId: string, userId: string): SyncSnapshotDescriptor {
     const captured = this.database.transaction(() => {
       this.assertOfflineAccessEnabled(workId);
       const tree = this.store.getWorkTree(workId);
+      const permissions = (tree.modulePermissions && typeof tree.modulePermissions === "object" && !Array.isArray(tree.modulePermissions)
+        ? tree.modulePermissions
+        : {}) as WorkModulePermissions;
       const volumes = recordArray(tree.volumes);
       const { volumes: _volumes, modulePermissions: _modulePermissions, accessRole: _accessRole, ...work } = tree;
-      const rawItems: Array<{ entityType: SyncSnapshotItem["entityType"]; data: Record<string, unknown> }> = [
+      const rawItems: PackageItem[] = [
         { entityType: "work", data: work }
       ];
+      const modules: Record<string, SyncPackageModuleState> = {};
+      const take = (entityType: string, records: Record<string, unknown>[], idFor?: (record: Record<string, unknown>) => string): void => {
+        modules[entityType] = "ready";
+        for (const record of records) {
+          const id = idFor ? idFor(record) : String(record.id ?? "");
+          if (!id) continue;
+          rawItems.push({ entityType, data: String(record.id ?? "") === id ? record : { ...record, id } });
+        }
+      };
+      modules.volume = "ready";
+      modules.chapter = "ready";
       for (const volumeWithChapters of volumes) {
         const chapters = recordArray(volumeWithChapters.chapters);
         const { chapters: _chapters, ...volume } = volumeWithChapters;
         rawItems.push({ entityType: "volume", data: volume });
         for (const chapter of chapters) rawItems.push({ entityType: "chapter", data: chapter });
       }
-      for (const setting of this.store.listSettings(workId, true)) {
-        rawItems.push({ entityType: "setting", data: setting });
+      take("setting", this.store.listSettings(workId, true));
+      take("draft", this.store.listDrafts(workId, undefined, true));
+      take("character", this.store.listCharacters(workId, true, true));
+      take("race", this.store.listRaces(workId, true));
+      take("organization", this.store.listOrganizations(workId, true));
+      take("timeline-track", this.store.listTimelineTracks(workId));
+      take("timeline-event", this.store.listTimelineEvents(workId));
+      take("relationship", this.store.listRelationships(workId));
+      take("chapter-outline", this.store.listChapterOutlines(workId).filter((outline) => outline.createdAt), (outline) => String(outline.chapterId ?? ""));
+      take("foreshadow", this.store.listForeshadows(workId));
+      take("review", this.store.listReviewItems(workId));
+      take("chapter-annotation", this.store.listWorkChapterAnnotations(workId, ["note", "todo"]));
+      take("analysis-task", this.listAllTaskSummaries(workId));
+      take("work-ai-settings", [{ id: "settings", ...this.store.getWorkAiSettings(workId) }]);
+      if (this.packageExtras) {
+        for (const extra of this.packageExtras(workId, permissions)) {
+          if (!extra?.entityType || !Array.isArray(extra.records)) continue;
+          modules[extra.entityType] = "ready";
+          for (const data of extra.records) {
+            if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+            const id = String(data.id ?? "");
+            if (!id) continue;
+            rawItems.push({ entityType: extra.entityType, data });
+          }
+        }
       }
+      rawItems.push({
+        entityType: "offline-package",
+        data: { id: "manifest", modules }
+      });
       const cutoffCursor = Number(this.database.get(
         "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM sync_changes WHERE work_id = ?",
         workId
@@ -222,6 +324,18 @@ export class OfflineSyncService {
     };
     this.snapshots.set(snapshot.snapshotId, snapshot);
     return this.descriptor(snapshot);
+  }
+
+  private listAllTaskSummaries(workId: string): Record<string, unknown>[] {
+    const summaries: Record<string, unknown>[] = [];
+    let page = 1;
+    while (page <= 1_000) {
+      const result = this.store.listTaskSummariesPage(workId, { page, limit: 100, offset: (page - 1) * 100 });
+      summaries.push(...result.items);
+      if (!result.hasMore || !result.nextPage || result.nextPage <= page) return summaries;
+      page = result.nextPage;
+    }
+    return summaries;
   }
 
   describeOwnedSnapshot(snapshotId: string, userId: string): SyncSnapshotDescriptor {
@@ -289,10 +403,11 @@ export class OfflineSyncService {
     workId: string,
     userId: string,
     clientId: string,
-    mutations: SyncMutation[]
+    mutations: SyncMutation[],
+    permissions: WorkModulePermissions = fullWorkModulePermissions()
   ): SyncPushResult {
     this.assertOfflineAccessEnabled(workId);
-    const results = mutations.map((mutation) => this.processMutation(workId, userId, clientId, mutation));
+    const results = mutations.map((mutation) => this.processMutation(workId, userId, clientId, mutation, permissions));
     return {
       clientId,
       results,
@@ -359,7 +474,7 @@ export class OfflineSyncService {
       changedAt: String(row.changed_at),
       data: operation === "delete" ? null : entityType === "chapter"
         ? this.chapterVersionData(entityId, versionNo)
-        : this.settingVersionData(entityId, versionNo)
+        : this.entityVersionData("setting", entityId, versionNo)
     };
   }
 
@@ -367,7 +482,8 @@ export class OfflineSyncService {
     workId: string,
     userId: string,
     clientId: string,
-    mutation: SyncMutation
+    mutation: SyncMutation,
+    permissions: WorkModulePermissions
   ): SyncMutationResult {
     const requestHash = createHash("sha256")
       .update(stableJson({ workId, userId, clientId, mutation }))
@@ -383,7 +499,7 @@ export class OfflineSyncService {
         }
         return { ...this.parseMutationResult(String(existing.result_json)), replayed: true };
       }
-      const result = this.applyMutation(workId, mutation);
+      const result = this.applyMutation(workId, mutation, permissions);
       const timestamp = new Date(this.now()).toISOString();
       this.database.run(
         `INSERT INTO sync_mutation_results (
@@ -407,7 +523,22 @@ export class OfflineSyncService {
     });
   }
 
-  private applyMutation(workId: string, mutation: SyncMutation): SyncMutationResult {
+  private applyMutation(workId: string, mutation: SyncMutation, permissions: WorkModulePermissions): SyncMutationResult {
+    const module = SYNC_ENTITY_MODULE[mutation.entityType];
+    if (!module || !canWriteWorkModule(permissions, module)) {
+      return this.rejectedMutation(mutation, "WORK_MODULE_WRITE_DENIED");
+    }
+    const relatedModules: WorkPermissionModule[] = [];
+    const hasField = (field: string): boolean => Object.hasOwn(mutation.localSnapshot, field);
+    if (mutation.entityType === "character") {
+      if (hasField("raceId") || hasField("species")) relatedModules.push("races");
+      if (hasField("organizationIds")) relatedModules.push("organizations");
+    }
+    if (mutation.entityType === "race" && (hasField("name") || hasField("memberIds"))) relatedModules.push("characters");
+    if (mutation.entityType === "organization" && hasField("memberIds")) relatedModules.push("characters");
+    if (relatedModules.some((relatedModule) => !canWriteWorkModule(permissions, relatedModule))) {
+      return this.rejectedMutation(mutation, "WORK_MODULE_WRITE_DENIED");
+    }
     const state = this.currentMutationEntityState(mutation.entityType, mutation.entityId);
     if (!state) return this.rejectedMutation(mutation, "SYNC_ENTITY_NOT_FOUND");
     if (state.workId !== workId) return this.rejectedMutation(mutation, "SYNC_ENTITY_NOT_FOUND");
@@ -438,23 +569,7 @@ export class OfflineSyncService {
     // Store 的嵌套事务复用当前事务；独立保存点保证拒绝结果不会提交部分写入。
     this.database.raw.exec("SAVEPOINT offline_sync_mutation");
     try {
-      const updated = mutation.entityType === "chapter"
-        ? this.store.saveChapter(
-          mutation.entityId,
-          mutation.localSnapshot,
-          "desktop-sync",
-          mutation.mutationId,
-          mutation.changeNote,
-          mutation.baseVersionNo
-        )
-        : this.store.updateSetting(
-          mutation.entityId,
-          mutation.localSnapshot,
-          "desktop-sync",
-          mutation.mutationId,
-          mutation.changeNote,
-          mutation.baseVersionNo
-        );
+      const updated = this.applyEntityUpdate(mutation);
       this.database.raw.exec("RELEASE SAVEPOINT offline_sync_mutation");
       return {
         mutationId: mutation.mutationId,
@@ -520,8 +635,46 @@ export class OfflineSyncService {
     };
   }
 
+  private applyEntityUpdate(mutation: SyncMutation): Record<string, unknown> {
+    const sourceRef = mutation.mutationId;
+    const note = mutation.changeNote;
+    const version = mutation.baseVersionNo;
+    const snapshot = mutation.localSnapshot;
+    if (mutation.entityType === "chapter") {
+      return this.store.saveChapter(mutation.entityId, snapshot as ChapterSyncSnapshot, "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "setting") {
+      return this.store.updateSetting(mutation.entityId, snapshot as SettingSyncSnapshot, "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "draft") {
+      return this.store.updateDraft(mutation.entityId, snapshot as Parameters<Store["updateDraft"]>[1], "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "character") {
+      return this.store.updateCharacter(mutation.entityId, snapshot as Parameters<Store["updateCharacter"]>[1], "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "race") {
+      return this.store.updateRace(mutation.entityId, snapshot as Parameters<Store["updateRace"]>[1], "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "organization") {
+      return this.store.updateOrganization(mutation.entityId, snapshot as Parameters<Store["updateOrganization"]>[1], "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "timeline-track") {
+      return this.store.updateTimelineTrack(mutation.entityId, snapshot as Parameters<Store["updateTimelineTrack"]>[1], "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "timeline-event") {
+      return this.store.updateTimelineEvent(mutation.entityId, snapshot as Parameters<Store["updateTimelineEvent"]>[1], "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "relationship") {
+      return this.store.updateRelationship(mutation.entityId, snapshot as Parameters<Store["updateRelationship"]>[1], "desktop-sync", sourceRef, note, version);
+    }
+    if (mutation.entityType === "chapter-outline") {
+      return this.store.upsertChapterOutline(mutation.entityId, snapshot as Parameters<Store["upsertChapterOutline"]>[1], "desktop-sync", sourceRef, note, version);
+    }
+    return this.store.updateForeshadow(mutation.entityId, snapshot as Parameters<Store["updateForeshadow"]>[1], "desktop-sync", sourceRef, note, version);
+  }
+
   private currentMutationEntityState(
-    entityType: "chapter" | "setting",
+    entityType: SyncContentEntityType,
     entityId: string
   ): { workId: string; versionNo: number; active: boolean } | null {
     if (entityType === "chapter") {
@@ -544,29 +697,62 @@ export class OfflineSyncService {
         ? { workId: String(version.work_id), versionNo: Number(version.version_no), active: false }
         : null;
     }
-    const setting = this.database.get("SELECT work_id FROM settings WHERE id = ?", entityId);
+    if (entityType === "character") {
+      const character = this.database.get("SELECT work_id, version_no FROM characters WHERE id = ?", entityId);
+      const version = this.database.get(
+        "SELECT work_id, MAX(version_no) AS version_no FROM character_versions WHERE character_id = ?",
+        entityId
+      );
+      const workId = character?.work_id ?? version?.work_id;
+      if (!workId) return null;
+      return {
+        workId: String(workId),
+        versionNo: Number(character?.version_no ?? version?.version_no ?? 0),
+        active: Boolean(character)
+      };
+    }
+    if (entityType === "chapter-outline") {
+      const chapter = this.database.get("SELECT work_id FROM chapters WHERE id = ?", entityId);
+      const outline = this.database.get("SELECT 1 AS present FROM chapter_outlines WHERE chapter_id = ?", entityId);
+      const version = this.database.get(
+        `SELECT work_id, MAX(version_no) AS version_no FROM entity_versions
+         WHERE entity_type = 'chapter-outline' AND entity_id = ?`,
+        entityId
+      );
+      const outlineWorkId = chapter?.work_id ?? version?.work_id;
+      if (!outlineWorkId) return null;
+      return {
+        workId: String(outlineWorkId),
+        versionNo: Number(version?.version_no ?? 0),
+        active: Boolean(outline)
+      };
+    }
+    const table = entityVersionTable(entityType);
+    const current = this.database.get(`SELECT work_id FROM ${table.name} WHERE ${table.idColumn} = ?`, entityId);
     const version = this.database.get(
       `SELECT work_id, MAX(version_no) AS version_no FROM entity_versions
-       WHERE entity_type = 'setting' AND entity_id = ?`,
+       WHERE entity_type = ? AND entity_id = ?`,
+      entityType,
       entityId
     );
-    if (!version?.work_id) return null;
+    const workId = current?.work_id ?? version?.work_id;
+    if (!workId) return null;
     return {
-      workId: String(version.work_id),
-      versionNo: Number(version.version_no),
-      active: Boolean(setting)
+      workId: String(workId),
+      versionNo: Number(version?.version_no ?? 0),
+      active: Boolean(current)
     };
   }
 
   private mutationVersionData(
-    entityType: "chapter" | "setting",
+    entityType: SyncContentEntityType,
     entityId: string,
     versionNo: number
   ): Record<string, unknown> | null {
     try {
-      return entityType === "chapter"
-        ? this.chapterVersionData(entityId, versionNo)
-        : this.settingVersionData(entityId, versionNo);
+      if (entityType === "chapter") return this.chapterVersionData(entityId, versionNo);
+      if (entityType === "character") return this.characterVersionData(entityId, versionNo);
+      return this.entityVersionData(entityType, entityId, versionNo);
     } catch (error) {
       if (error instanceof AppError && error.code === "SYNC_CHANGE_HISTORY_MISSING") return null;
       throw error;
@@ -611,26 +797,44 @@ export class OfflineSyncService {
     };
   }
 
-  private settingVersionData(settingId: string, versionNo: number): Record<string, unknown> {
+  private characterVersionData(characterId: string, versionNo: number): Record<string, unknown> {
     const version = this.database.get(
-      `SELECT work_id, entity_id, version_no, snapshot_json, created_at
-       FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ? AND version_no = ?`,
-      settingId,
+      `SELECT work_id, character_id, version_no, snapshot_json, created_at
+       FROM character_versions WHERE character_id = ? AND version_no = ?`,
+      characterId,
       versionNo
     );
     if (!version) {
-      throw new AppError(500, "SYNC_CHANGE_HISTORY_MISSING", "设定同步历史不完整，请重新下载离线副本");
+      throw new AppError(500, "SYNC_CHANGE_HISTORY_MISSING", "人物同步历史不完整，请重新下载离线副本");
     }
+    return this.parseVersionSnapshot(version, "character_id");
+  }
+
+  private entityVersionData(entityType: string, entityId: string, versionNo: number): Record<string, unknown> {
+    const version = this.database.get(
+      `SELECT work_id, entity_id, version_no, snapshot_json, created_at
+       FROM entity_versions WHERE entity_type = ? AND entity_id = ? AND version_no = ?`,
+      entityType,
+      entityId,
+      versionNo
+    );
+    if (!version) {
+      throw new AppError(500, "SYNC_CHANGE_HISTORY_MISSING", "同步历史不完整，请重新下载离线副本");
+    }
+    return this.parseVersionSnapshot(version, "entity_id");
+  }
+
+  private parseVersionSnapshot(version: Record<string, unknown>, idColumn: "entity_id" | "character_id"): Record<string, unknown> {
     let snapshot: Record<string, unknown>;
     try {
       const parsed = JSON.parse(String(version.snapshot_json)) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid setting snapshot");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid sync snapshot");
       snapshot = parsed as Record<string, unknown>;
     } catch {
-      throw new AppError(500, "SYNC_CHANGE_HISTORY_INVALID", "设定同步历史无法解析，请重新下载离线副本");
+      throw new AppError(500, "SYNC_CHANGE_HISTORY_INVALID", "同步历史无法解析，请重新下载离线副本");
     }
     return {
-      id: String(version.entity_id),
+      id: String(version[idColumn]),
       workId: String(version.work_id),
       ...snapshot,
       versionNo: Number(version.version_no),
