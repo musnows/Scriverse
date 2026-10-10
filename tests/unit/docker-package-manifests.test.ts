@@ -19,7 +19,8 @@ describe("Docker 依赖清单规范化", () => {
 
     expect(lock.packages["node_modules/@img/sharp-wasm32"]?.dependencies).toHaveProperty("@emnapi/runtime");
     expect(lock.packages["node_modules/@emnapi/runtime"]?.version).toBe("1.11.3");
-    expect(lock.packages["node_modules/@emnapi/core"]?.version).toBe("1.11.2");
+    expect(lock.packages["node_modules/@img/sharp-linux-arm64"]?.version).toBe(lock.packages["node_modules/sharp"]?.version);
+    expect(lock.packages["node_modules/@img/sharp-libvips-linux-arm64"]?.version).toBeDefined();
   });
 
   it("只移除会随发版变化的根包版本并固定文件时间", () => {
