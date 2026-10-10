@@ -1344,29 +1344,17 @@ function globalReplaceWriteModules(request: Request): WorkPermissionModule[] {
   return [];
 }
 
-function syncPushWriteModules(request: Request): WorkPermissionModule[] {
-  const mutations = requestBodyRecord(request).mutations;
-  if (!Array.isArray(mutations)) return [];
-  const modules = new Set<WorkPermissionModule>();
-  for (const mutation of mutations) {
-    if (!mutation || typeof mutation !== "object" || Array.isArray(mutation)) continue;
-    const entityType = (mutation as Record<string, unknown>).entityType;
-    if (entityType === "chapter") modules.add("prose");
-    if (entityType === "setting") modules.add("settings");
-  }
-  return [...modules];
-}
-
 /** 按 URL 与方法推导作品模块权限要求；导出供测试校验路径映射。 */
 export function workModuleRequirements(request: Request, write: boolean, annotationAccess?: { kind: "note" | "todo"; createdByUserId: string | null }): WorkAuthorizationRequirements {
   const pathname = normalizeApiPath(request.path);
   const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
     write ? { write: [module, ...extraWrite] } : { read: [module] }
   );
-  if (/^\/api\/sync\/works\/[^/]+\/snapshots$/u.test(pathname)) return { read: ["prose", "settings"] };
-  if (/^\/api\/sync\/works\/[^/]+\/changes$/u.test(pathname)) return { read: ["prose", "settings"] };
-  if (/^\/api\/sync\/works\/[^/]+\/push$/u.test(pathname)) return { write: syncPushWriteModules(request) };
-  if (/^\/api\/sync\/works\/[^/]+\/mutations\/[^/]+$/u.test(pathname)) return { read: ["prose", "settings"] };
+  // 离线包不按模块读权限裁剪；上传时的写权限在每条 mutation 上单独接受或拒绝。
+  if (/^\/api\/sync\/works\/[^/]+\/snapshots$/u.test(pathname)) return {};
+  if (/^\/api\/sync\/works\/[^/]+\/changes$/u.test(pathname)) return {};
+  if (/^\/api\/sync\/works\/[^/]+\/push$/u.test(pathname)) return {};
+  if (/^\/api\/sync\/works\/[^/]+\/mutations\/[^/]+$/u.test(pathname)) return {};
   if (/^\/api\/works\/[^/]+$/u.test(pathname)) return write ? { ownerOnly: true } : {};
   if (/^\/api\/works\/[^/]+\/offline-access$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) return write ? { ownerOnly: true } : {};
