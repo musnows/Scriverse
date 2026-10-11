@@ -556,6 +556,55 @@ describe("Desktop 离线同步快照 API", () => {
     expect(permitted.body.data.results[0]).toMatchObject({ status: "applied", appliedVersionNo: 2 });
   });
 
+  it.each(["character", "race", "organization"] as const)("允许 $entityType 完整快照保留无写权限模块的既有关联", async (entityType) => {
+    const owner = await register(runtime, "unchanged_link_owner");
+    const editor = await register(runtime, "unchanged_link_editor");
+    const fixture = await createOfflineFixture(runtime, owner);
+    const race = runtime.store.createRace(fixture.workId, { name: "海族" });
+    const organization = runtime.store.createOrganization(fixture.workId, { name: "港务司" });
+    const character = runtime.store.createCharacter(fixture.workId, {
+      name: "林舟",
+      raceId: String(race.id),
+      organizationIds: [String(organization.id)]
+    });
+    runtime.database.run("UPDATE character_organization_memberships SET role = ?, note = ? WHERE character_id = ?", "顾问", "保留成员备注", String(character.id));
+    const beforeRace = runtime.store.getRace(String(race.id));
+    const beforeOrganization = runtime.store.getOrganization(String(organization.id));
+    const beforeCharacter = runtime.store.getCharacter(String(character.id));
+    const raceRow = runtime.database.get("SELECT * FROM races WHERE id = ?", String(race.id));
+    const organizationRow = runtime.database.get("SELECT * FROM organizations WHERE id = ?", String(organization.id));
+    const memberships = runtime.database.all("SELECT * FROM character_organization_memberships WHERE character_id = ?", String(character.id));
+    const entity = entityType === "race" ? beforeRace : entityType === "organization" ? beforeOrganization : beforeCharacter;
+    const permissions = fullWorkModulePermissions();
+    permissions.characters = entityType === "character" ? "write" : "none";
+    permissions.races = entityType === "race" ? "write" : "none";
+    permissions.organizations = entityType === "organization" ? "write" : "none";
+    runtime.auth.addMember(fixture.workId, editor.userId, { permissions }, owner.userId);
+    const authorization = await desktopAuthorization(runtime, editor.username, crypto.randomUUID());
+    const localSnapshot = entityType === "character"
+      ? { name: "林舟离线修订", raceId: entity.raceId, organizationIds: [...entity.organizationIds as string[], String(organization.id)] }
+      : { name: entity.name, memberIds: [...entity.memberIds as string[], String(character.id)], description: "离线修订描述" };
+    const response = await request(runtime.app).post(`/api/sync/works/${fixture.workId}/push`)
+      .set("Authorization", authorization)
+      .send({
+        clientId: crypto.randomUUID(),
+        mutations: [{
+          mutationId: crypto.randomUUID(),
+          entityType,
+          entityId: String(entity.id),
+          operation: "update",
+          baseVersionNo: Number(entity.versionNo),
+          localSnapshot
+        }]
+      })
+      .expect(200);
+    expect(response.body.data.results[0]).toMatchObject({ status: "applied", appliedVersionNo: Number(entity.versionNo) + 1 });
+    if (entityType !== "race") expect(runtime.database.get("SELECT * FROM races WHERE id = ?", String(race.id))).toEqual(raceRow);
+    if (entityType !== "organization") expect(runtime.database.get("SELECT * FROM organizations WHERE id = ?", String(organization.id))).toEqual(organizationRow);
+    if (entityType !== "character") expect(runtime.store.getCharacter(String(character.id))).toEqual(beforeCharacter);
+    expect(runtime.database.all("SELECT * FROM character_organization_memberships WHERE character_id = ?", String(character.id))).toEqual(memberships);
+  });
+
   it("要求模块写权限并隔离不同用户的 mutation 结果", async () => {
     const owner = await register(runtime, "result_owner");
     const viewer = await register(runtime, "result_viewer");
